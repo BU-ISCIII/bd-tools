@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MePRAM</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" rel="stylesheet" id="bootstrap-css">
+    <link href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <link rel="icon" type="image/jpeg" href="./www/logorecorte.png">
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        function showTab(tabId, element) {
+            document.querySelectorAll('.report-frame, .visualizations').forEach(frame => {
+                frame.classList.remove('active');
+            });
+            document.getElementById(tabId).classList.add('active');
+
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            element.classList.add('active');
+        }
+    </script>
+</head>
+<body>
+    <nav class="navbar navbar-expand-lg navbar-light custom-navbar">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="#">
+                <img src="./www/logomepram.png" alt="Logo" style="height: 100px;">
+            </a>
+            <div style="width: 3px; height: 50px; background-color: #002855; margin: 0 20px; border-radius: 10px;"></div>
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+                <span class="navbar-toggler-icon"></span>
+            </button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav">
+                    <li class="nav-item"><a class="nav-link active" href="index.html">Home</a></li>
+                    <li class="nav-item dropdown">
+                        <a class="nav-link dropdown-toggle" href="#" id="navbarScrollingDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                          Use cases
+                        </a>
+                        <ul class="dropdown-menu" aria-labelledby="navbarScrollingDropdown">
+                          <li><a class="dropdown-item" href="Case_sepsis.html">Sepsis</a></li>
+                          <li><a class="dropdown-item" href="#">Model 2</a></li>
+                          <li><hr class="dropdown-divider"></li>
+                          <li><a class="dropdown-item" href="#">Another models</a></li>
+                        </ul>
+                    </li>
+                    <li class="nav-item"><a class="nav-link" href="">Browse Data</a></li>
+                    <li class="nav-item"><a class="nav-link" href="">About MePRAM</a></li>
+                    <li class="nav-item"><a class="nav-link" href="">DOCS</a></li>
+                    <li class="nav-item"><a class="nav-link" href="">Contact</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    
+    <div class="banner">
+        <video class="banner-video" autoplay muted loop>
+            <source src="./www/banner2.mp4" type="video/mp4">
+            Tu navegador no soporta videos HTML5.
+        </video>
+        <div class="banner-content">
+            <h1 class="banner-title">La medicina de precisión contra la resistencia a antimicrobianos</h1>
+        </div>
+    </div>
+    
+    <div id="description" class="container description-banner" data-aos="fade-up" data-aos-delay="200">
+
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="logo mb-3">
+                    <img src="./www/logomepram.png" alt="Logo del proyecto" style="height: 150px;">
+                </div>
+                <p>
+                    El proyecto MePRAM aborda la creciente amenaza de la resistencia a los antimicrobianos (RAM), 
+                    un desafío significativo para la salud pública y clínica. Esta problemática genera mayores tasas 
+                    de mortalidad, estancias hospitalarias prolongadas y un incremento de los costos sanitarios.
+                </p>
+                <p>
+                    MePRAM busca integrar tecnologías avanzadas como la genómica y herramientas de inteligencia artificial 
+                    para mejorar el diagnóstico precoz y personalizar tratamientos en infecciones complejas. Además, se 
+                    exploran terapias alternativas, como la fagoterapia, y se desarrollan plataformas interoperables que 
+                    facilitan el análisis y la gestión de datos clínicos y genómicos.
+                </p>
+                <p>
+                    El objetivo es reducir las infecciones por microorganismos resistentes, optimizar la atención de los 
+                    pacientes afectados y mejorar la capacidad para prevenir la diseminación de estos patógenos en los 
+                    sistemas de salud.
+                </p>
+            </div>
+    
+            <!-- Imagen a la derecha -->
+            <div class="col-lg-4 text-center">
+                <img src="./www/Description.jpg" alt="Imagen relacionada con el proyecto" style="width: 100%; border-radius: 10px;">
+            </div>
+        </div>
+    </div>
+
+    <div class="info" data-aos="fade-up" data-aos-delay="150">
+      <div class="info-title">
+        <h2>Red MePRAM</h2>
+      </div>
+      <div class="info-section">
+        <div class="info-item">
+          <div class="info-content">
+            <i class="fa-solid fa-earth-europe"></i>
+            <h2>17</h2>
+            <p>Comunidades Autónomas</p>
+          </div>
+        </div>
+        <div class="info-item">
+          <div class="info-content">
+            <i class="fa-solid fa-diagram-project"></i>
+            <h2>37</h2>
+            <p>Entidades Asociadas</p>
+          </div>
+        </div>
+        <div class="info-item">
+          <div class="info-content">
+            <i class="fa-regular fa-hospital"></i>
+            <h2>+100</h2>
+            <p>Hospitales</p>
+          </div>
+        </div>
+        <div class="info-item">
+          <div class="info-content">
+            <i class="fa-solid fa-flask"></i>
+            <h2>3</h2>
+            <p>Centros de Secuenciación</p>
+          </div>
+        </div>
+        <div class="info-item">
+          <div class="info-content">
+            <i class="fa-solid fa-person"></i>
+            <h2>+300</h2>
+            <p>Colaboradores Directos</p>
+          </div>
+        </div>
+        <div class="blob"></div>
+      </div>
+    </div>
+
+    <div class="container" data-aos="fade-up" data-aos-delay="150">
+      <div class="text-content">
+        <h1>Sepsis prediction model</h1>
+        <p>Lorem ipsum dolor sit, amet consectetur adipisicing elit. Enim ipsam animi nemo, architecto maiores neque debitis repellendus sit similique? Delectus nobis cupiditate magnam repellat voluptatum corporis culpa ullam asperiores placeat?</p>
+        <div>
+          <button href="/Case_sepsis.html" id="predict-button" class="predict-more">
+            <span class="circle">
+              <span class="icon arrow"></span>
+            </span>
+            <span class="button-text">Learn more</span>
+          </button>
+        </div>
+      </div>
+      <div class="image-content">
+        <img src="www/PC_sepsis.png" alt="Example Image">
+      </div>
+    </div>
+    <hr class="hline">
+
+    <div class="container" data-aos="fade-up" data-aos-delay="150">
+      <div class="image-content">
+        <img src="www/PC_sepsis.png" alt="Example Image">
+      </div>
+      <div class="text-content right">
+        <h1>Browser data</h1>
+        <p>Lorem ipsum dolor sit, amet consectetur adipisicing elit. Minima similique nam cupiditate dolores voluptate, amet fugit aliquam eum ipsam, ratione molestiae vitae veniam facilis odio cum. Incidunt ea sit temporibus?</p>
+        <div>
+          <button href="/Case_sepsis.html" id="predict-button" class="predict-more">
+            <span class="circle">
+              <span class="icon arrow"></span>
+            </span>
+            <span class="button-text">Learn more</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="map">
+      <div id="report_map" class="report-frame active" data-aos="fade-up" data-aos-offset="500">
+        <iframe src="www/map/index.html"></iframe>
+      </div>
+    </div>
+
+    <div class="carousel">
+      <div class="carousel-track">
+        <img src="www/LogoISCIII.png" alt="Logo 1">
+        <img src="www/logo_bu_isciii.png" alt="Logo 2">
+        <img src="www/LogoISCIII.png" alt="Logo 3">
+        <img src="www/logo_bu_isciii.png">
+        <img src="www/LogoISCIII.png" alt="Logo 5">
+        <img src="www/logo_bu_isciii.png" alt="Logo 6">
+        <img src="www/LogoISCIII.png" alt="Logo 1">
+        <img src="www/logo_bu_isciii.png" alt="Logo 2">
+        <img src="www/LogoISCIII.png" alt="Logo 3">
+        <img src="www/logo_bu_isciii.png">
+        <img src="www/LogoISCIII.png" alt="Logo 5">
+        <img src="www/logo_bu_isciii.png" alt="Logo 6">
+      </div>
+    </div>
+    
+    <footer>
+      <div class="footer-container">
+        <div class="footer-section logos">
+          <a class="navbar-brand" href="#">
+            <img src="./www/logomepram_white.png" alt="Logo" style="height: 100px;">
+        </a>
+        <a class="navbar-brand" href="#">
+          <img src="./www/bu_isciii_white.png" alt="Logo" style="height: 50px;">
+      </a>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+        <!-- Section: About -->
+        <div class="footer-section">
+          <h4>ABOUT</h4>
+          <ul>
+            <li><a href="#">About MePRAM</a></li>
+            <li><a href="#">Registered Institutions</a></li>
+            <li><a href="#">Privacy & Security Protocols</a></li>
+            <li><a href="#">FAQ</a></li>
+          </ul>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+        <!-- Section: Data & Tools -->
+        <div class="footer-section">
+          <h4>TOOLS</h4>
+          <ul>
+            <li><a href="#">Data Browser</a></li>
+            <li><a href="#">SepsISCIII</a></li>
+            <li><a href="#">New tool</a></li>
+            <li><a href="#">Data Sources</a></li>
+            <li><a href="#">Data Methods</a></li>
+          </ul>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+        <!-- Section: Discover -->
+        <div class="footer-section">
+          <h4>DOCS</h4>
+          <ul>
+            <li><a href="#">Enlace al doc</a></li>
+            <li><a href="#">Enlace al doc</a></li>
+            <li><a href="#">Enlace al doc</a></li>
+            <li><a href="#">...</a></li>
+          </ul>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+      </div>
+      
+      <!-- Footer Bottom -->
+      <div class="footer-bottom">
+        <div class="redes">
+          <a href="#"  aria-label="GitHub">
+            <i class="fa-brands fa-github"></i>
+          </a>
+          <a href="#"  aria-label="LinkedIn">
+            <i class="fa-brands fa-linkedin"></i>
+          </a>
+          <a href="#"  aria-label="Twitter">
+            <i class="fa-brands fa-twitter"></i>
+          </a>
+          <a href="#"  aria-label="Email">
+            <i class="fa-solid fa-envelope"></i>
+          </a>
+        </div>
+        <p>
+          Lorem ipsum, dolor sit amet consectetur adipisicing elit. Fugiat perspiciatis, ut repudiandae eum dolorum praesentium ducimus excepturi cumque eveniet. Tempora nemo laudantium eos iste dolores veniam voluptatum recusandae exercitationem nobis.
+        </p>
+        <p>© Copyright 2025 | <a href="#">Privacy Policy</a></p>
+      </div>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
+    <script>
+        AOS.init();
+    </script>
+</body>
+</html>

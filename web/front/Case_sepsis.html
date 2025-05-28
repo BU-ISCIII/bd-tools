@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MePRAM</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="//maxcdn.bootstrapcdn.com/bootstrap/4.1.1/css/bootstrap.min.css" rel="stylesheet" id="bootstrap-css">
+    <link href="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css" rel="stylesheet">
+    <link rel="icon" type="image/jpeg" href="./www/logorecorte.png">
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        function showTab(tabId, element) {
+            document.querySelectorAll('.report-frame, .visualizations').forEach(frame => {
+                frame.classList.remove('active');
+            });
+            document.getElementById(tabId).classList.add('active');
+
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            element.classList.add('active');
+        }
+    </script>
+</head>
+
+<body>
+  <nav class="navbar navbar-expand-lg navbar-light custom-navbar">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="#">
+            <img src="./www/logomepram.png" alt="Logo" style="height: 100px;">
+        </a>
+        <div style="width: 3px; height: 50px; background-color: #002855; margin: 0 20px; border-radius: 10px;"></div>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav">
+                <li class="nav-item"><a class="nav-link active" href="index.html">Home</a></li>
+                <li class="nav-item dropdown">
+                    <a class="nav-link dropdown-toggle" href="#" id="navbarScrollingDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                      Use cases
+                    </a>
+                    <ul class="dropdown-menu" aria-labelledby="navbarScrollingDropdown">
+                      <li><a class="dropdown-item" href="Case_sepsis.html">Sepsis</a></li>
+                      <li><a class="dropdown-item" href="#">Model 2</a></li>
+                      <li><hr class="dropdown-divider"></li>
+                      <li><a class="dropdown-item" href="#">Another models</a></li>
+                    </ul>
+                </li>
+                <li class="nav-item"><a class="nav-link" href="">Browse Data</a></li>
+                <li class="nav-item"><a class="nav-link" href="">About MePRAM</a></li>
+                <li class="nav-item"><a class="nav-link" href="">DOCS</a></li>
+                <li class="nav-item"><a class="nav-link" href="">Contact</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+    
+    <div class="banner">
+      <video class="banner-video" autoplay muted loop>
+          <source src="./www/banner2.mp4" type="video/mp4">
+          Tu navegador no soporta videos HTML5.
+      </video>
+      <div class="banner-content">
+          <h1 class="banner-title">Use case sepsis</h1>
+      </div>
+  </div>
+    
+    <div class="content-timeline">
+        <div class="container-timeline">
+          <h2 class="pb-3 pt-2 border-bottom mb-5">Project Timeline</h2>
+          <!--first section-->
+          <div class="row align-items-center how-it-works d-flex">
+            <div class="col-2 text-center bottom d-inline-flex justify-content-center align-items-center">
+              <div class="circle font-weight-bold">1</div>
+            </div>
+            <div class="col-6" data-aos="fade-left" data-aos-delay="200">
+              <h5>Definición de variables</h5>
+              <p>Formulario por WP: Datos recogidos en WPs: tipos (clínico, epidemiológico, genómico), tiempos, forma de recogida.
+            </p>
+            </div>
+          </div>
+          <!--path between 1-2-->
+          <div class="row timeline">
+            <div class="col-2">
+              <div class="corner top-right"></div>
+            </div>
+            <div class="col-8">
+              <hr/>
+            </div>
+            <div class="col-2">
+              <div class="corner left-bottom"></div>
+            </div>
+          </div>
+          <!--second section-->
+          <div class="row align-items-center justify-content-end how-it-works d-flex">
+            <div class="col-6 text-right" data-aos="fade-right" data-aos-delay="200">
+              <h5>Repositorio normalizado e interoperable</h5>
+              <p>Modelos de persistencia y semántico para datos clínico-epidemiológicos y genómicos; integración de modelos.</p>
+            </div>
+            <div class="col-2 text-center full d-inline-flex justify-content-center align-items-center">
+              <div class="circle font-weight-bold">2</div>
+            </div>
+          </div>
+          <!--path between 2-3-->
+          <div class="row timeline">
+            <div class="col-2">
+              <div class="corner right-bottom"></div>
+            </div>
+            <div class="col-8">
+              <hr/>
+            </div>
+            <div class="col-2">
+              <div class="corner top-left"></div>
+            </div>
+          </div>
+          <!--third section-->
+          <div class="row align-items-center how-it-works d-flex">
+            <div class="col-2 text-center top d-inline-flex justify-content-center align-items-center">
+              <div class="circle font-weight-bold">3</div>
+            </div>
+            <div class="col-6" data-aos="fade-left" data-aos-delay="200">
+              <h5>Integración de datos genómicos</h5>
+              <p>Gestión y procesamiento de análisis de datos genómicos.</p>
+            </div>
+          </div>
+          <!--four section-->
+          <!--path between 3-4-->
+          <div class="row timeline">
+            <div class="col-2">
+              <div class="corner top-right"></div>
+            </div>
+            <div class="col-8">
+              <hr/>
+            </div>
+            <div class="col-2">
+              <div class="corner left-bottom"></div>
+            </div>
+          </div>
+          <!--second section-->
+          <div class="row align-items-center justify-content-end how-it-works d-flex">
+            <div class="col-6 text-right" data-aos="fade-right" data-aos-delay="200">
+              <h5>Desarrollo de herramientas de machine learning</h5>
+              <p>Desarrollo de modelos y algoritmos para diagnóstico basado en machine learning.</p>
+            </div>
+            <div class="col-2 text-center full d-inline-flex justify-content-center align-items-center">
+              <div class="circle font-weight-bold">4</div>
+            </div>
+          </div>
+          <!--path between 4-5-->
+          <div class="row timeline">
+            <div class="col-2">
+              <div class="corner right-bottom"></div>
+            </div>
+            <div class="col-8">
+              <hr/>
+            </div>
+            <div class="col-2">
+              <div class="corner top-left"></div>
+            </div>
+          </div>
+          <!--five section-->
+          <div class="row align-items-center how-it-works d-flex">
+            <div class="col-2 text-center top d-inline-flex justify-content-center align-items-center">
+              <div class="circle font-weight-bold">5</div>
+            </div>
+            <div class="col-6" data-aos="fade-left" data-aos-delay="200">
+              <h5>Diseño de una plataforma integrada de datos y visualización</h5>
+              <p>Desarrollo de interfaz gráfica para la plataforma.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    
+    
+    <div class="inter" data-aos="fade-up" data-aos-offset="300">
+        <h1>Predice un nuevo caso</h1>
+        <div class="scroll-arrow">
+            <i class="fa-solid fa-down-long"></i>
+        </div>
+    </div>
+
+
+    <div id="report_3" class="report-frame active" data-aos="fade-up" data-aos-offset="500">
+        <iframe src="http://127.0.0.1:8050"></iframe>
+    </div>
+
+    <footer>
+      <div class="footer-container">
+        <div class="footer-section logos">
+          <a class="navbar-brand" href="#">
+            <img src="./www/logomepram_white.png" alt="Logo" style="height: 100px;">
+        </a>
+        <a class="navbar-brand" href="#">
+          <img src="./www/bu_isciii_white.png" alt="Logo" style="height: 50px;">
+      </a>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+        <!-- Section: About -->
+        <div class="footer-section">
+          <h4>ABOUT</h4>
+          <ul>
+            <li><a href="#">About MePRAM</a></li>
+            <li><a href="#">Registered Institutions</a></li>
+            <li><a href="#">Privacy & Security Protocols</a></li>
+            <li><a href="#">FAQ</a></li>
+          </ul>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+        <!-- Section: Data & Tools -->
+        <div class="footer-section">
+          <h4>TOOLS</h4>
+          <ul>
+            <li><a href="#">Data Browser</a></li>
+            <li><a href="#">SepsISCIII</a></li>
+            <li><a href="#">New tool</a></li>
+            <li><a href="#">Data Sources</a></li>
+            <li><a href="#">Data Methods</a></li>
+          </ul>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+        <!-- Section: Discover -->
+        <div class="footer-section">
+          <h4>DOCS</h4>
+          <ul>
+            <li><a href="#">Enlace al doc</a></li>
+            <li><a href="#">Enlace al doc</a></li>
+            <li><a href="#">Enlace al doc</a></li>
+            <li><a href="#">...</a></li>
+          </ul>
+        </div>
+        <div style="width: 1px; height: 150px; background-color: #ddd; margin: 0 20px;"></div>
+      </div>
+      
+      <!-- Footer Bottom -->
+      <div class="footer-bottom">
+        <div class="redes">
+          <a href="#"  aria-label="GitHub">
+            <i class="fa-brands fa-github"></i>
+          </a>
+          <a href="#"  aria-label="LinkedIn">
+            <i class="fa-brands fa-linkedin"></i>
+          </a>
+          <a href="#"  aria-label="Twitter">
+            <i class="fa-brands fa-twitter"></i>
+          </a>
+          <a href="#"  aria-label="Email">
+            <i class="fa-solid fa-envelope"></i>
+          </a>
+        </div>
+        <p>
+          Lorem ipsum, dolor sit amet consectetur adipisicing elit. Fugiat perspiciatis, ut repudiandae eum dolorum praesentium ducimus excepturi cumque eveniet. Tempora nemo laudantium eos iste dolores veniam voluptatum recusandae exercitationem nobis.
+        </p>
+        <p>© Copyright 2025 | <a href="#">Privacy Policy</a></p>
+      </div>
+    </footer>
+
+
+    <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.6/dist/umd/popper.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.min.js"></script>
+    <script src="//maxcdn.bootstrapcdn.com/bootstrap/4.1.1/js/bootstrap.min.js"></script>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/jquery/3.2.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/aos@2.3.4/dist/aos.js"></script>
+    <script>
+        AOS.init();
+    </script>
+</body>
+
+</html>
