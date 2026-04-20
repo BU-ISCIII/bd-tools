@@ -247,11 +247,17 @@ def build_reference_maps(
         .set_index("value")["name"]
         .to_dict()
     )
+    symptom_map_df = (
+        codes[codes["variable"] == "sintoma"][["value", "name"]]
+        .assign(name=lambda df: df["name"].str.split(" | ").str[-1])
+    )
+    symptom_map = {str(float(row["value"])): row["name"] for _, row in symptom_map_df.iterrows()}
 
     return {
         "organism_codes_map": dict(zip(microorganisms["snomed_code"], microorganisms["label"])),
         "foco_map": foco_map,
         "phenomap": phenomap,
+        "symptom_map": symptom_map,
     }
 
 
@@ -318,6 +324,7 @@ def preprocess_tbl_comorbilidad(
         output_df=df,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
+
     add_change(
         log,
         "transformed_variables",
@@ -361,16 +368,24 @@ def preprocess_tbl_sintomas(
     config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_sintomas"].copy()
-    codes = tables["tbl_codes2names"].copy()
-    symptom_map = (
-        codes[codes["variable"] == "sintoma"][["value", "name"]]
-        .assign(name=lambda df: df["name"].str.split(" | ").str[-1])
+    log = finalize_log(
+        table_name="tbl_sintomas",
+        input_df=source,
+        output_df=source,
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    symptom_map = {str(float(row["value"])): row["name"] for _, row in symptom_map.iterrows()}
 
     df = source.copy()
-    df["sintoma"] = df["sintoma"].astype(str).map(symptom_map)
+    df["sintoma"] = df["sintoma"].astype(str).map(maps["symptom_map"])
     df["sintoma"] = "sintoma_" + df["sintoma"]
+    add_change(
+        log,
+        "recoded_variables",
+        source="sintoma",
+        target="sintoma",
+        how="map coded symptom values to readable names using tbl_codes2names",
+    )
+
     pivoted = df.pivot_table(
         index=["person_id", "fecha_ingreso_urgencias"],
         columns="sintoma",
@@ -388,28 +403,17 @@ def preprocess_tbl_sintomas(
         lambda value: 0 if value == 0 else (1 if value <= config["SINTOMA_SHORT_DURATION_MAX_DAYS"] else 2)
     )
     duration = duration.rename(columns={col: f"{col}_categorico" for col in symptom_columns})
-
-    result = presence.merge(duration, on=["person_id", "fecha_ingreso_urgencias"], how="left")
-    log = finalize_log(
-        table_name="tbl_sintomas",
-        input_df=source,
-        output_df=result,
-        merge_keys=["person_id", "fecha_ingreso_urgencias"],
-    )
-    add_change(
-        log,
-        "recoded_variables",
-        source="sintoma",
-        target="sintoma",
-        how="map coded symptom values to readable names using tbl_codes2names",
-    )
     add_change(
         log,
         "created_variables",
         source="duracion_sintoma",
-        target=[col for col in result.columns if col.startswith("sintoma_")],
-        how="pivot symptoms to wide binary and ordinal duration columns",
+        target=[col for col in presence.columns if col.startswith("sintoma_")] + [col for col in duration.columns if col.endswith("_categorico")],
+        how=f"pivot symptoms to wide columns; binary presence is 1 if summed duration > 0, and categorical duration is 0 if absent, 1 if <= {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days, 2 if > {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days",
     )
+
+    result = presence.merge(duration, on=["person_id", "fecha_ingreso_urgencias"], how="left")
+    log.output_rows = len(result)
+    log.output_columns = result.columns.tolist()
     result_obj = PreprocessResult(df=result, log=log)
     attach_run_metadata(result_obj.log, config)
     return validate_result(result_obj, required_columns=["person_id", "fecha_ingreso_urgencias"])
@@ -422,46 +426,16 @@ def preprocess_tbl_signos(
 ) -> PreprocessResult:
     source = tables["tbl_signos"].copy()
     df = source.copy()
+    log = finalize_log(
+        table_name="tbl_signos",
+        input_df=source,
+        output_df=source,
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
+    )
 
     numeric_columns = [col for col in config["SIGNOS_NUMERIC_COLUMNS"] if col in df.columns]
     for column in numeric_columns:
         df[column] = extract_numeric(df[column])
-
-    df["hipotermia_hipertermia"] = np.where(
-        df["temperatura"] >= config["SIGNOS_THRESHOLDS"]["temperatura_fever_min"],
-        2,
-        np.where(df["temperatura"] >= config["SIGNOS_THRESHOLDS"]["temperatura_normal_min"], 0, 1),
-    )
-    df["hipotermia_hipertermia"] = df["hipotermia_hipertermia"].where(df["temperatura"].notna())
-    df["hipotension"] = np.where(
-        df["tension_arterial"].isna(),
-        df["hipotension"],
-        np.where(df["tension_arterial"] <= config["SIGNOS_THRESHOLDS"]["tension_arterial_hypotension_max"], 1, 0),
-    )
-    df["taquipnea"] = np.where(
-        df["frec_respiratoria"].isna(),
-        df["taquipnea"],
-        np.where(df["frec_respiratoria"] > config["SIGNOS_THRESHOLDS"]["frec_respiratoria_taquipnea_min"], 1, 0),
-    )
-    df["taquicardia"] = np.where(
-        df["frec_cardiaca"].isna(),
-        df["taquicardia"],
-        np.where(df["frec_cardiaca"] > config["SIGNOS_THRESHOLDS"]["frec_cardiaca_taquicardia_min"], 1, 0),
-    )
-    df["hipoxemia"] = np.where(
-        df["saturacion_o2"].isna(),
-        df["hipoxemia"],
-        np.where(df["saturacion_o2"] > config["SIGNOS_THRESHOLDS"]["saturacion_o2_hipoxemia_max"], 0, 1),
-    )
-    iqr_columns = [col for col in config["SIGNOS_OUTLIER_COLUMNS"] if col in df.columns]
-    df = clean_outliers_iqr(df, iqr_columns, iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"])
-
-    log = finalize_log(
-        table_name="tbl_signos",
-        input_df=source,
-        output_df=df,
-        merge_keys=["person_id", "fecha_ingreso_urgencias"],
-    )
     add_change(
         log,
         "transformed_variables",
@@ -469,20 +443,106 @@ def preprocess_tbl_signos(
         target=list(numeric_columns),
         how="extract numeric values from mixed text fields",
     )
+
+    df["hipotermia_hipertermia"] = np.where(
+        df["temperatura"] >= config["SIGNOS_THRESHOLDS"]["temperatura_fever_min"],
+        2,
+        np.where(df["temperatura"] >= config["SIGNOS_THRESHOLDS"]["temperatura_normal_min"], 0, 1),
+    )
+    df["hipotermia_hipertermia"] = df["hipotermia_hipertermia"].where(df["temperatura"].notna())
     add_change(
         log,
         "created_variables",
-        source=["temperatura", "tension_arterial", "frec_respiratoria", "frec_cardiaca", "saturacion_o2"],
-        target=["hipotermia_hipertermia", "hipotension", "taquipnea", "taquicardia", "hipoxemia"],
-        how="recompute threshold-derived clinical flags after numeric cleaning",
+        source="temperatura",
+        target="hipotermia_hipertermia",
+        how=(
+            "categorical temperature flag created after numeric cleaning: "
+            f"2 if temperatura >= {config['SIGNOS_THRESHOLDS']['temperatura_fever_min']} (hyperthermia), "
+            f"0 if {config['SIGNOS_THRESHOLDS']['temperatura_normal_min']} <= temperatura < {config['SIGNOS_THRESHOLDS']['temperatura_fever_min']} (normal), "
+            f"1 if temperatura < {config['SIGNOS_THRESHOLDS']['temperatura_normal_min']} (hypothermia), "
+            "and NaN if temperatura is missing"
+        ),
     )
+
+    df["hipotension"] = np.where(
+        df["tension_arterial"].isna(),
+        df["hipotension"],
+        np.where(df["tension_arterial"] <= config["SIGNOS_THRESHOLDS"]["tension_arterial_hypotension_max"], 1, 0),
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="tension_arterial",
+        target="hipotension",
+        how=(
+            "binary hypotension flag recomputed after numeric cleaning: "
+            f"1 if tension_arterial <= {config['SIGNOS_THRESHOLDS']['tension_arterial_hypotension_max']}, "
+            "0 otherwise, and preserve original value if tension_arterial is missing"
+        ),
+    )
+
+    df["taquipnea"] = np.where(
+        df["frec_respiratoria"].isna(),
+        df["taquipnea"],
+        np.where(df["frec_respiratoria"] > config["SIGNOS_THRESHOLDS"]["frec_respiratoria_taquipnea_min"], 1, 0),
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="frec_respiratoria",
+        target="taquipnea",
+        how=(
+            "binary tachypnea flag recomputed after numeric cleaning: "
+            f"1 if frec_respiratoria > {config['SIGNOS_THRESHOLDS']['frec_respiratoria_taquipnea_min']}, "
+            "0 otherwise, and preserve original value if frec_respiratoria is missing"
+        ),
+    )
+
+    df["taquicardia"] = np.where(
+        df["frec_cardiaca"].isna(),
+        df["taquicardia"],
+        np.where(df["frec_cardiaca"] > config["SIGNOS_THRESHOLDS"]["frec_cardiaca_taquicardia_min"], 1, 0),
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="frec_cardiaca",
+        target="taquicardia",
+        how=(
+            "binary tachycardia flag recomputed after numeric cleaning: "
+            f"1 if frec_cardiaca > {config['SIGNOS_THRESHOLDS']['frec_cardiaca_taquicardia_min']}, "
+            "0 otherwise, and preserve original value if frec_cardiaca is missing"
+        ),
+    )
+
+    df["hipoxemia"] = np.where(
+        df["saturacion_o2"].isna(),
+        df["hipoxemia"],
+        np.where(df["saturacion_o2"] > config["SIGNOS_THRESHOLDS"]["saturacion_o2_hipoxemia_max"], 0, 1),
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="saturacion_o2",
+        target="hipoxemia",
+        how=(
+            "binary hypoxemia flag recomputed after numeric cleaning: "
+            f"1 if saturacion_o2 <= {config['SIGNOS_THRESHOLDS']['saturacion_o2_hipoxemia_max']}, "
+            "0 otherwise, and preserve original value if saturacion_o2 is missing"
+        ),
+    )
+
+    iqr_columns = [col for col in config["SIGNOS_OUTLIER_COLUMNS"] if col in df.columns]
+    df = clean_outliers_iqr(df, iqr_columns, iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"])
     add_change(
         log,
         "transformed_variables",
         source=iqr_columns,
         target=iqr_columns,
-        how="replace IQR outliers with NaN",
+        how=f"replace IQR outliers with NaN using multiplier {config['IQR_DEFAULT_MULTIPLIER']}",
     )
+    log.output_rows = len(df)
+    log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
@@ -495,27 +555,14 @@ def preprocess_tbl_sepsis(
 ) -> PreprocessResult:
     source = tables["tbl_sepsis"].copy()
     df = source.copy()
-    df["lactato_serico"] = np.where(df["lactato_serico"] == "<= 2 millimole per liter", 0, 1)
-
-    numeric_columns = [col for col in config["SEPSIS_NUMERIC_COLUMNS"] if col in df.columns and col != "lactato_serico"]
-    for column in numeric_columns:
-        df[column] = extract_numeric(df[column])
-
-    if "foco" in df.columns:
-        df["foco"] = pd.to_numeric(df["foco"], errors="coerce").map(maps["foco_map"])
-
-    df = clean_outliers_iqr(
-        df,
-        [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns],
-        iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
-    )
-
     log = finalize_log(
         table_name="tbl_sepsis",
         input_df=source,
-        output_df=df,
+        output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
+
+    df["lactato_serico"] = np.where(df["lactato_serico"] == "<= 2 millimole per liter", 0, 1)
     add_change(
         log,
         "recoded_variables",
@@ -523,20 +570,35 @@ def preprocess_tbl_sepsis(
         target="lactato_serico",
         how="recode '<= 2 millimole per liter' to 0 and all other non-null values to 1",
     )
-    add_change(
-        log,
-        "recoded_variables",
-        source="foco",
-        target="foco",
-        how="map foco codes to readable labels using foco_map",
+
+    numeric_columns = [col for col in config["SEPSIS_NUMERIC_COLUMNS"] if col in df.columns and col != "lactato_serico"]
+    for column in numeric_columns:
+        df[column] = extract_numeric(df[column])
+
+    if "foco" in df.columns:
+        df["foco"] = pd.to_numeric(df["foco"], errors="coerce").map(maps["foco_map"])
+        add_change(
+            log,
+            "recoded_variables",
+            source="foco",
+            target="foco",
+            how="map foco codes to readable labels using foco_map",
+        )
+
+    df = clean_outliers_iqr(
+        df,
+        [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns],
+        iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
     )
     add_change(
         log,
         "transformed_variables",
         source="proteina_c_reactiva",
         target="proteina_c_reactiva",
-        how="replace IQR outliers with NaN",
+        how=f"replace IQR outliers with NaN using multiplier {config['IQR_DEFAULT_MULTIPLIER']}",
     )
+    log.output_rows = len(df)
+    log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
@@ -556,6 +618,14 @@ def preprocess_tbl_infecciones_previas(
         merge_keys=["person_id"],
     )
     df["grupo_microorganismo"] = df["microorganism_infec_prev"].astype(str).map(maps["organism_codes_map"])
+    add_change(
+        log,
+        "recoded_variables",
+        source="microorganism_infec_prev",
+        target="grupo_microorganismo",
+        how="map infection organism codes to grouped organism labels",
+    )
+
     for bad_value, good_value in config["FECHA_INFECCION_CORRECTIONS"].items():
         df.loc[df["fecha_infeccion"] == bad_value, "fecha_infeccion"] = good_value
 
@@ -590,16 +660,6 @@ def preprocess_tbl_infecciones_previas(
 
     result = pivoted.merge(num_visitas, on="person_id", how="left")
     result = result.merge(ultima[["person_id", "tiempo_ultima"]], on="person_id", how="left")
-
-    log.output_rows = len(result)
-    log.output_columns = result.columns.tolist()
-    add_change(
-        log,
-        "recoded_variables",
-        source="microorganism_infec_prev",
-        target="grupo_microorganismo",
-        how="map infection organism codes to grouped organism labels",
-    )
     add_change(
         log,
         "created_variables",
@@ -614,6 +674,8 @@ def preprocess_tbl_infecciones_previas(
         target=["num_inf_previas", "tiempo_ultima"],
         how="derive previous infection count and days since last infection",
     )
+    log.output_rows = len(result)
+    log.output_columns = result.columns.tolist()
     result_obj = PreprocessResult(df=result, log=log)
     attach_run_metadata(result_obj.log, config)
     return validate_result(result_obj, required_columns=["person_id"])
