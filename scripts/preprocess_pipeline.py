@@ -399,8 +399,10 @@ def preprocess_tbl_sintomas(
     presence[symptom_columns] = (presence[symptom_columns] > 0).astype(int)
 
     duration = pivoted.copy()
-    duration[symptom_columns] = duration[symptom_columns].applymap(
-        lambda value: 0 if value == 0 else (1 if value <= config["SINTOMA_SHORT_DURATION_MAX_DAYS"] else 2)
+    duration[symptom_columns] = duration[symptom_columns].apply(
+        lambda column: column.map(
+            lambda value: 0 if value == 0 else (1 if value <= config["SINTOMA_SHORT_DURATION_MAX_DAYS"] else 2)
+        )
     )
     duration = duration.rename(columns={col: f"{col}_categorico" for col in symptom_columns})
     add_change(
