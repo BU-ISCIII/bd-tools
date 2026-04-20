@@ -469,6 +469,14 @@ def preprocess_tbl_sintomas(
         aggfunc="sum",
         fill_value=0,
     ).reset_index()
+    
+    add_change(
+        log,
+        "dropped_variables",
+        source=["sintoma", "duracion_sintoma"],
+        target=["sintoma_binary", "sintoma_categorico"],
+        how="original categoricals replaced by one-hot encoded columns",
+    )
 
     symptom_columns = [col for col in pivoted.columns if col not in ["person_id", "fecha_ingreso_urgencias"]]
     presence = pivoted.copy()
@@ -530,7 +538,7 @@ def preprocess_tbl_signos(
     df["hipotermia_hipertermia"] = df["hipotermia_hipertermia"].where(df["temperatura"].notna())
     add_change(
         log,
-        "created_variables",
+        "recoded_variables",
         source="temperatura",
         target="hipotermia_hipertermia",
         how=(
@@ -996,28 +1004,46 @@ def prepare_logs_for_json(logs: list[TableLog]) -> list[dict[str, Any]]:
         output_cols = set(log.output_columns)
         columns_lost = sorted(input_cols - output_cols)
         
-        # Extract dropped columns from dropped_variables
+        # Extract dropped columns from dropped_variables and count actual columns
         dropped_sources = []
+        dropped_count = 0
         for drop in log.dropped_variables:
             source_key = drop.source if isinstance(drop.source, str) else "; ".join(drop.source)
             dropped_sources.append(source_key)
+            # Count individual columns (if source is a list, count its elements; if string, count as 1)
+            if isinstance(drop.source, list):
+                dropped_count += len(drop.source)
+            else:
+                dropped_count += 1
         
         log_dict = asdict(log)
         # Override columns_lost with recalculated value
         log_dict["columns_lost"] = columns_lost
+        # Remove columns_dropped_count from log_dict so it doesn't overwrite our calculated value
+        log_dict.pop("columns_dropped_count", None)
         
-        # Reconstruct dict in desired order: dropped info, then lost info, then rest
+        # Reconstruct dict in desired order with counts after column lists
         ordered_dict = {}
         for key in log_dict:
-            if key == "columns_lost":
+            if key == "input_columns":
+                ordered_dict[key] = log_dict[key]
+                ordered_dict["input_columns_count"] = len(log_dict[key])
+            elif key == "output_columns":
+                ordered_dict[key] = log_dict[key]
+                ordered_dict["output_columns_count"] = len(log_dict[key])
+            elif key == "columns_lost":
                 # Insert dropped info before columns_lost
                 ordered_dict["columns_dropped"] = dropped_sources
-                ordered_dict["columns_dropped_count"] = log_dict["columns_dropped_count"]
+                # Use calculated dropped_count from dropped_variables
+                ordered_dict["columns_dropped_count"] = dropped_count
                 # columns_lost_count is the length of recalculated columns_lost
                 ordered_dict["columns_lost_count"] = len(columns_lost)
-            ordered_dict[key] = log_dict[key]
+                ordered_dict[key] = log_dict[key]
+            else:
+                ordered_dict[key] = log_dict[key]
         result.append(ordered_dict)
     return result
+
 
 
 def build_run_log(
