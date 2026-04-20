@@ -1,0 +1,9 @@
+name: mepram-modelling
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - ipykernel
+  - pip:
+      - -r ../scripts/hpc_processing/requirements.txt
