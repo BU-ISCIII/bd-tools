@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
+import json
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -13,6 +15,7 @@ import pandas as pd
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = ROOT_DIR / "database" / "db_mepram_sepsis.sqlite3"
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "outputs" / "preprocessed_output.csv"
+DEFAULT_CONFIG_PATH = ROOT_DIR / "preprocess_config.py"
 
 
 # Dataclasses define the structured objects passed through the pipeline.
@@ -44,6 +47,8 @@ class TableLog:
     dropped_variables: list[VariableChange] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    validation_checks: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 # Standard return type for every preprocessing function.
@@ -100,11 +105,27 @@ def export_logs(logs: list[TableLog], output_path: Path) -> pd.DataFrame:
             "merge_keys": ",".join(log.merge_keys),
             "warning_count": len(log.warnings),
             "note_count": len(log.notes),
+            "validation_count": len(log.validation_checks),
+            "config_name": log.metadata.get("config_name", ""),
+            "config_version": log.metadata.get("config_version", ""),
         }
         records.append(base)
     df = pd.DataFrame.from_records(records)
     df.to_csv(output_path, index=False)
     return df
+
+
+def load_config_module(config_file_path: Path) -> dict[str, Any]:
+    spec = importlib.util.spec_from_file_location("preprocess_runtime_config", config_file_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load config module from {config_file_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "as_dict"):
+        raise AttributeError(f"Config module {config_file_path} must define as_dict()")
+    config = module.as_dict()
+    config["CONFIG_PATH"] = str(config_file_path)
+    return config
 
 
 def load_tables(db_file_path: Path) -> dict[str, pd.DataFrame]:
@@ -119,6 +140,69 @@ def load_tables(db_file_path: Path) -> dict[str, pd.DataFrame]:
 def extract_numeric(series: pd.Series) -> pd.Series:
     extracted = series.astype(str).str.extract(r"(\d+\.\d+|\d+)")[0]
     return pd.to_numeric(extracted, errors="coerce")
+
+
+def ensure_columns_present(df: pd.DataFrame, required_columns: list[str], table_name: str) -> None:
+    missing = [col for col in required_columns if col not in df.columns]
+    if missing:
+        raise ValueError(f"{table_name} is missing required columns: {missing}")
+
+
+def duplicate_key_rows(df: pd.DataFrame, keys: list[str]) -> int:
+    if not keys:
+        return 0
+    return int(df.duplicated(subset=keys, keep=False).sum())
+
+
+def validate_result(
+    result: PreprocessResult,
+    *,
+    required_columns: list[str],
+    allow_empty: bool = False,
+) -> PreprocessResult:
+    ensure_columns_present(result.df, required_columns, result.log.table_name)
+    result.log.validation_checks.append(
+        f"required_columns_present:{','.join(required_columns)}"
+    )
+    if not allow_empty and result.df.empty:
+        raise ValueError(f"{result.log.table_name} produced an empty dataframe")
+    result.log.validation_checks.append(f"row_count:{len(result.df)}")
+    duplicate_rows = duplicate_key_rows(result.df, result.log.merge_keys)
+    result.log.validation_checks.append(
+        f"duplicate_merge_key_rows:{duplicate_rows}"
+    )
+    if duplicate_rows > 0:
+        result.log.warnings.append(
+            f"{duplicate_rows} rows have duplicated merge keys {result.log.merge_keys}"
+        )
+    return result
+
+
+def attach_run_metadata(log: TableLog, config: dict[str, Any]) -> None:
+    log.metadata["config_name"] = config.get("CONFIG_NAME", "")
+    log.metadata["config_version"] = config.get("CONFIG_VERSION", "")
+    log.metadata["config_path"] = config.get("CONFIG_PATH", "")
+
+
+def drop_columns_with_log(
+    df: pd.DataFrame,
+    columns: list[str],
+    *,
+    log: TableLog,
+    reason: str,
+    target_description: str | list[str] | None = None,
+) -> pd.DataFrame:
+    existing_columns = [col for col in columns if col in df.columns]
+    if not existing_columns:
+        return df
+    add_change(
+        log,
+        "dropped_variables",
+        source=existing_columns,
+        target=target_description or existing_columns,
+        how=reason,
+    )
+    return df.drop(columns=existing_columns)
 
 
 def clean_outliers_iqr(
@@ -140,23 +224,13 @@ def clean_outliers_iqr(
     return cleaned
 
 
-def build_reference_maps(tables: dict[str, pd.DataFrame]) -> dict[str, dict[Any, Any]]:
+def build_reference_maps(
+    tables: dict[str, pd.DataFrame],
+    config: dict[str, Any],
+) -> dict[str, dict[Any, Any]]:
     codes = tables["tbl_codes2names"].copy()
     microorganisms = tables["tbl_microorganismos"].copy()
-
-    organism_label_map = {
-        "NOEB": "_Other bacteria",
-        "VIRUS": "_Virus",
-        "FUNGUS": "_Fungi",
-        "OEB": "_Enterobacteria",
-        "ECOLI": "Escherichia coli",
-        "SA": "Staphylococcus aureus",
-        "PSA": "Pseudomonas aeruginosa",
-        "KP": "Klebsiella pneumoniae",
-        "SP": "Streptococcus pneumoniae",
-        "EC": "Enterococcus",
-    }
-    microorganisms["label"] = microorganisms["label"].map(organism_label_map)
+    microorganisms["label"] = microorganisms["label"].map(config["MICROORGANISM_LABEL_MAP"])
     microorganisms = (
         microorganisms.sort_values(by=["snomed_code", "label"])
         .drop_duplicates(subset="snomed_code", keep="first")
@@ -184,6 +258,7 @@ def build_reference_maps(tables: dict[str, pd.DataFrame]) -> dict[str, dict[Any,
 def preprocess_tbl_paciente(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_paciente"].copy()
     previous_infections = tables["tbl_infecciones_previas"].copy()
@@ -225,12 +300,15 @@ def preprocess_tbl_paciente(
 
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_comorbilidad(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_comorbilidad"].copy()
     df = pd.get_dummies(source, columns=["tipo_cancer", "tipo_hepatopatia"])
@@ -254,12 +332,15 @@ def preprocess_tbl_comorbilidad(
         target=["tipo_cancer_*", "tipo_hepatopatia_*"],
         how="original categoricals replaced by one-hot encoded columns",
     )
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_factores_riesgo_bmr(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_factores_riesgo_bmr"].copy()
     log = finalize_log(
@@ -269,12 +350,15 @@ def preprocess_tbl_factores_riesgo_bmr(
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
     log.notes.append("Pass-through table in current notebook. Add table-local feature engineering here if needed.")
-    return PreprocessResult(df=source, log=log)
+    result = PreprocessResult(df=source, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_sintomas(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_sintomas"].copy()
     codes = tables["tbl_codes2names"].copy()
@@ -295,14 +379,15 @@ def preprocess_tbl_sintomas(
         fill_value=0,
     ).reset_index()
 
+    symptom_columns = [col for col in pivoted.columns if col not in ["person_id", "fecha_ingreso_urgencias"]]
     presence = pivoted.copy()
-    presence.iloc[:, 2:] = (presence.iloc[:, 2:] > 0).astype(int)
+    presence[symptom_columns] = (presence[symptom_columns] > 0).astype(int)
 
     duration = pivoted.copy()
-    duration.iloc[:, 2:] = duration.iloc[:, 2:].applymap(
-        lambda value: 0 if value == 0 else (1 if value <= 7 else 2)
+    duration[symptom_columns] = duration[symptom_columns].applymap(
+        lambda value: 0 if value == 0 else (1 if value <= config["SINTOMA_SHORT_DURATION_MAX_DAYS"] else 2)
     )
-    duration = duration.rename(columns={col: f"{col}_categorico" for col in duration.columns[2:]})
+    duration = duration.rename(columns={col: f"{col}_categorico" for col in symptom_columns})
 
     result = presence.merge(duration, on=["person_id", "fecha_ingreso_urgencias"], how="left")
     log = finalize_log(
@@ -325,55 +410,51 @@ def preprocess_tbl_sintomas(
         target=[col for col in result.columns if col.startswith("sintoma_")],
         how="pivot symptoms to wide binary and ordinal duration columns",
     )
-    return PreprocessResult(df=result, log=log)
+    result_obj = PreprocessResult(df=result, log=log)
+    attach_run_metadata(result_obj.log, config)
+    return validate_result(result_obj, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_signos(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_signos"].copy()
     df = source.copy()
 
-    numeric_columns = df.columns[2:]
+    numeric_columns = [col for col in config["SIGNOS_NUMERIC_COLUMNS"] if col in df.columns]
     for column in numeric_columns:
         df[column] = extract_numeric(df[column])
 
     df["hipotermia_hipertermia"] = np.where(
-        df["temperatura"] >= 38,
+        df["temperatura"] >= config["SIGNOS_THRESHOLDS"]["temperatura_fever_min"],
         2,
-        np.where(df["temperatura"] >= 36, 0, 1),
+        np.where(df["temperatura"] >= config["SIGNOS_THRESHOLDS"]["temperatura_normal_min"], 0, 1),
     )
     df["hipotermia_hipertermia"] = df["hipotermia_hipertermia"].where(df["temperatura"].notna())
     df["hipotension"] = np.where(
         df["tension_arterial"].isna(),
         df["hipotension"],
-        np.where(df["tension_arterial"] <= 100, 1, 0),
+        np.where(df["tension_arterial"] <= config["SIGNOS_THRESHOLDS"]["tension_arterial_hypotension_max"], 1, 0),
     )
     df["taquipnea"] = np.where(
         df["frec_respiratoria"].isna(),
         df["taquipnea"],
-        np.where(df["frec_respiratoria"] > 20, 1, 0),
+        np.where(df["frec_respiratoria"] > config["SIGNOS_THRESHOLDS"]["frec_respiratoria_taquipnea_min"], 1, 0),
     )
     df["taquicardia"] = np.where(
         df["frec_cardiaca"].isna(),
         df["taquicardia"],
-        np.where(df["frec_cardiaca"] > 90, 1, 0),
+        np.where(df["frec_cardiaca"] > config["SIGNOS_THRESHOLDS"]["frec_cardiaca_taquicardia_min"], 1, 0),
     )
     df["hipoxemia"] = np.where(
         df["saturacion_o2"].isna(),
         df["hipoxemia"],
-        np.where(df["saturacion_o2"] > 90, 0, 1),
+        np.where(df["saturacion_o2"] > config["SIGNOS_THRESHOLDS"]["saturacion_o2_hipoxemia_max"], 0, 1),
     )
-
-    iqr_columns = [
-        "temperatura",
-        "frec_respiratoria",
-        "frec_cardiaca",
-        "tension_arterial",
-        "saturacion_o2",
-    ]
-    df = clean_outliers_iqr(df, iqr_columns)
+    iqr_columns = [col for col in config["SIGNOS_OUTLIER_COLUMNS"] if col in df.columns]
+    df = clean_outliers_iqr(df, iqr_columns, iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"])
 
     log = finalize_log(
         table_name="tbl_signos",
@@ -402,24 +483,32 @@ def preprocess_tbl_signos(
         target=iqr_columns,
         how="replace IQR outliers with NaN",
     )
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_sepsis(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_sepsis"].copy()
     df = source.copy()
     df["lactato_serico"] = np.where(df["lactato_serico"] == "<= 2 millimole per liter", 0, 1)
 
-    for column in df.columns[2:]:
+    numeric_columns = [col for col in config["SEPSIS_NUMERIC_COLUMNS"] if col in df.columns and col != "lactato_serico"]
+    for column in numeric_columns:
         df[column] = extract_numeric(df[column])
 
     if "foco" in df.columns:
         df["foco"] = pd.to_numeric(df["foco"], errors="coerce").map(maps["foco_map"])
 
-    df = clean_outliers_iqr(df, ["proteina_c_reactiva"])
+    df = clean_outliers_iqr(
+        df,
+        [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns],
+        iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
+    )
 
     log = finalize_log(
         table_name="tbl_sepsis",
@@ -448,20 +537,36 @@ def preprocess_tbl_sepsis(
         target="proteina_c_reactiva",
         how="replace IQR outliers with NaN",
     )
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_infecciones_previas(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_infecciones_previas"].copy()
     df = source.copy()
+    log = finalize_log(
+        table_name="tbl_infecciones_previas",
+        input_df=source,
+        output_df=source,
+        merge_keys=["person_id"],
+    )
     df["grupo_microorganismo"] = df["microorganism_infec_prev"].astype(str).map(maps["organism_codes_map"])
-    df.loc[df["fecha_infeccion"] == "323-05-01", "fecha_infeccion"] = "2023-05-01"
+    for bad_value, good_value in config["FECHA_INFECCION_CORRECTIONS"].items():
+        df.loc[df["fecha_infeccion"] == bad_value, "fecha_infeccion"] = good_value
 
     organisms = df["grupo_microorganismo"].dropna().unique().tolist()
-    pivot_source = df.drop(columns=["microorganism_infec_prev", "bmr_infec_previa", "feno_resist_infec_prev"]).copy()
+    pivot_source = drop_columns_with_log(
+        df,
+        ["microorganism_infec_prev", "bmr_infec_previa", "feno_resist_infec_prev"],
+        log=log,
+        reason="replace raw detailed previous-infection columns with grouped history features",
+        target_description=["grupo_microorganismo", "*_binary", "num_inf_previas", "tiempo_ultima"],
+    ).copy()
     pivot_source["dummy"] = 1
     pivoted = pivot_source.pivot_table(
         index=["person_id", "fecha_ingreso_urgencias"],
@@ -486,12 +591,8 @@ def preprocess_tbl_infecciones_previas(
     result = pivoted.merge(num_visitas, on="person_id", how="left")
     result = result.merge(ultima[["person_id", "tiempo_ultima"]], on="person_id", how="left")
 
-    log = finalize_log(
-        table_name="tbl_infecciones_previas",
-        input_df=source,
-        output_df=result,
-        merge_keys=["person_id"],
-    )
+    log.output_rows = len(result)
+    log.output_columns = result.columns.tolist()
     add_change(
         log,
         "recoded_variables",
@@ -513,19 +614,15 @@ def preprocess_tbl_infecciones_previas(
         target=["num_inf_previas", "tiempo_ultima"],
         how="derive previous infection count and days since last infection",
     )
-    add_change(
-        log,
-        "dropped_variables",
-        source=["microorganism_infec_prev", "bmr_infec_previa", "feno_resist_infec_prev"],
-        target=["grupo_microorganismo", "*_binary", "num_inf_previas", "tiempo_ultima"],
-        how="replace raw detailed previous-infection records with grouped history features",
-    )
-    return PreprocessResult(df=result, log=log)
+    result_obj = PreprocessResult(df=result, log=log)
+    attach_run_metadata(result_obj.log, config)
+    return validate_result(result_obj, required_columns=["person_id"])
 
 
 def preprocess_tbl_tratamiento_antibiotico_previo(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_tratamiento_antibiotico_previo"].copy()
     df = source.copy()
@@ -537,12 +634,15 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
     )
     log.notes.append("Template only: move 90-day filtering, drug standardization, ultimo_antib, dias_ultimo_antib, family binaries, and antib_previo_total_veces here.")
     log.warnings.append("Not implemented yet in this template.")
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_hemocultivo_de_urgencias(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_hemocultivo_de_urgencias"].copy()
     df = source.copy()
@@ -554,12 +654,15 @@ def preprocess_tbl_hemocultivo_de_urgencias(
     )
     log.notes.append("Template only: add microorganism harmonization, co-infection resolution, pivoting, resultado_hemo, bmr_etiologia aggregation, and phenotype tuple cleanup.")
     log.warnings.append("Not implemented yet in this template.")
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_colonizaciones_previas(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_colonizaciones_previas"].copy()
     df = source.copy()
@@ -571,12 +674,15 @@ def preprocess_tbl_colonizaciones_previas(
     )
     log.notes.append("Template only: add organism mapping, patient-level binary pivot, grouped colonization features, and colonization burden here.")
     log.warnings.append("Not implemented yet in this template.")
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id"])
 
 
 def preprocess_tbl_otros_cultivos_en_urgencias(
     tables: dict[str, pd.DataFrame],
     maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_otros_cultivos_en_urgencias"].copy()
     df = source.copy()
@@ -588,12 +694,53 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
     )
     log.notes.append("Template only: add microorganism mapping, column drops, pivoting, and helper output for combined urgent-culture dominance.")
     log.warnings.append("Not implemented yet in this template.")
-    return PreprocessResult(df=df, log=log)
+    result = PreprocessResult(df=df, log=log)
+    attach_run_metadata(result.log, config)
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
-def merge_preprocessed_tables(results: dict[str, PreprocessResult]) -> PreprocessResult:
+def merge_with_validation(
+    left_df: pd.DataFrame,
+    right_df: pd.DataFrame,
+    *,
+    left_name: str,
+    right_name: str,
+    keys: list[str],
+    how: str,
+    log: TableLog,
+) -> pd.DataFrame:
+    ensure_columns_present(left_df, keys, left_name)
+    ensure_columns_present(right_df, keys, right_name)
+    left_dupes = duplicate_key_rows(left_df, keys)
+    right_dupes = duplicate_key_rows(right_df, keys)
+    before_rows = len(left_df)
+    log.validation_checks.append(
+        f"merge:{left_name}+{right_name}:before_rows={before_rows}:left_dupes={left_dupes}:right_dupes={right_dupes}:keys={keys}"
+    )
+    if left_dupes > 0:
+        log.warnings.append(f"{left_name} has {left_dupes} rows with duplicated merge keys {keys}")
+    if right_dupes > 0:
+        log.warnings.append(f"{right_name} has {right_dupes} rows with duplicated merge keys {keys}")
+    merged = left_df.merge(right_df, on=keys, how=how)
+    after_rows = len(merged)
+    log.notes.append(
+        f"Merged {right_name} into {left_name} with how={how}, keys={keys}, rows {before_rows}->{after_rows}"
+    )
+    return merged
+
+
+def merge_preprocessed_tables(
+    results: dict[str, PreprocessResult],
+    config: dict[str, Any],
+) -> PreprocessResult:
     master = results["tbl_paciente"].df.copy()
     input_df = master.copy()
+    log = finalize_log(
+        table_name="merged_dataset",
+        input_df=input_df,
+        output_df=input_df,
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
+    )
 
     merge_plan = [
         ("tbl_comorbilidad", ["person_id", "fecha_ingreso_urgencias"], "left"),
@@ -609,19 +756,26 @@ def merge_preprocessed_tables(results: dict[str, PreprocessResult]) -> Preproces
     ]
 
     for name, keys, how in merge_plan:
-        master = master.merge(results[name].df, on=keys, how=how)
-
-    log = finalize_log(
-        table_name="merged_dataset",
-        input_df=input_df,
-        output_df=master,
-        merge_keys=["person_id", "fecha_ingreso_urgencias"],
-    )
+        master = merge_with_validation(
+            master,
+            results[name].df,
+            left_name="merged_dataset",
+            right_name=name,
+            keys=keys,
+            how=how,
+            log=log,
+        )
+    log.output_rows = len(master)
+    log.output_columns = master.columns.tolist()
     log.notes.append("Keep this stage thin. Most engineering should happen inside the table preprocessors.")
-    return PreprocessResult(df=master, log=log)
+    attach_run_metadata(log, config)
+    return validate_result(
+        PreprocessResult(df=master, log=log),
+        required_columns=["person_id", "fecha_ingreso_urgencias"],
+    )
 
 
-def build_cross_table_features(df: pd.DataFrame) -> PreprocessResult:
+def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> PreprocessResult:
     source = df.copy()
     result = df.copy()
     log = finalize_log(
@@ -631,10 +785,18 @@ def build_cross_table_features(df: pd.DataFrame) -> PreprocessResult:
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
     log.notes.append("Reserve this step for features that truly depend on multiple already-preprocessed tables.")
-    return PreprocessResult(df=result, log=log)
+    attach_run_metadata(log, config)
+    return validate_result(
+        PreprocessResult(df=result, log=log),
+        required_columns=["person_id", "fecha_ingreso_urgencias"],
+    )
 
 
-def build_targets(df: pd.DataFrame, maps: dict[str, dict[Any, Any]]) -> PreprocessResult:
+def build_targets(
+    df: pd.DataFrame,
+    maps: dict[str, dict[Any, Any]],
+    config: dict[str, Any],
+) -> PreprocessResult:
     source = df.copy()
     result = df.copy()
     log = finalize_log(
@@ -644,43 +806,74 @@ def build_targets(df: pd.DataFrame, maps: dict[str, dict[Any, Any]]) -> Preproce
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
     log.notes.append("Add final heads here: infected_yes_no, resultado_hemo_grouped, resistant_cefalosporina, df_resist, df_cefalosporinas, etc.")
-    return PreprocessResult(df=result, log=log)
+    attach_run_metadata(log, config)
+    return validate_result(
+        PreprocessResult(df=result, log=log),
+        required_columns=["person_id", "fecha_ingreso_urgencias"],
+    )
+
+
+def build_run_log(
+    *,
+    input_file_path: Path,
+    output_file_path: Path,
+    config: dict[str, Any],
+) -> TableLog:
+    log = TableLog(
+        table_name="_pipeline_run",
+        input_rows=0,
+        output_rows=0,
+        input_columns=[],
+        output_columns=[],
+        merge_keys=[],
+    )
+    attach_run_metadata(log, config)
+    log.notes.extend(
+        [
+            f"input_file_path={input_file_path}",
+            f"output_file_path={output_file_path}",
+            f"config_file_path={config['CONFIG_PATH']}",
+        ]
+    )
+    log.metadata["config_values"] = config
+    return log
 
 
 def run_pipeline(
     input_file_path: Path = DEFAULT_DB_PATH,
     output_file_path: Path = DEFAULT_OUTPUT_PATH,
+    config_file_path: Path = DEFAULT_CONFIG_PATH,
 ) -> PipelineArtifacts:
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
     tables = load_tables(input_file_path)
-    maps = build_reference_maps(tables)
+    config = load_config_module(config_file_path)
+    maps = build_reference_maps(tables, config)
 
     results: dict[str, PreprocessResult] = {}
-    results["tbl_paciente"] = preprocess_tbl_paciente(tables, maps)
-    results["tbl_comorbilidad"] = preprocess_tbl_comorbilidad(tables, maps)
-    results["tbl_factores_riesgo_bmr"] = preprocess_tbl_factores_riesgo_bmr(tables, maps)
-    results["tbl_sintomas"] = preprocess_tbl_sintomas(tables, maps)
-    results["tbl_signos"] = preprocess_tbl_signos(tables, maps)
-    results["tbl_sepsis"] = preprocess_tbl_sepsis(tables, maps)
-    results["tbl_infecciones_previas"] = preprocess_tbl_infecciones_previas(tables, maps)
-    results["tbl_tratamiento_antibiotico_previo"] = preprocess_tbl_tratamiento_antibiotico_previo(tables, maps)
-    results["tbl_hemocultivo_de_urgencias"] = preprocess_tbl_hemocultivo_de_urgencias(tables, maps)
-    results["tbl_colonizaciones_previas"] = preprocess_tbl_colonizaciones_previas(tables, maps)
-    results["tbl_otros_cultivos_en_urgencias"] = preprocess_tbl_otros_cultivos_en_urgencias(tables, maps)
+    results["tbl_paciente"] = preprocess_tbl_paciente(tables, maps, config)
+    results["tbl_comorbilidad"] = preprocess_tbl_comorbilidad(tables, maps, config)
+    results["tbl_factores_riesgo_bmr"] = preprocess_tbl_factores_riesgo_bmr(tables, maps, config)
+    results["tbl_sintomas"] = preprocess_tbl_sintomas(tables, maps, config)
+    results["tbl_signos"] = preprocess_tbl_signos(tables, maps, config)
+    results["tbl_sepsis"] = preprocess_tbl_sepsis(tables, maps, config)
+    results["tbl_infecciones_previas"] = preprocess_tbl_infecciones_previas(tables, maps, config)
+    results["tbl_tratamiento_antibiotico_previo"] = preprocess_tbl_tratamiento_antibiotico_previo(tables, maps, config)
+    results["tbl_hemocultivo_de_urgencias"] = preprocess_tbl_hemocultivo_de_urgencias(tables, maps, config)
+    results["tbl_colonizaciones_previas"] = preprocess_tbl_colonizaciones_previas(tables, maps, config)
+    results["tbl_otros_cultivos_en_urgencias"] = preprocess_tbl_otros_cultivos_en_urgencias(tables, maps, config)
 
-    merged = merge_preprocessed_tables(results)
-    cross_features = build_cross_table_features(merged.df)
-    targets = build_targets(cross_features.df, maps)
+    merged = merge_preprocessed_tables(results, config)
+    cross_features = build_cross_table_features(merged.df, config)
+    targets = build_targets(cross_features.df, maps, config)
 
-    logs = [result.log for result in results.values()]
+    logs = [build_run_log(input_file_path=input_file_path, output_file_path=output_file_path, config=config)]
+    logs.extend([result.log for result in results.values()])
     logs.extend([merged.log, cross_features.log, targets.log])
 
     targets.df.to_csv(output_file_path, index=False)
     export_logs(logs, output_file_path.with_name(f"{output_file_path.stem}_log_summary.csv"))
 
     with output_file_path.with_name(f"{output_file_path.stem}_log_detailed.json").open("w", encoding="utf-8") as fh:
-        import json
-
         json.dump([asdict(log) for log in logs], fh, indent=2, ensure_ascii=False)
 
     return PipelineArtifacts(
@@ -704,12 +897,22 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_OUTPUT_PATH,
         help=f"Full path to the output CSV file, including filename. Log files are written alongside it. Default: {DEFAULT_OUTPUT_PATH}",
     )
+    parser.add_argument(
+        "--config-path",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help=f"Full path to the preprocessing config file, including filename. Default: {DEFAULT_CONFIG_PATH}",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    run_pipeline(input_file_path=args.input_path, output_file_path=args.output_path)
+    run_pipeline(
+        input_file_path=args.input_path,
+        output_file_path=args.output_path,
+        config_file_path=args.config_path,
+    )
 
 
 if __name__ == "__main__":
