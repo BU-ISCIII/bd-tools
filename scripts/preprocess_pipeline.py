@@ -102,6 +102,8 @@ def export_logs(logs: list[TableLog], output_path: Path) -> pd.DataFrame:
             "table_name": log.table_name,
             "input_rows": log.input_rows,
             "output_rows": log.output_rows,
+            "input_column_count": len(log.input_columns),
+            "output_column_count": len(log.output_columns),
             "merge_keys": ",".join(log.merge_keys),
             "warning_count": len(log.warnings),
             "note_count": len(log.notes),
@@ -154,6 +156,64 @@ def duplicate_key_rows(df: pd.DataFrame, keys: list[str]) -> int:
     return int(df.duplicated(subset=keys, keep=False).sum())
 
 
+def duplicate_key_groups(df: pd.DataFrame, keys: list[str]) -> int:
+    if not keys:
+        return 0
+    duplicate_mask = df.duplicated(subset=keys, keep=False)
+    if not duplicate_mask.any():
+        return 0
+    return int(df.loc[duplicate_mask, keys].drop_duplicates().shape[0])
+
+
+def admission_stats(df: pd.DataFrame) -> dict[str, int | None]:
+    stats: dict[str, int | None] = {
+        "n_rows": int(len(df)),
+        "n_unique_person_id": None,
+        "n_unique_person_fecha": None,
+        "n_person_id_with_multiple_fechas": None,
+    }
+    if "person_id" in df.columns:
+        stats["n_unique_person_id"] = int(df["person_id"].nunique(dropna=True))
+    if {"person_id", "fecha_ingreso_urgencias"}.issubset(df.columns):
+        person_fecha = df[["person_id", "fecha_ingreso_urgencias"]].drop_duplicates()
+        stats["n_unique_person_fecha"] = int(len(person_fecha))
+        multiple_fechas = person_fecha.groupby("person_id")["fecha_ingreso_urgencias"].nunique()
+        stats["n_person_id_with_multiple_fechas"] = int((multiple_fechas > 1).sum())
+    return stats
+
+
+def format_admission_stats(name: str, stats: dict[str, int | None]) -> str:
+    return (
+        f"{name}: rows={stats['n_rows']}, "
+        f"unique_person_id={stats['n_unique_person_id']}, "
+        f"unique_person_fecha={stats['n_unique_person_fecha']}, "
+        f"person_id_with_multiple_fechas={stats['n_person_id_with_multiple_fechas']}"
+    )
+
+
+def format_duplicate_key_stats(
+    name: str,
+    duplicate_rows: int,
+    duplicate_groups: int,
+    keys: list[str],
+) -> str:
+    return (
+        f"{name}: duplicated_rows_on_{keys}={duplicate_rows}, "
+        f"unique_duplicated_key_groups_on_{keys}={duplicate_groups}"
+    )
+
+
+def overlapping_non_key_columns(
+    left_df: pd.DataFrame,
+    right_df: pd.DataFrame,
+    keys: list[str],
+) -> list[str]:
+    key_set = set(keys)
+    left_only = set(left_df.columns) - key_set
+    right_only = set(right_df.columns) - key_set
+    return sorted(left_only & right_only)
+
+
 def validate_result(
     result: PreprocessResult,
     *,
@@ -168,12 +228,16 @@ def validate_result(
         raise ValueError(f"{result.log.table_name} produced an empty dataframe")
     result.log.validation_checks.append(f"row_count:{len(result.df)}")
     duplicate_rows = duplicate_key_rows(result.df, result.log.merge_keys)
+    duplicate_groups = duplicate_key_groups(result.df, result.log.merge_keys)
     result.log.validation_checks.append(
         f"duplicate_merge_key_rows:{duplicate_rows}"
     )
+    result.log.validation_checks.append(
+        f"duplicate_merge_key_groups:{duplicate_groups}"
+    )
     if duplicate_rows > 0:
         result.log.warnings.append(
-            f"{duplicate_rows} rows have duplicated merge keys {result.log.merge_keys}"
+            f"{duplicate_rows} rows across {duplicate_groups} duplicated key groups for merge keys {result.log.merge_keys}"
         )
     return result
 
@@ -617,7 +681,7 @@ def preprocess_tbl_infecciones_previas(
         table_name="tbl_infecciones_previas",
         input_df=source,
         output_df=source,
-        merge_keys=["person_id"],
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
     df["grupo_microorganismo"] = df["microorganism_infec_prev"].astype(str).map(maps["organism_codes_map"])
     add_change(
@@ -634,7 +698,7 @@ def preprocess_tbl_infecciones_previas(
     organisms = df["grupo_microorganismo"].dropna().unique().tolist()
     pivot_source = drop_columns_with_log(
         df,
-        ["microorganism_infec_prev", "bmr_infec_previa", "feno_resist_infec_prev"],
+        ["microorganism_infec_prev", "bmr_infec_previa", "feno_resist_infec_prev", "sindrome_infeccioso"],
         log=log,
         reason="replace raw detailed previous-infection columns with grouped history features",
         target_description=["grupo_microorganismo", "*_binary", "num_inf_previas", "tiempo_ultima"],
@@ -680,7 +744,7 @@ def preprocess_tbl_infecciones_previas(
     log.output_columns = result.columns.tolist()
     result_obj = PreprocessResult(df=result, log=log)
     attach_run_metadata(result_obj.log, config)
-    return validate_result(result_obj, required_columns=["person_id"])
+    return validate_result(result_obj, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_tratamiento_antibiotico_previo(
@@ -776,20 +840,54 @@ def merge_with_validation(
     ensure_columns_present(left_df, keys, left_name)
     ensure_columns_present(right_df, keys, right_name)
     left_dupes = duplicate_key_rows(left_df, keys)
+    left_dup_groups = duplicate_key_groups(left_df, keys)
     right_dupes = duplicate_key_rows(right_df, keys)
+    right_dup_groups = duplicate_key_groups(right_df, keys)
+    left_admission_stats = admission_stats(left_df)
+    right_admission_stats = admission_stats(right_df)
+    overlaps = overlapping_non_key_columns(left_df, right_df, keys)
     before_rows = len(left_df)
     log.validation_checks.append(
-        f"merge:{left_name}+{right_name}:before_rows={before_rows}:left_dupes={left_dupes}:right_dupes={right_dupes}:keys={keys}"
+        f"merge:{left_name}+{right_name}:before_rows={before_rows}:left_dupes={left_dupes}:left_dup_groups={left_dup_groups}:right_dupes={right_dupes}:right_dup_groups={right_dup_groups}:keys={keys}"
     )
+    log.validation_checks.append(format_duplicate_key_stats(left_name, left_dupes, left_dup_groups, keys))
+    log.validation_checks.append(format_duplicate_key_stats(right_name, right_dupes, right_dup_groups, keys))
+    log.validation_checks.append(format_admission_stats(left_name, left_admission_stats))
+    log.validation_checks.append(format_admission_stats(right_name, right_admission_stats))
     if left_dupes > 0:
-        log.warnings.append(f"{left_name} has {left_dupes} rows with duplicated merge keys {keys}")
+        log.warnings.append(
+            format_duplicate_key_stats(left_name, left_dupes, left_dup_groups, keys)
+        )
     if right_dupes > 0:
-        log.warnings.append(f"{right_name} has {right_dupes} rows with duplicated merge keys {keys}")
+        log.warnings.append(
+            format_duplicate_key_stats(right_name, right_dupes, right_dup_groups, keys)
+        )
+    if overlaps:
+        overlap_text = ", ".join(overlaps)
+        raise ValueError(
+            f"Cannot merge {right_name} into {left_name} on keys {keys}. "
+            f"Duplicate-key stats on the chosen merge keys: "
+            f"{format_duplicate_key_stats(left_name, left_dupes, left_dup_groups, keys)}; "
+            f"{format_duplicate_key_stats(right_name, right_dupes, right_dup_groups, keys)}. "
+            f"Admission stats: {format_admission_stats(left_name, left_admission_stats)}; "
+            f"{format_admission_stats(right_name, right_admission_stats)}. "
+            f"Overlapping non-key columns would be duplicated/suffixed: {overlap_text}. "
+            "Resolve this in the table preprocessor or adjust the merge inputs explicitly."
+        )
     merged = left_df.merge(right_df, on=keys, how=how)
     after_rows = len(merged)
+    row_delta = after_rows - before_rows
     log.notes.append(
-        f"Merged {right_name} into {left_name} with how={how}, keys={keys}, rows {before_rows}->{after_rows}"
+        f"Merged {right_name} into {left_name} with how={how}, keys={keys}, rows {before_rows}->{after_rows} (delta={row_delta})"
     )
+    if row_delta > 0:
+        log.warnings.append(
+            f"Merge {left_name} <- {right_name} increased rows by {row_delta}. This usually indicates one-to-many or many-to-many matches on keys {keys}."
+        )
+    elif row_delta < 0:
+        log.warnings.append(
+            f"Merge {left_name} <- {right_name} reduced rows by {-row_delta}. Review merge type and key completeness on {keys}."
+        )
     return merged
 
 
@@ -812,9 +910,9 @@ def merge_preprocessed_tables(
         ("tbl_sepsis", ["person_id", "fecha_ingreso_urgencias"], "left"),
         ("tbl_signos", ["person_id", "fecha_ingreso_urgencias"], "left"),
         ("tbl_sintomas", ["person_id", "fecha_ingreso_urgencias"], "left"),
-        ("tbl_infecciones_previas", ["person_id"], "left"),
+        ("tbl_infecciones_previas", ["person_id", "fecha_ingreso_urgencias"], "left"),
         ("tbl_tratamiento_antibiotico_previo", ["person_id", "fecha_ingreso_urgencias"], "left"),
-        ("tbl_colonizaciones_previas", ["person_id"], "left"),
+        ("tbl_colonizaciones_previas", ["person_id", "fecha_ingreso_urgencias"], "left"),
         ("tbl_hemocultivo_de_urgencias", ["person_id", "fecha_ingreso_urgencias"], "left"),
         ("tbl_otros_cultivos_en_urgencias", ["person_id", "fecha_ingreso_urgencias"], "left"),
     ]
