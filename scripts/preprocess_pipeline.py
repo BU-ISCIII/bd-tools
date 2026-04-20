@@ -125,6 +125,7 @@ def clean_outliers_iqr(
     df: pd.DataFrame,
     variables: list[str],
     *,
+    iqr_multiplier: float = 3.0,
     replace_with: float | None = np.nan,
 ) -> pd.DataFrame:
     cleaned = df.copy()
@@ -132,8 +133,8 @@ def clean_outliers_iqr(
         q1 = cleaned[variable].quantile(0.25)
         q3 = cleaned[variable].quantile(0.75)
         iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
+        lower = q1 - iqr_multiplier * iqr
+        upper = q3 + iqr_multiplier * iqr
         mask = cleaned[variable].between(lower, upper) | cleaned[variable].isna()
         cleaned.loc[~mask, variable] = replace_with
     return cleaned
