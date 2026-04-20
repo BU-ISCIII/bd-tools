@@ -537,7 +537,7 @@ def preprocess_tbl_signos(
     )
     add_change(
         log,
-        "created_variables",
+        "recoded_variables",
         source="tension_arterial",
         target="hipotension",
         how=(
@@ -554,7 +554,7 @@ def preprocess_tbl_signos(
     )
     add_change(
         log,
-        "created_variables",
+        "recoded_variables",
         source="frec_respiratoria",
         target="taquipnea",
         how=(
@@ -571,7 +571,7 @@ def preprocess_tbl_signos(
     )
     add_change(
         log,
-        "created_variables",
+        "recoded_variables",
         source="frec_cardiaca",
         target="taquicardia",
         how=(
@@ -588,7 +588,7 @@ def preprocess_tbl_signos(
     )
     add_change(
         log,
-        "created_variables",
+        "recoded_variables",
         source="saturacion_o2",
         target="hipoxemia",
         how=(
