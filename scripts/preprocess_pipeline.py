@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sqlite3
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -11,7 +12,7 @@ import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = ROOT_DIR / "database" / "db_mepram_sepsis.sqlite3"
-DEFAULT_OUTPUT_DIR = ROOT_DIR / "outputs"
+DEFAULT_OUTPUT_PATH = ROOT_DIR / "outputs" / "preprocessed_output.csv"
 
 
 # Dataclasses define the structured objects passed through the pipeline.
@@ -106,8 +107,8 @@ def export_logs(logs: list[TableLog], output_path: Path) -> pd.DataFrame:
     return df
 
 
-def load_tables(db_path: Path) -> dict[str, pd.DataFrame]:
-    with sqlite3.connect(db_path) as conn:
+def load_tables(db_file_path: Path) -> dict[str, pd.DataFrame]:
+    with sqlite3.connect(db_file_path) as conn:
         table_names = pd.read_sql_query(
             "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'tbl_%'",
             conn,
@@ -646,11 +647,11 @@ def build_targets(df: pd.DataFrame, maps: dict[str, dict[Any, Any]]) -> Preproce
 
 
 def run_pipeline(
-    db_path: Path = DEFAULT_DB_PATH,
-    output_dir: Path = DEFAULT_OUTPUT_DIR,
+    input_file_path: Path = DEFAULT_DB_PATH,
+    output_file_path: Path = DEFAULT_OUTPUT_PATH,
 ) -> PipelineArtifacts:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    tables = load_tables(db_path)
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    tables = load_tables(input_file_path)
     maps = build_reference_maps(tables)
 
     results: dict[str, PreprocessResult] = {}
@@ -673,10 +674,10 @@ def run_pipeline(
     logs = [result.log for result in results.values()]
     logs.extend([merged.log, cross_features.log, targets.log])
 
-    targets.df.to_csv(output_dir / "preprocessed_template_output.csv", index=False)
-    export_logs(logs, output_dir / "preprocessing_log_summary.csv")
+    targets.df.to_csv(output_file_path, index=False)
+    export_logs(logs, output_file_path.with_name(f"{output_file_path.stem}_log_summary.csv"))
 
-    with (output_dir / "preprocessing_log_detailed.json").open("w", encoding="utf-8") as fh:
+    with output_file_path.with_name(f"{output_file_path.stem}_log_detailed.json").open("w", encoding="utf-8") as fh:
         import json
 
         json.dump([asdict(log) for log in logs], fh, indent=2, ensure_ascii=False)
@@ -688,8 +689,26 @@ def run_pipeline(
     )
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Preprocess MePRAM tables into a modelling-ready dataset.")
+    parser.add_argument(
+        "--input-path",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help=f"Full path to the SQLite input file, including filename. Default: {DEFAULT_DB_PATH}",
+    )
+    parser.add_argument(
+        "--output-path",
+        type=Path,
+        default=DEFAULT_OUTPUT_PATH,
+        help=f"Full path to the output CSV file, including filename. Log files are written alongside it. Default: {DEFAULT_OUTPUT_PATH}",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    run_pipeline()
+    args = parse_args()
+    run_pipeline(input_file_path=args.input_path, output_file_path=args.output_path)
 
 
 if __name__ == "__main__":
