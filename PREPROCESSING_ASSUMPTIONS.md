@@ -355,6 +355,25 @@ The current rewrite preserves hemoculture information as:
 - aggregate `bmr_etiologia`
 - raw-code tuple `fenotipo_resistencia`
 
+In the notebook-derived final modelling table, the source-specific hemoculture
+organism indicators are not merged as predictors. The notebook keeps
+`resultado_hemo`, `bmr_etiologia`, and `fenotipo_resistencia`, then combines
+hemoculture organisms with other emergency cultures to derive a culture-level
+organism signal.
+
+The rewrite therefore keeps `hemo_*_binary` in the full output for audit and
+experimentation, but the default filtered output drops those source-specific
+hemoculture indicators. Instead, the filtered output keeps the combined
+`all_cult_*_count` columns and `dominant_all_cult_org`, which encode whether a
+grouped organism was found in any emergency culture source and whether it was
+detected more than once across sources/records.
+
+Assumption to validate:
+
+- Losing source-specific `hemo_*_binary` predictors is acceptable if
+  `resultado_hemo`, `bmr_etiologia`, `fenotipo_resistencia`, and
+  `all_cult_*_count` preserve the clinically relevant hemoculture signal.
+
 ### Current grouped-microorganism counts in `tbl_hemocultivo_de_urgencias`
 
 - `NEGATIVE`: `2074`
