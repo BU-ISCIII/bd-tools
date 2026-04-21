@@ -253,3 +253,178 @@ Questions for clinicians:
 - Does missing `bmr_colonizador` mean non-BMR or unknown?
 - Should `feno_resist_colo` be preserved globally, organism-specifically, or not used?
 - Is `fecha_colonizacion` clinically useful for a “time since last colonisation” feature?
+
+## Open Question: Other Emergency Culture Detail (`tbl_otros_cultivos_en_urgencias`)
+
+The current rewrite preserves other emergency cultures mainly as:
+
+- grouped organism count columns prefixed with `otros_cult_`
+
+But the raw table also contains:
+
+- `tipo_cultivo`
+- `bmr_etiologia_otros`
+- `fenotipo_resistencia_otros`
+- `fecha_otros_cultivos`
+
+These are currently not preserved in the aggregated output, matching the original notebook.
+
+### Current grouped-microorganism counts in `tbl_otros_cultivos_en_urgencias`
+
+- `NEGATIVE`: `2351`
+- `Escherichia coli`: `1132`
+- `Klebsiella pneumoniae`: `467`
+- `_Enterobacteria`: `306`
+- `_Virus`: `248`
+- `_Other bacteria`: `174`
+- `Staphylococcus aureus`: `119`
+- `Pseudomonas aeruginosa`: `103`
+- `Enterococcus`: `88`
+- `Streptococcus pneumoniae`: `81`
+- `_Fungi`: `35`
+
+So the grouped microorganism space is `11` categories including `NEGATIVE`.
+
+### Current grouped-microorganism × BMR counts
+
+- `NEGATIVE`: total `2351`, `bmr_1=0`, `bmr_0=2`, `bmr_missing=2349`
+- `Escherichia coli`: total `1132`, `bmr_1=763`, `bmr_0=369`, `bmr_missing=0`
+- `Klebsiella pneumoniae`: total `467`, `bmr_1=364`, `bmr_0=103`, `bmr_missing=0`
+- `_Enterobacteria`: total `306`, `bmr_1=204`, `bmr_0=102`, `bmr_missing=0`
+- `_Virus`: total `248`, `bmr_1=0`, `bmr_0=248`, `bmr_missing=0`
+- `_Other bacteria`: total `174`, `bmr_1=53`, `bmr_0=121`, `bmr_missing=0`
+- `Staphylococcus aureus`: total `119`, `bmr_1=76`, `bmr_0=43`, `bmr_missing=0`
+- `Pseudomonas aeruginosa`: total `103`, `bmr_1=39`, `bmr_0=64`, `bmr_missing=0`
+- `Enterococcus`: total `88`, `bmr_1=11`, `bmr_0=77`, `bmr_missing=0`
+- `Streptococcus pneumoniae`: total `81`, `bmr_1=3`, `bmr_0=78`, `bmr_missing=0`
+- `_Fungi`: total `35`, `bmr_1=0`, `bmr_0=35`, `bmr_missing=0`
+
+Practical implication:
+
+- Adding one BMR feature per grouped organism would add up to `11` columns if `NEGATIVE` is included, or `10` if it is excluded.
+
+### Current resistance phenotype counts
+
+`fenotipo_resistencia_otros` has `12` non-null phenotype codes and `3592` missing rows.
+
+- code `9`: `329` rows, `Bacilo Gram negativo resistente a ciprofloxacino`
+- code `4`: `322` rows, `Bacilo Gram negativo resistente a amoxicilina/clavulánico`
+- code `6`: `220` rows, `Bacilo Gram negativo resistente a ceftrixona o cefotaxima`
+- code `8`: `197` rows, `Bacilo Gram negativo resistente a ceftazidima`
+- code `5`: `152` rows, `Bacilo Gram negativo resistente a piperacilina/tazobactam`
+- code `7`: `146` rows, `Bacilo Gram negativo resistente a cefepima`
+- code `1`: `86` rows, `Coco Gram positivo resistente a ampicilina o penicilina`
+- code `2`: `30` rows, `Coco Gram positivo resistente a meticilina`
+- code `10`: `17` rows, `Bacilo Gram negativo resistente a meropenem`
+- code `12`: `6` rows, `Bacilo Gram negativo resistente a ceftazidima/avibactam`
+- code `11`: `5` rows, `Bacilo Gram negativo resistente a ceftolozano/tazobactam`
+- code `3`: `2` rows, `Coco Gram positivo resistente a vancomicina`
+
+### Potential column increase if phenotype detail is preserved
+
+- Global phenotype binaries would add up to `12` columns.
+- Organism-specific BMR features would add up to `10` or `11` columns depending on whether `NEGATIVE` is included.
+- Organism-specific phenotype features would add `54` observed organism-phenotype pair columns in the current extract.
+- A full grouped organism × phenotype matrix would be up to `11 × 12 = 132` columns including `NEGATIVE`, or `10 × 12 = 120` excluding `NEGATIVE`.
+
+Observed organism-phenotype pair counts by group:
+
+- `_Other bacteria`: `12` phenotype codes
+- `Pseudomonas aeruginosa`: `9` phenotype codes
+- `Klebsiella pneumoniae`: `9` phenotype codes
+- `Escherichia coli`: `8` phenotype codes
+- `_Enterobacteria`: `8` phenotype codes
+- `Staphylococcus aureus`: `4` phenotype codes
+- `Enterococcus`: `3` phenotype codes
+- `Streptococcus pneumoniae`: `1` phenotype code
+
+Questions for clinicians:
+
+- Should `bmr_etiologia_otros` be preserved, especially because it is mostly populated for non-negative organisms?
+- Should `fenotipo_resistencia_otros` contribute to resistance targets or history features?
+- Should `tipo_cultivo` be preserved to distinguish urine, respiratory, wound, catheter, or other culture sources?
+- Should `fecha_otros_cultivos` be used to validate timing relative to admission?
+
+## Open Question: Hemoculture Detail (`tbl_hemocultivo_de_urgencias`)
+
+The current rewrite preserves hemoculture information as:
+
+- grouped hemoculture organism binary columns prefixed with `hemo_`
+- scalar adjudicated `resultado_hemo`
+- pre-clinician-correction `resultado_hemo_multilabel`
+- aggregate `bmr_etiologia`
+- raw-code tuple `fenotipo_resistencia`
+
+### Current grouped-microorganism counts in `tbl_hemocultivo_de_urgencias`
+
+- `NEGATIVE`: `2074`
+- `Escherichia coli`: `1420`
+- `Klebsiella pneumoniae`: `504`
+- `_Enterobacteria`: `293`
+- `_Other bacteria`: `273`
+- `Staphylococcus aureus`: `199`
+- `Pseudomonas aeruginosa`: `111`
+- `Streptococcus pneumoniae`: `106`
+- `Enterococcus`: `56`
+- `_Fungi`: `8`
+
+So the grouped microorganism space is `10` categories including `NEGATIVE`.
+
+### Current grouped-microorganism × BMR counts
+
+- `NEGATIVE`: total `2074`, `bmr_1=0`, `bmr_0=0`, `bmr_missing=2074`
+- `Escherichia coli`: total `1420`, `bmr_1=952`, `bmr_0=468`, `bmr_missing=0`
+- `Klebsiella pneumoniae`: total `504`, `bmr_1=382`, `bmr_0=122`, `bmr_missing=0`
+- `_Enterobacteria`: total `293`, `bmr_1=194`, `bmr_0=99`, `bmr_missing=0`
+- `_Other bacteria`: total `273`, `bmr_1=59`, `bmr_0=214`, `bmr_missing=0`
+- `Staphylococcus aureus`: total `199`, `bmr_1=132`, `bmr_0=67`, `bmr_missing=0`
+- `Pseudomonas aeruginosa`: total `111`, `bmr_1=39`, `bmr_0=72`, `bmr_missing=0`
+- `Streptococcus pneumoniae`: total `106`, `bmr_1=7`, `bmr_0=99`, `bmr_missing=0`
+- `Enterococcus`: total `56`, `bmr_1=4`, `bmr_0=52`, `bmr_missing=0`
+- `_Fungi`: total `8`, `bmr_1=0`, `bmr_0=8`, `bmr_missing=0`
+
+Practical implication:
+
+- Adding organism-specific BMR features would add up to `10` columns if `NEGATIVE` is included, or `9` if it is excluded.
+- The current aggregate `bmr_etiologia` keeps the “any BMR” signal but loses which organism carried that BMR status when multiple organisms were recorded before clinician correction.
+
+### Current resistance phenotype counts
+
+`fenotipo_resistencia` has `12` non-null phenotype codes and `3275` missing rows.
+
+- code `4`: `454` rows, `Bacilo Gram negativo resistente a amoxicilina/clavulánico`
+- code `9`: `319` rows, `Bacilo Gram negativo resistente a ciprofloxacino`
+- code `6`: `211` rows, `Bacilo Gram negativo resistente a ceftrixona o cefotaxima`
+- code `8`: `192` rows, `Bacilo Gram negativo resistente a ceftazidima`
+- code `5`: `175` rows, `Bacilo Gram negativo resistente a piperacilina/tazobactam`
+- code `7`: `171` rows, `Bacilo Gram negativo resistente a cefepima`
+- code `1`: `168` rows, `Coco Gram positivo resistente a ampicilina o penicilina`
+- code `2`: `58` rows, `Coco Gram positivo resistente a meticilina`
+- code `10`: `11` rows, `Bacilo Gram negativo resistente a meropenem`
+- code `12`: `4` rows, `Bacilo Gram negativo resistente a ceftazidima/avibactam`
+- code `11`: `4` rows, `Bacilo Gram negativo resistente a ceftolozano/tazobactam`
+- code `3`: `2` rows, `Coco Gram positivo resistente a vancomicina`
+
+### Potential column increase if phenotype detail is preserved
+
+- Global phenotype binaries would add up to `12` columns.
+- Organism-specific BMR features would add up to `9` or `10` columns depending on whether `NEGATIVE` is included.
+- Organism-specific phenotype features would add `49` observed organism-phenotype pair columns in the current extract.
+- A full grouped organism × phenotype matrix would be up to `10 × 12 = 120` columns including `NEGATIVE`, or `9 × 12 = 108` excluding `NEGATIVE`.
+
+Observed organism-phenotype pair counts by group:
+
+- `Klebsiella pneumoniae`: `9` phenotype codes
+- `_Other bacteria`: `9` phenotype codes
+- `_Enterobacteria`: `9` phenotype codes
+- `Escherichia coli`: `8` phenotype codes
+- `Pseudomonas aeruginosa`: `8` phenotype codes
+- `Staphylococcus aureus`: `4` phenotype codes
+- `Enterococcus`: `1` phenotype code
+- `Streptococcus pneumoniae`: `1` phenotype code
+
+Questions for clinicians:
+
+- Is the current aggregate `bmr_etiologia = max(...)` sufficient, or should BMR be organism-specific?
+- Should resistance phenotype be kept as global multi-hot labels, organism-specific labels, or target-specific labels only?
+- Should `resultado_hemo_multilabel` be used for QA only, or should it remain available to downstream modelling?
