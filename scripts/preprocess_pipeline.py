@@ -1452,13 +1452,89 @@ def preprocess_tbl_colonizaciones_previas(
         table_name="tbl_colonizaciones_previas",
         input_df=source,
         output_df=source,
-        merge_keys=["person_id"],
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Template only: add organism mapping, patient-level binary pivot, grouped colonization features, and colonization burden here.")
-    log.warnings.append("Not implemented yet in this template.")
-    result = PreprocessResult(df=df, log=log)
+    merge_keys = ["person_id", "fecha_ingreso_urgencias"]
+
+    df["microorganism_colonizador_grupo"] = (
+        pd.to_numeric(df["microorganism_colonizador"], errors="coerce")
+        .astype("Int64")
+        .astype(str)
+        .replace("<NA>", "0")
+        .map(maps["organism_codes_map"])
+    )
+    unmapped_rows = int(df["microorganism_colonizador_grupo"].isna().sum())
+    log.validation_checks.append(f"unmapped_colonization_organism_rows:{unmapped_rows}")
+    if unmapped_rows:
+        log.warnings.append(
+            f"{unmapped_rows} colonization rows have microorganism_colonizador values that do not map to organism groups; these rows do not create organism binary columns."
+        )
+    add_change(
+        log,
+        "recoded_variables",
+        source="microorganism_colonizador",
+        target="microorganism_colonizador_grupo",
+        how="map colonizing microorganism SNOMED codes to grouped organism labels using organism_codes_map",
+    )
+
+    organisms = df["microorganism_colonizador_grupo"].dropna().unique().tolist()
+    pivot_source = df[merge_keys + ["microorganism_colonizador_grupo"]].copy()
+    pivot_source["dummy"] = 1
+    pivoted = (
+        pivot_source.pivot_table(
+            index=merge_keys,
+            columns="microorganism_colonizador_grupo",
+            values="dummy",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+
+    colonization_binary_columns: list[str] = []
+    for organism in organisms:
+        binary_column = f"colo_{feature_name(organism)}_binary"
+        pivoted[binary_column] = np.where(pivoted[organism] >= 1, 1, 0)
+        colonization_binary_columns.append(binary_column)
+        pivoted = pivoted.drop(columns=organism)
+
+    pivoted["colonizacion_total_grouped"] = (
+        pivoted[colonization_binary_columns].sum(axis=1).astype(int)
+        if colonization_binary_columns
+        else 0
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="microorganism_colonizador_grupo",
+        target=colonization_binary_columns,
+        how="pivot grouped colonizing organisms to binary columns per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=colonization_binary_columns,
+        target="colonizacion_total_grouped",
+        how="sum explicit colonization organism binary columns; moved from notebook post-merge synthetic features into table-local preprocessing",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=[
+            "fecha_colonizacion",
+            "microorganism_colonizador",
+            "bmr_colonizador",
+            "feno_resist_colo",
+        ],
+        target=colonization_binary_columns + ["colonizacion_total_grouped"],
+        how="replace raw colonization rows with grouped organism binary features; notebook did not preserve colonization BMR or phenotype detail",
+    )
+
+    log.output_rows = len(pivoted)
+    log.output_columns = pivoted.columns.tolist()
+    result = PreprocessResult(df=pivoted, log=log)
     attach_run_metadata(result.log, config)
-    return validate_result(result, required_columns=["person_id"])
+    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
 
 def preprocess_tbl_otros_cultivos_en_urgencias(
