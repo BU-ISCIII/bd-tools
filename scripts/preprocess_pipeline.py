@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import importlib.util
 import json
@@ -362,6 +363,29 @@ def drop_columns_with_log(
 
 def feature_name(value: Any) -> str:
     return str(value).strip().replace(" ", "_")
+
+
+def as_tuple(value: Any) -> tuple[Any, ...]:
+    if isinstance(value, tuple):
+        return value
+    if isinstance(value, list):
+        return tuple(value)
+    if pd.isna(value):
+        return tuple()
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("(") or stripped.startswith("["):
+            try:
+                parsed = ast.literal_eval(stripped)
+            except (SyntaxError, ValueError):
+                return (value,)
+            return as_tuple(parsed)
+        return (value,)
+    return (value,)
+
+
+def strip_resistance_prefix(value: str) -> str:
+    return value.split(" resistente a ")[-1]
 
 
 def clean_outliers_iqr(
@@ -979,6 +1003,24 @@ def preprocess_tbl_infecciones_previas(
         pivoted[f"infprev_{feature_name(organism)}_binary"] = np.where(pivoted[organism] >= 1, 1, 0)
         pivoted = pivoted.drop(columns=organism)
 
+    infection_broad_group_columns: list[str] = []
+    for broad_group in sorted(set(config["MICROORGANISM_BROAD_GROUP_MAP"].values())):
+        target_column = f"Inf_{feature_name(broad_group)}"
+        source_columns = [
+            f"infprev_{feature_name(organism)}_binary"
+            for organism, group in config["MICROORGANISM_BROAD_GROUP_MAP"].items()
+            if group == broad_group
+        ]
+        existing_source_columns = [
+            column for column in source_columns if column in pivoted.columns
+        ]
+        pivoted[target_column] = (
+            pivoted[existing_source_columns].fillna(0).sum(axis=1)
+            if existing_source_columns
+            else 0
+        )
+        infection_broad_group_columns.append(target_column)
+
     visits = df[["person_id", "fecha_ingreso_urgencias", "fecha_infeccion"]].copy()
     visits["fecha_infeccion"] = pd.to_datetime(visits["fecha_infeccion"], errors="coerce")
     visits["fecha_ingreso_urgencias"] = pd.to_datetime(visits["fecha_ingreso_urgencias"], errors="coerce")
@@ -996,6 +1038,13 @@ def preprocess_tbl_infecciones_previas(
         source="grupo_microorganismo",
         target=[col for col in result.columns if col.startswith("infprev_") and col.endswith("_binary")],
         how="pivot grouped organisms and binarize per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="infprev_*_binary",
+        target=infection_broad_group_columns,
+        how="sum previous-infection organism binaries into broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP",
     )
     add_change(
         log,
@@ -1568,6 +1617,23 @@ def preprocess_tbl_colonizaciones_previas(
         if colonization_binary_columns
         else 0
     )
+    colonization_broad_group_columns: list[str] = []
+    for broad_group in sorted(set(config["MICROORGANISM_BROAD_GROUP_MAP"].values())):
+        target_column = f"Colo_{feature_name(broad_group)}"
+        source_columns = [
+            f"colo_{feature_name(organism)}_binary"
+            for organism, group in config["MICROORGANISM_BROAD_GROUP_MAP"].items()
+            if group == broad_group
+        ]
+        existing_source_columns = [
+            column for column in source_columns if column in pivoted.columns
+        ]
+        pivoted[target_column] = (
+            pivoted[existing_source_columns].fillna(0).sum(axis=1)
+            if existing_source_columns
+            else 0
+        )
+        colonization_broad_group_columns.append(target_column)
     add_change(
         log,
         "created_variables",
@@ -1581,6 +1647,13 @@ def preprocess_tbl_colonizaciones_previas(
         source=colonization_binary_columns,
         target="colonizacion_total_grouped",
         how="sum explicit colonization organism binary columns; moved from notebook post-merge synthetic features into table-local preprocessing",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="colo_*_binary",
+        target=colonization_broad_group_columns,
+        how="sum colonization organism binaries into broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP",
     )
     add_change(
         log,
@@ -1900,8 +1973,99 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
             "if exactly one organism has count == 1 choose it; otherwise NEGATIVE"
         ),
     )
+
+    synthetic_feature_sources = {
+        "recurrencia_precoz": ["tiempo_ultima"],
+        "densidad_inf": ["num_inf_previas", "tiempo_ultima"],
+        "residencia_dialisis": ["paciente_residencia", "hemodialisis_permanente"],
+        "carga_dispositivos": [
+            "cateter_venoso",
+            "sonda_urinaria",
+            "sonda_nasogastrica",
+            "derivacion_ventriculoper",
+            "valvula_prot_cardiaca",
+            "portador_otros_disposit",
+        ],
+        "total_inmunoriesgo_cat": [
+            "inmunosupresion",
+            "sida",
+            "linfoma",
+            "leucemia",
+            "neoplasia",
+        ],
+    }
+    missing_synthetic_sources = sorted(
+        {
+            column
+            for columns in synthetic_feature_sources.values()
+            for column in columns
+            if column not in result.columns
+        }
+    )
+    if missing_synthetic_sources:
+        log.warnings.append(
+            "Synthetic feature source columns missing and treated as 0/NaN where needed: "
+            + ", ".join(missing_synthetic_sources)
+        )
+
+    tiempo_ultima = (
+        result["tiempo_ultima"]
+        if "tiempo_ultima" in result.columns
+        else pd.Series(np.nan, index=result.index)
+    )
+    num_inf_previas = (
+        result["num_inf_previas"]
+        if "num_inf_previas" in result.columns
+        else pd.Series(np.nan, index=result.index)
+    )
+    result["recurrencia_precoz"] = (tiempo_ultima < 30).astype(int)
+    result["densidad_inf"] = num_inf_previas / (tiempo_ultima + 1)
+    result["residencia_dialisis"] = (
+        result.get("paciente_residencia", pd.Series(0, index=result.index)).fillna(0).eq(1)
+        | result.get("hemodialisis_permanente", pd.Series(0, index=result.index)).fillna(0).eq(1)
+    ).astype(int)
+
+    device_columns = synthetic_feature_sources["carga_dispositivos"]
+    result["carga_dispositivos"] = pd.DataFrame(
+        {
+            column: result[column].fillna(0)
+            if column in result.columns
+            else pd.Series(0, index=result.index)
+            for column in device_columns
+        }
+    ).sum(axis=1)
+
+    immuno_columns = synthetic_feature_sources["total_inmunoriesgo_cat"]
+    result["total_inmunoriesgo_cat"] = (
+        pd.DataFrame(
+            {
+                column: result[column].fillna(0)
+                if column in result.columns
+                else pd.Series(0, index=result.index)
+                for column in immuno_columns
+            }
+        )
+        .gt(0)
+        .sum(axis=1)
+        .astype(int)
+    )
+    synthetic_targets = list(synthetic_feature_sources)
+    add_change(
+        log,
+        "created_variables",
+        source=sorted(
+            {
+                column
+                for columns in synthetic_feature_sources.values()
+                for column in columns
+            }
+        ),
+        target=synthetic_targets,
+        how="create synthetic features after table merge, because they combine patient, infection-history, and risk-factor columns",
+    )
+
     log.notes.append(
-        "Original hemo_* and otros_cult_* source columns are retained in the full dataset; "
+        "Original source columns not dropped in the log are retained in the full dataset; "
         "use the drop-columns file to remove them from filtered outputs if desired."
     )
     log.output_rows = len(result)
@@ -1926,7 +2090,122 @@ def build_targets(
         output_df=result,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Add final heads here: infected_yes_no, resultado_hemo_grouped, resistant_cefalosporina, df_resist, df_cefalosporinas, etc.")
+    result["resultado_hemo_grouped"] = (
+        result["resultado_hemo"]
+        .map(config["MICROORGANISM_BROAD_GROUP_MAP"])
+        .fillna(result["resultado_hemo"])
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="resultado_hemo",
+        target="resultado_hemo_grouped",
+        how="map selected organisms to broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP; unmapped labels keep their original value",
+    )
+
+    result["infected_yes_no"] = np.where(
+        result["resultado_hemo"] == "NEGATIVE",
+        "NEGATIVE",
+        "POSITIVE",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="resultado_hemo",
+        target="infected_yes_no",
+        how="POSITIVE if resultado_hemo is not NEGATIVE, else NEGATIVE",
+    )
+
+    antibiotic_name_family_map = {
+        drug_name: family
+        for _, family, drug_name in config["ANTIMICROBIAL_GROUPS"]
+        if drug_name is not None
+    }
+    phenotype_drug_family_map = {
+        spanish_name: antibiotic_name_family_map[english_name]
+        for spanish_name, english_name in config["FENOTYPE_DRUG_TRANSLATIONS"].items()
+        if english_name in antibiotic_name_family_map
+    }
+
+    def phenotype_code_to_name(code: Any) -> str | None:
+        if pd.isna(code):
+            return None
+        lookup_candidates: list[Any] = [code]
+        try:
+            lookup_candidates.append(float(code))
+        except (TypeError, ValueError):
+            pass
+        try:
+            lookup_candidates.append(int(float(code)))
+            lookup_candidates.append(str(int(float(code))))
+        except (TypeError, ValueError):
+            pass
+        lookup_candidates.append(str(code))
+        for candidate in lookup_candidates:
+            if candidate in maps["phenomap"]:
+                return str(maps["phenomap"][candidate])
+        return None
+
+    def phenotype_codes_to_families(value: Any) -> list[str]:
+        families: list[str] = []
+        for code in as_tuple(value):
+            phenotype_name = phenotype_code_to_name(code)
+            if phenotype_name is None:
+                continue
+            drug_name = strip_resistance_prefix(phenotype_name)
+            family = phenotype_drug_family_map.get(drug_name)
+            if family is not None:
+                families.append(family)
+        deduplicated = sorted(set(families))
+        return deduplicated if deduplicated else ["NEGATIVE"]
+
+    result["fenotipo_resistencia"] = result["fenotipo_resistencia"].apply(
+        phenotype_codes_to_families
+    )
+    add_change(
+        log,
+        "recoded_variables",
+        source="fenotipo_resistencia",
+        target="fenotipo_resistencia",
+        how="decode phenotype resistance codes to drug names, map drugs to antimicrobial families, deduplicate, and set NEGATIVE when no mapped phenotype remains",
+    )
+
+    result["resistente_cefalosporina"] = result["fenotipo_resistencia"].apply(
+        lambda labels: (
+            "RESIST_CEFALOSPORINAS_3a_4a"
+            if any("Cefalosporina" in label for label in labels)
+            else "NEGATIVE"
+        )
+    )
+    result["resistente_cefalosporina_multi"] = result["fenotipo_resistencia"].apply(
+        lambda labels: (
+            "RESIST_CEFALOSPORINAS_3a_4a"
+            if any("Cefalosporina" in label for label in labels)
+            else ("OTHER" if not all(label == "NEGATIVE" for label in labels) else "NEGATIVE")
+        )
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="fenotipo_resistencia",
+        target=["resistente_cefalosporina", "resistente_cefalosporina_multi"],
+        how=(
+            "derive cephalosporin resistance targets from mapped phenotype families: "
+            "binary target is resistant if any family contains 'Cefalosporina'; "
+            "multi target distinguishes cephalosporin resistance, other resistance, and NEGATIVE"
+        ),
+    )
+
+    result["sample_weight"] = 1
+    add_change(
+        log,
+        "created_variables",
+        source="row",
+        target="sample_weight",
+        how="set uniform sample weight to 1, matching final notebook output",
+    )
+    log.output_rows = len(result)
+    log.output_columns = result.columns.tolist()
     attach_run_metadata(log, config)
     return validate_result(
         PreprocessResult(df=result, log=log),

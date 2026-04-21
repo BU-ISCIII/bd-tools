@@ -61,6 +61,30 @@ MICROORGANISM_LABEL_MAP = {
     "EC": "Enterococcus",
 }
 
+MICROORGANISM_BROAD_GROUP_MAP = {
+    "Escherichia coli": "Bacilo gram-",
+    "Klebsiella pneumoniae": "Bacilo gram-",
+    "_Enterobacteria": "Bacilo gram-",
+    "Pseudomonas aeruginosa": "Bacilo gram-",
+    "Staphylococcus aureus": "Coco gram+",
+    "Streptococcus pneumoniae": "Coco gram+",
+}
+
+FENOTYPE_DRUG_TRANSLATIONS = {
+    "amoxicilina/clavulánico": "amoxicillin and beta-lactamase inhibitor",
+    "ciprofloxacino": "ciprofloxacin",
+    "ceftrixona o cefotaxima": "ceftriaxone",
+    "ceftazidima": "ceftazidime",
+    "piperacilina/tazobactam": "piperacillin and beta-lactamase inhibitor",
+    "cefepima": "cefepime",
+    "ampicilina o penicilina": "ampicillin",
+    "meticilina": "cloxacillin",
+    "meropenem": "meropenem",
+    "ceftazidima/avibactam": "ceftazidime and beta-lactamase inhibitor",
+    "ceftolozano/tazobactam": "ceftolozane and beta-lactamase inhibitor",
+    "vancomicina": "vancomycin",
+}
+
 HEMOCULTIVO_COINFECTION_RESOLUTION_GROUPS = {
     50: "Escherichia coli",
     419: "Staphylococcus aureus",
@@ -270,6 +294,8 @@ def as_dict() -> dict:
         "SIGNOS_QUARTILE_RECODE_COLUMNS": SIGNOS_QUARTILE_RECODE_COLUMNS,
         "FECHA_INFECCION_CORRECTIONS": FECHA_INFECCION_CORRECTIONS,
         "MICROORGANISM_LABEL_MAP": MICROORGANISM_LABEL_MAP,
+        "MICROORGANISM_BROAD_GROUP_MAP": MICROORGANISM_BROAD_GROUP_MAP,
+        "FENOTYPE_DRUG_TRANSLATIONS": FENOTYPE_DRUG_TRANSLATIONS,
         "HEMOCULTIVO_COINFECTION_RESOLUTION_GROUPS": HEMOCULTIVO_COINFECTION_RESOLUTION_GROUPS,
         "ANTIMICROBIAL_GROUPS": ANTIMICROBIAL_GROUPS,
     }
