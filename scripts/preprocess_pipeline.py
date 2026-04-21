@@ -199,13 +199,15 @@ def export_dataset_outputs(
     output_file_path: Path,
     *,
     drop_columns_path: Path,
-) -> None:
+) -> tuple[pd.DataFrame, list[str], Path]:
     df.to_csv(output_file_path, index=False)
     drop_columns = read_drop_columns(drop_columns_path, df.columns.tolist())
     filtered_output_path = output_file_path.with_name(
         f"{output_file_path.stem}_filtered.csv"
     )
-    df.drop(columns=drop_columns, errors="ignore").to_csv(filtered_output_path, index=False)
+    filtered_df = df.drop(columns=drop_columns, errors="ignore")
+    filtered_df.to_csv(filtered_output_path, index=False)
+    return filtered_df, drop_columns, filtered_output_path
 
 
 def load_config_module(config_file_path: Path) -> dict[str, Any]:
@@ -2282,6 +2284,46 @@ def build_run_log(
     return log
 
 
+def build_filtered_dataset_log(
+    *,
+    full_df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    dropped_columns: list[str],
+    output_file_path: Path,
+    filtered_output_path: Path,
+    drop_columns_path: Path,
+    config: dict[str, Any],
+) -> TableLog:
+    log = finalize_log(
+        table_name="filtered_dataset",
+        input_df=full_df,
+        output_df=filtered_df,
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
+    )
+    attach_run_metadata(log, config)
+    add_change(
+        log,
+        "dropped_variables",
+        source=dropped_columns,
+        target=filtered_df.columns.tolist(),
+        how=f"drop columns matching explicit names or glob patterns from {drop_columns_path}",
+    )
+    log.notes.extend(
+        [
+            f"full_output_path={output_file_path}",
+            f"filtered_output_path={filtered_output_path}",
+            f"drop_columns_path={drop_columns_path}",
+            f"input_columns={len(full_df.columns)}",
+            f"output_columns={len(filtered_df.columns)}",
+        ]
+    )
+    log.validation_checks.append(f"filtered_columns_dropped:{len(dropped_columns)}")
+    return validate_result(
+        PreprocessResult(df=filtered_df, log=log),
+        required_columns=["person_id", "fecha_ingreso_urgencias"],
+    ).log
+
+
 def run_pipeline(
     input_file_path: Path = DEFAULT_DB_PATH,
     output_file_path: Path = DEFAULT_OUTPUT_PATH,
@@ -2321,7 +2363,7 @@ def run_pipeline(
     logs.extend([result.log for result in results.values()])
     logs.extend([merged.log, cross_features.log, targets.log])
 
-    export_dataset_outputs(
+    filtered_df, dropped_columns, filtered_output_path = export_dataset_outputs(
         targets.df,
         output_file_path,
         drop_columns_path=drop_columns_path,
@@ -2329,6 +2371,16 @@ def run_pipeline(
     targets.log.notes.append(
         f"Full dataset keeps all columns. Filtered dataset uses drop-columns file: {drop_columns_path}"
     )
+    filtered_log = build_filtered_dataset_log(
+        full_df=targets.df,
+        filtered_df=filtered_df,
+        dropped_columns=dropped_columns,
+        output_file_path=output_file_path,
+        filtered_output_path=filtered_output_path,
+        drop_columns_path=drop_columns_path,
+        config=config,
+    )
+    logs.append(filtered_log)
     export_logs(
         logs,
         summary_output_path=output_file_path.with_name(
@@ -2340,7 +2392,7 @@ def run_pipeline(
     )
 
     return PipelineArtifacts(
-        tables={name: result.df for name, result in results.items()} | {"final": targets.df},
+        tables={name: result.df for name, result in results.items()} | {"final": targets.df, "filtered": filtered_df},
         maps=maps,
         logs=logs,
     )
