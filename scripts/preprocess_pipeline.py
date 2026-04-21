@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import importlib.util
 import json
 import sqlite3
@@ -562,6 +563,22 @@ def preprocess_tbl_comorbilidad(
 ) -> PreprocessResult:
     source = tables["tbl_comorbilidad"].copy()
     df = pd.get_dummies(source, columns=["tipo_cancer", "tipo_hepatopatia"])
+    cancer_dummy_columns = [
+        column for column in df.columns if column.startswith("tipo_cancer_")
+    ]
+    hepatopathy_dummy_columns = [
+        column for column in df.columns if column.startswith("tipo_hepatopatia_")
+    ]
+    df["canceres_si_no"] = (
+        df[cancer_dummy_columns].sum(axis=1).gt(0).astype(int)
+        if cancer_dummy_columns
+        else 0
+    )
+    df["hepatopatias_si_no"] = (
+        df[hepatopathy_dummy_columns].sum(axis=1).gt(0).astype(int)
+        if hepatopathy_dummy_columns
+        else 0
+    )
     log = finalize_log(
         table_name="tbl_comorbilidad",
         input_df=source,
@@ -575,6 +592,20 @@ def preprocess_tbl_comorbilidad(
         source=["tipo_cancer", "tipo_hepatopatia"],
         target=[col for col in df.columns if "cancer" in col or "hepatopatia" in col],
         how="one-hot encode categorical comorbidity variables",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=cancer_dummy_columns,
+        target="canceres_si_no",
+        how="collapsed cancer dummy columns to binary flag: 1 if any tipo_cancer_* column is positive, else 0",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=hepatopathy_dummy_columns,
+        target="hepatopatias_si_no",
+        how="collapsed hepatopathy dummy columns to binary flag: 1 if any tipo_hepatopatia_* column is positive, else 0",
     )
     add_change(
         log,
@@ -1791,7 +1822,90 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         output_df=result,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Reserve this step for features that truly depend on multiple already-preprocessed tables.")
+    organism_groups = sorted(
+        {
+            feature_name(label)
+            for label in config["MICROORGANISM_LABEL_MAP"].values()
+            if pd.notna(label)
+        }
+    )
+    organism_groups_with_negative = organism_groups + ["NEGATIVE"]
+    all_culture_columns: list[str] = []
+    missing_source_pairs: list[str] = []
+
+    for organism in organism_groups_with_negative:
+        hemo_column = f"hemo_{organism}_binary"
+        other_column = f"otros_cult_{organism}"
+        combined_column = f"all_cult_{organism}"
+        hemo_values = (
+            result[hemo_column].fillna(0)
+            if hemo_column in result.columns
+            else pd.Series(0, index=result.index)
+        )
+        other_values = (
+            result[other_column].fillna(0)
+            if other_column in result.columns
+            else pd.Series(0, index=result.index)
+        )
+        if hemo_column not in result.columns or other_column not in result.columns:
+            missing_source_pairs.append(f"{organism}:hemo={hemo_column in result.columns},otros={other_column in result.columns}")
+        result[combined_column] = hemo_values + other_values
+        all_culture_columns.append(combined_column)
+
+    non_negative_all_culture_columns = [
+        column for column in all_culture_columns if column != "all_cult_NEGATIVE"
+    ]
+    column_to_organism = {
+        f"all_cult_{feature_name(label)}": label
+        for label in set(config["MICROORGANISM_LABEL_MAP"].values())
+        if pd.notna(label)
+    }
+
+    def pick_dominant_urgent_culture(row: pd.Series) -> str:
+        if (row >= 2).any():
+            return column_to_organism[row.idxmax()]
+        if (row == 1).sum() == 1:
+            return column_to_organism[row[row == 1].index[0]]
+        return "NEGATIVE"
+
+    result["all_cult_org"] = result[non_negative_all_culture_columns].apply(
+        pick_dominant_urgent_culture,
+        axis=1,
+    )
+    log.validation_checks.append(
+        f"all_cult_org_non_negative_rows:{int(result['all_cult_org'].ne('NEGATIVE').sum())}"
+    )
+    if missing_source_pairs:
+        log.notes.append(
+            "Some culture source columns were absent and treated as 0: "
+            + "; ".join(missing_source_pairs)
+        )
+    add_change(
+        log,
+        "created_variables",
+        source=[
+            "hemo_*_binary",
+            "otros_cult_*",
+        ],
+        target=all_culture_columns,
+        how="sum hemoculture organism binaries and other-emergency-culture organism counts into combined urgent-culture count columns",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=non_negative_all_culture_columns,
+        target="all_cult_org",
+        how=(
+            "dominant urgent-culture organism: if any organism has combined count >= 2 choose the max; "
+            "if exactly one organism has count == 1 choose it; otherwise NEGATIVE"
+        ),
+    )
+    log.notes.append(
+        "Original hemo_* and otros_cult_* source columns are retained in the full dataset; "
+        "use the drop-columns file to remove them from filtered outputs if desired."
+    )
+    log.output_rows = len(result)
+    log.output_columns = result.columns.tolist()
     attach_run_metadata(log, config)
     return validate_result(
         PreprocessResult(df=result, log=log),
