@@ -461,6 +461,9 @@ def build_reference_maps(
         "symptom_map": symptom_map,
         "antibiotic_code_name_map": antibiotic_code_name_map,
         "antibiotic_name_family_map": antibiotic_name_family_map,
+        "hemoculture_coinfection_resolution_map": config[
+            "HEMOCULTIVO_COINFECTION_RESOLUTION_GROUPS"
+        ],
     }
 
 
@@ -1199,9 +1202,225 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Template only: add microorganism harmonization, co-infection resolution, pivoting, resultado_hemo, bmr_etiologia aggregation, and phenotype tuple cleanup.")
-    log.warnings.append("Not implemented yet in this template.")
-    result = PreprocessResult(df=df, log=log)
+    merge_keys = ["person_id", "fecha_ingreso_urgencias"]
+
+    microorganism_codes = (
+        pd.to_numeric(df["microorganismo"], errors="coerce")
+        .astype("Int64")
+        .astype(str)
+        .replace("<NA>", "0")
+    )
+    df["microorganismo"] = microorganism_codes.map(maps["organism_codes_map"]).fillna("NEGATIVE")
+    df["microorganismo_pre_correccion_clinica"] = df["microorganismo"]
+    add_change(
+        log,
+        "recoded_variables",
+        source="microorganismo",
+        target="microorganismo",
+        how="map hemoculture microorganism SNOMED codes to grouped organism labels; missing and unmapped codes become NEGATIVE",
+    )
+
+    conflicts = (
+        df.groupby(["person_id", "id_hemocultivo"], dropna=False)["bmr_etiologia"]
+        .nunique(dropna=True)
+        .reset_index(name="distinct_bmr_etiologia")
+        .query("distinct_bmr_etiologia > 1")
+    )
+    log.validation_checks.append(
+        f"hemoculture_bmr_conflict_groups:{len(conflicts)}"
+    )
+    if not conflicts.empty:
+        log.warnings.append(
+            f"{len(conflicts)} person_id/id_hemocultivo groups have conflicting bmr_etiologia values; aggregation uses max."
+    )
+
+    coinfection_map = maps["hemoculture_coinfection_resolution_map"]
+    pre_correction_grouped = (
+        df.groupby(merge_keys + ["microorganismo_pre_correccion_clinica"], as_index=False, dropna=False)
+        .agg(hemo_positivo_si_no=("hemo_positivo_si_no", "max"))
+    )
+    pre_correction_pivot = (
+        pre_correction_grouped.pivot_table(
+            index=merge_keys,
+            columns="microorganismo_pre_correccion_clinica",
+            values="hemo_positivo_si_no",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    pre_correction_organism_columns = [
+        column
+        for column in pre_correction_pivot.columns
+        if column not in merge_keys and column != "NEGATIVE"
+    ]
+
+    def build_multilabel_resultado_hemo(row: pd.Series) -> tuple[str, ...]:
+        organisms = [
+            column
+            for column in pre_correction_organism_columns
+            if row[column] >= 1
+        ]
+        return tuple(organisms) if organisms else ("NEGATIVE",)
+
+    pre_correction_pivot["resultado_hemo_multilabel"] = pre_correction_pivot.apply(
+        build_multilabel_resultado_hemo,
+        axis=1,
+    )
+    pre_correction_result = pre_correction_pivot[
+        merge_keys + ["resultado_hemo_multilabel"]
+    ]
+
+    override_mask = df["person_id"].isin(coinfection_map)
+    override_person_count = int(df.loc[override_mask, "person_id"].nunique())
+    override_row_count = int(override_mask.sum())
+    df.loc[override_mask, "microorganismo"] = df.loc[override_mask, "person_id"].map(
+        coinfection_map
+    )
+    log.validation_checks.append(
+        f"coinfection_override_persons:{override_person_count}"
+    )
+    log.validation_checks.append(
+        f"coinfection_override_rows:{override_row_count}"
+    )
+    log.notes.append(
+        f"Applied clinician-reviewed co-infection organism overrides to {override_row_count} rows from {override_person_count} patients."
+    )
+    add_change(
+        log,
+        "recoded_variables",
+        source="person_id",
+        target="microorganismo",
+        how="override grouped organism label with clinician-reviewed dominant organism map for known co-infection patients",
+    )
+
+    df["bmr_etiologia"] = df["bmr_etiologia"].fillna(0.0)
+
+    def phenotype_tuple(values: pd.Series) -> tuple[float, ...]:
+        return tuple(0.0 if pd.isna(value) else float(value) for value in values)
+
+    grouped = (
+        df.groupby(merge_keys + ["microorganismo"], as_index=False, dropna=False)
+        .agg(
+            id_hemocultivo=("id_hemocultivo", "first"),
+            fecha_hemocultivo=("fecha_hemocultivo", "first"),
+            hemo_positivo_si_no=("hemo_positivo_si_no", "max"),
+            bmr_etiologia=("bmr_etiologia", "max"),
+            fenotipo_resistencia=("fenotipo_resistencia", phenotype_tuple),
+        )
+    )
+    add_change(
+        log,
+        "transformed_variables",
+        source=[
+            "id_hemocultivo",
+            "fecha_hemocultivo",
+            "hemo_positivo_si_no",
+            "bmr_etiologia",
+            "fenotipo_resistencia",
+        ],
+        target=[
+            "hemo_positivo_si_no",
+            "bmr_etiologia",
+            "fenotipo_resistencia",
+        ],
+        how="deduplicate per patient/admission/organism; use max hemo_positivo_si_no and bmr_etiologia, collect resistance phenotype codes as tuples",
+    )
+
+    base = (
+        grouped.groupby(merge_keys, as_index=False, dropna=False)
+        .agg(
+            bmr_etiologia=("bmr_etiologia", "max"),
+            fenotipo_resistencia=(
+                "fenotipo_resistencia",
+                lambda tuples: tuple(value for phenotype in tuples for value in phenotype),
+            ),
+        )
+    )
+
+    organism_pivot = (
+        grouped.pivot_table(
+            index=merge_keys,
+            columns="microorganismo",
+            values="hemo_positivo_si_no",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    organism_columns = [
+        column
+        for column in organism_pivot.columns
+        if column not in merge_keys
+    ]
+    for column in organism_columns:
+        organism_pivot[column] = np.where(organism_pivot[column] >= 1, 1, 0)
+
+    result_df = base.merge(organism_pivot, on=merge_keys, how="left")
+    result_df = result_df.merge(pre_correction_result, on=merge_keys, how="left")
+
+    dominant_organism_columns = [
+        column for column in organism_columns if column != "NEGATIVE"
+    ]
+
+    def build_resultado_hemo(row: pd.Series) -> str:
+        organisms = [column for column in dominant_organism_columns if row[column] == 1]
+        return organisms[0] if organisms else "NEGATIVE"
+
+    result_df["resultado_hemo"] = result_df.apply(build_resultado_hemo, axis=1)
+    remaining_multiorganism_rows = int(
+        result_df[dominant_organism_columns].sum(axis=1).gt(1).sum()
+    ) if dominant_organism_columns else 0
+    log.validation_checks.append(
+        f"post_clinical_correction_multiorganism_rows:{remaining_multiorganism_rows}"
+    )
+    if remaining_multiorganism_rows > 0:
+        log.warnings.append(
+            f"{remaining_multiorganism_rows} rows still have multiple positive organisms after clinician correction; resultado_hemo uses the first organism column."
+        )
+    add_change(
+        log,
+        "created_variables",
+        source="microorganismo",
+        target=organism_columns,
+        how="pivot grouped hemoculture organisms to binary columns per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=dominant_organism_columns,
+        target="resultado_hemo",
+        how="scalar dominant organism after clinician co-infection correction; NEGATIVE if no positive non-NEGATIVE organism column exists",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="microorganismo_pre_correccion_clinica",
+        target="resultado_hemo_multilabel",
+        how="pre-clinician-correction tuple of all positive grouped organisms; NEGATIVE tuple if no positive organism exists",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=[
+            "id_hemocultivo",
+            "fecha_hemocultivo",
+            "hemo_positivo_si_no",
+            "microorganismo_pre_correccion_clinica",
+        ],
+        target=[
+            "bmr_etiologia",
+            "fenotipo_resistencia",
+            "*organism_binary_columns",
+            "resultado_hemo",
+            "resultado_hemo_multilabel",
+        ],
+        how="aggregate raw hemoculture rows into one patient/admission feature and target row",
+    )
+
+    log.output_rows = len(result_df)
+    log.output_columns = result_df.columns.tolist()
+    result = PreprocessResult(df=result_df, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
