@@ -936,7 +936,13 @@ def preprocess_tbl_sepsis(
         df[column] = extract_numeric(df[column])
 
     if "foco" in df.columns:
-        df["foco"] = pd.to_numeric(df["foco"], errors="coerce").map(maps["foco_map"])
+        df["foco"] = (
+            pd.to_numeric(df["foco"], errors="coerce")
+            .astype("Int64")
+            .astype(str)
+            .replace("<NA>", np.nan)
+            .map(maps["foco_map"])
+        )
         add_change(
             log,
             "recoded_variables",
