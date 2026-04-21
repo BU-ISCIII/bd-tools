@@ -36,6 +36,28 @@ Practical implication:
 - Keeping a variable as `NaN` in preprocessing does **not** automatically mean the row will be removed in downstream models.
 - It usually means the feature will be imputed later, unless the specific training script disables imputation or uses a stricter `dropna()` path.
 
+### Prior antibiotics (`tbl_tratamiento_antibiotico_previo`)
+
+- Rows with `dias_trat_antimicrobiano <= 0` or missing are currently interpreted as **no previous antibiotic exposure recorded for that row**.
+- The pipeline creates `antib_previo_si_no = 1` only when `dias_trat_antimicrobiano > 0`.
+- Rows with `antib_previo_si_no == 0` are then removed before building prior-antibiotic family features.
+
+Observed in the current test run:
+
+- `2739` rows were removed because `antib_previo_si_no == 0` (`dias_trat_antimicrobiano <= 0` or missing).
+
+Reason:
+
+- The original notebook applies the same effective filter:
+  `tbl_antib_prev = tbl_antib_prev[tbl_antib_prev["antib_previo_si_no"] == 1]`
+- This means only rows with a positive treatment duration contribute to `ultimo_antib`, `dias_ultimo_antib`, antibiotic-family binaries, and `antib_previo_total_veces`.
+
+Question for clinicians:
+
+- Does missing or zero `dias_trat_antimicrobiano` reliably mean no prior antibiotic exposure?
+- Or can it mean prior antibiotic exposure was present but duration was not recorded?
+- If duration is missing but `antimicrobiano_previo` or `fecha_administracion_antib` is present, should that row still contribute to prior-antibiotic features?
+
 ## Items To Confirm With Clinicians
 
 1. Missing `tbl_sintomas` row = unknown vs no symptoms.
