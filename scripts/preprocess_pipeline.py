@@ -1668,7 +1668,7 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         column for column in pivoted.columns if column not in merge_keys
     ]
     rename_columns = {
-        column: f"otros_cult_{feature_name(column)}"
+        column: f"otros_cult_{feature_name(column)}_count"
         for column in organism_columns
     }
     result_df = pivoted.rename(columns=rename_columns)
@@ -1835,8 +1835,8 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
 
     for organism in organism_groups_with_negative:
         hemo_column = f"hemo_{organism}_binary"
-        other_column = f"otros_cult_{organism}"
-        combined_column = f"all_cult_{organism}"
+        other_column = f"otros_cult_{organism}_count"
+        combined_column = f"all_cult_{organism}_count"
         hemo_values = (
             result[hemo_column].fillna(0)
             if hemo_column in result.columns
@@ -1853,10 +1853,10 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         all_culture_columns.append(combined_column)
 
     non_negative_all_culture_columns = [
-        column for column in all_culture_columns if column != "all_cult_NEGATIVE"
+        column for column in all_culture_columns if column != "all_cult_NEGATIVE_count"
     ]
     column_to_organism = {
-        f"all_cult_{feature_name(label)}": label
+        f"all_cult_{feature_name(label)}_count": label
         for label in set(config["MICROORGANISM_LABEL_MAP"].values())
         if pd.notna(label)
     }
@@ -1868,12 +1868,12 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
             return column_to_organism[row[row == 1].index[0]]
         return "NEGATIVE"
 
-    result["all_cult_org"] = result[non_negative_all_culture_columns].apply(
+    result["dominant_all_cult_org"] = result[non_negative_all_culture_columns].apply(
         pick_dominant_urgent_culture,
         axis=1,
     )
     log.validation_checks.append(
-        f"all_cult_org_non_negative_rows:{int(result['all_cult_org'].ne('NEGATIVE').sum())}"
+        f"dominant_all_cult_org_non_negative_rows:{int(result['dominant_all_cult_org'].ne('NEGATIVE').sum())}"
     )
     if missing_source_pairs:
         log.notes.append(
@@ -1894,7 +1894,7 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         log,
         "created_variables",
         source=non_negative_all_culture_columns,
-        target="all_cult_org",
+        target="dominant_all_cult_org",
         how=(
             "dominant urgent-culture organism: if any organism has combined count >= 2 choose the max; "
             "if exactly one organism has count == 1 choose it; otherwise NEGATIVE"

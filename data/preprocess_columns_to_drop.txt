@@ -6,6 +6,6 @@ tipo_cancer_*
 tipo_hepatopatia_*
 
 # Source culture indicators retained in the full dataset.
-# Filtered output keeps the combined all_cult_* columns and all_cult_org.
+# Filtered output keeps the combined all_cult_* columns and dominant_all_cult_org.
 hemo_*_binary
 otros_cult_*
