@@ -1550,9 +1550,90 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Template only: add microorganism mapping, column drops, pivoting, and helper output for combined urgent-culture dominance.")
-    log.warnings.append("Not implemented yet in this template.")
-    result = PreprocessResult(df=df, log=log)
+    merge_keys = ["person_id", "fecha_ingreso_urgencias"]
+
+    organism_codes = (
+        pd.to_numeric(df["microorganismo_otros_cult"], errors="coerce")
+        .astype("Int64")
+        .astype(str)
+        .replace("<NA>", "0")
+    )
+    df["otro_cult_microorganismo"] = (
+        organism_codes.map(maps["organism_codes_map"]).fillna("NEGATIVE")
+    )
+    add_change(
+        log,
+        "recoded_variables",
+        source="microorganismo_otros_cult",
+        target="otro_cult_microorganismo",
+        how="map other-emergency-culture microorganism SNOMED codes to grouped organism labels; missing and unmapped codes become NEGATIVE",
+    )
+
+    df["tipo_cultivo"] = df["tipo_cultivo"].fillna(0)
+    add_change(
+        log,
+        "transformed_variables",
+        source="tipo_cultivo",
+        target="tipo_cultivo",
+        how="fill missing culture type with 0 before duplicate removal, matching notebook behavior",
+    )
+
+    columns_before_dropna = len(df)
+    df = df.dropna(subset=merge_keys + ["otro_cult_microorganismo"]).drop_duplicates().copy()
+    rows_removed = columns_before_dropna - len(df)
+    log.validation_checks.append(f"rows_removed_missing_key_or_organism_after_mapping:{rows_removed}")
+    if rows_removed:
+        log.notes.append(
+            f"Removed {rows_removed} rows with missing merge keys or mapped other-culture organism after mapping."
+        )
+
+    pivot_source = df[merge_keys + ["otro_cult_microorganismo"]].copy()
+    pivot_source["dummy"] = 1
+    pivoted = (
+        pivot_source.pivot_table(
+            index=merge_keys,
+            columns="otro_cult_microorganismo",
+            values="dummy",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    organism_columns = [
+        column for column in pivoted.columns if column not in merge_keys
+    ]
+    rename_columns = {
+        column: f"otros_cult_{feature_name(column)}"
+        for column in organism_columns
+    }
+    result_df = pivoted.rename(columns=rename_columns)
+    other_culture_columns = list(rename_columns.values())
+
+    add_change(
+        log,
+        "created_variables",
+        source="otro_cult_microorganismo",
+        target=other_culture_columns,
+        how="pivot grouped other emergency culture organisms to count columns per patient/admission",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=[
+            "tipo_cultivo",
+            "id_otros_cultivos",
+            "fecha_otros_cultivos",
+            "microorganismo_otros_cult",
+            "bmr_etiologia_otros",
+            "fenotipo_resistencia_otros",
+        ],
+        target=other_culture_columns,
+        how="replace raw other-culture rows with grouped organism count columns; notebook did not preserve culture type, BMR, or phenotype detail",
+    )
+
+    log.output_rows = len(result_df)
+    log.output_columns = result_df.columns.tolist()
+    result = PreprocessResult(df=result_df, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
