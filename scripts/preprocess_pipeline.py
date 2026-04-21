@@ -344,6 +344,72 @@ def clean_outliers_iqr(
     return cleaned
 
 
+def clean_outliers_iqr_and_recode_quartiles(
+    df: pd.DataFrame,
+    variables: list[str],
+    *,
+    iqr_multiplier: float = 3.0,
+) -> tuple[pd.DataFrame, dict[str, dict[str, Any]]]:
+    cleaned = df.copy()
+    recode_info: dict[str, dict[str, Any]] = {}
+    for variable in variables:
+        if variable not in cleaned.columns:
+            continue
+
+        q1 = cleaned[variable].quantile(0.25)
+        q3 = cleaned[variable].quantile(0.75)
+        iqr = q3 - q1
+        lower = q1 - iqr_multiplier * iqr
+        upper = q3 + iqr_multiplier * iqr
+        outliers_mask = (cleaned[variable] < lower) | (cleaned[variable] > upper)
+        outliers_count = int(outliers_mask.sum())
+        cleaned.loc[outliers_mask, variable] = np.nan
+
+        new_column = f"{variable}_recoded"
+        if cleaned[variable].dropna().empty:
+            cleaned[new_column] = pd.Series(pd.NA, index=cleaned.index, dtype="Int64")
+            bins: list[float] = []
+        else:
+            recoded, bins_array = pd.qcut(
+                cleaned[variable],
+                q=4,
+                labels=False,
+                duplicates="drop",
+                retbins=True,
+            )
+            cleaned[new_column] = recoded.astype("Int64")
+            bins = [float(edge) for edge in bins_array]
+
+        recode_info[variable] = {
+            "new_column": new_column,
+            "q1": float(q1) if pd.notna(q1) else None,
+            "q3": float(q3) if pd.notna(q3) else None,
+            "iqr": float(iqr) if pd.notna(iqr) else None,
+            "lower_limit": float(lower) if pd.notna(lower) else None,
+            "upper_limit": float(upper) if pd.notna(upper) else None,
+            "outliers_replaced": outliers_count,
+            "quartile_bins": bins,
+        }
+    return cleaned, recode_info
+
+
+def format_quartile_recode_info(info: dict[str, Any]) -> str:
+    bins = info["quartile_bins"]
+    if len(bins) < 2:
+        categories = "no categories created because all values are missing after IQR cleaning"
+    else:
+        categories = "; ".join(
+            f"{index}: {bins[index]} to {bins[index + 1]}"
+            for index in range(len(bins) - 1)
+        )
+    return (
+        "create ordinal quartile category after IQR outlier removal; "
+        f"IQR limits lower={info['lower_limit']}, upper={info['upper_limit']}; "
+        f"outliers replaced={info['outliers_replaced']}; "
+        f"pd.qcut(q=4, labels 0-3, duplicates='drop'); categories: {categories}"
+    )
+
+
 def build_reference_maps(
     tables: dict[str, pd.DataFrame],
     config: dict[str, Any],
@@ -663,7 +729,23 @@ def preprocess_tbl_signos(
     )
 
     iqr_columns = [col for col in config["SIGNOS_OUTLIER_COLUMNS"] if col in df.columns]
-    df = clean_outliers_iqr(df, iqr_columns, iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"])
+    quartile_columns = [
+        col
+        for col in config.get("SIGNOS_QUARTILE_RECODE_COLUMNS", config["SIGNOS_OUTLIER_COLUMNS"])
+        if col in df.columns
+    ]
+    df, quartile_info = clean_outliers_iqr_and_recode_quartiles(
+        df,
+        quartile_columns,
+        iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
+    )
+    iqr_only_columns = [col for col in iqr_columns if col not in quartile_columns]
+    if iqr_only_columns:
+        df = clean_outliers_iqr(
+            df,
+            iqr_only_columns,
+            iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
+        )
     add_change(
         log,
         "transformed_variables",
@@ -671,6 +753,14 @@ def preprocess_tbl_signos(
         target=iqr_columns,
         how=f"replace IQR outliers with NaN using multiplier {config['IQR_DEFAULT_MULTIPLIER']}",
     )
+    for variable, info in quartile_info.items():
+        add_change(
+            log,
+            "created_variables",
+            source=variable,
+            target=info["new_column"],
+            how=format_quartile_recode_info(info),
+        )
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
@@ -715,18 +805,39 @@ def preprocess_tbl_sepsis(
             how="map foco codes to readable labels using foco_map",
         )
 
-    df = clean_outliers_iqr(
+    sepsis_outlier_columns = [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns]
+    sepsis_quartile_columns = [
+        col
+        for col in config.get("SEPSIS_QUARTILE_RECODE_COLUMNS", config["SEPSIS_OUTLIER_COLUMNS"])
+        if col in df.columns
+    ]
+    df, quartile_info = clean_outliers_iqr_and_recode_quartiles(
         df,
-        [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns],
+        sepsis_quartile_columns,
         iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
     )
+    iqr_only_columns = [col for col in sepsis_outlier_columns if col not in sepsis_quartile_columns]
+    if iqr_only_columns:
+        df = clean_outliers_iqr(
+            df,
+            iqr_only_columns,
+            iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
+        )
     add_change(
         log,
         "transformed_variables",
-        source="proteina_c_reactiva",
-        target="proteina_c_reactiva",
+        source=sepsis_outlier_columns,
+        target=sepsis_outlier_columns,
         how=f"replace IQR outliers with NaN using multiplier {config['IQR_DEFAULT_MULTIPLIER']}",
     )
+    for variable, info in quartile_info.items():
+        add_change(
+            log,
+            "created_variables",
+            source=variable,
+            target=info["new_column"],
+            how=format_quartile_recode_info(info),
+        )
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
