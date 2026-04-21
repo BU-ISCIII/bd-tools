@@ -13,9 +13,11 @@ import pandas as pd
 
 
 ROOT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = ROOT_DIR.parent
 DEFAULT_DB_PATH = ROOT_DIR / "database" / "db_mepram_sepsis.sqlite3"
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "outputs" / "preprocessed_output.csv"
 DEFAULT_CONFIG_PATH = ROOT_DIR / "preprocess_config.py"
+DEFAULT_DROP_COLUMNS_PATH = PROJECT_ROOT / "data" / "preprocess_columns_to_drop.txt"
 
 
 # Dataclasses define the structured objects passed through the pipeline.
@@ -170,6 +172,38 @@ def export_logs(
     with detailed_output_path.open("w", encoding="utf-8") as fh:
         json.dump(detailed_records, fh, indent=2, ensure_ascii=False)
     return df
+
+
+def read_drop_columns(drop_columns_path: Path, columns: list[str]) -> list[str]:
+    if not drop_columns_path.exists():
+        raise FileNotFoundError(f"Drop-columns file not found: {drop_columns_path}")
+
+    selected_columns: list[str] = []
+    for raw_line in drop_columns_path.read_text(encoding="utf-8").splitlines():
+        entry = raw_line.strip()
+        if not entry or entry.startswith("#"):
+            continue
+        matches = (
+            sorted(fnmatch.filter(columns, entry))
+            if any(char in entry for char in "*?[")
+            else [entry]
+        )
+        selected_columns.extend(column for column in matches if column in columns)
+    return list(dict.fromkeys(selected_columns))
+
+
+def export_dataset_outputs(
+    df: pd.DataFrame,
+    output_file_path: Path,
+    *,
+    drop_columns_path: Path,
+) -> None:
+    df.to_csv(output_file_path, index=False)
+    drop_columns = read_drop_columns(drop_columns_path, df.columns.tolist())
+    filtered_output_path = output_file_path.with_name(
+        f"{output_file_path.stem}_filtered.csv"
+    )
+    df.drop(columns=drop_columns, errors="ignore").to_csv(filtered_output_path, index=False)
 
 
 def load_config_module(config_file_path: Path) -> dict[str, Any]:
@@ -1790,6 +1824,7 @@ def build_run_log(
     *,
     input_file_path: Path,
     output_file_path: Path,
+    drop_columns_path: Path,
     config: dict[str, Any],
 ) -> TableLog:
     log = TableLog(
@@ -1805,6 +1840,7 @@ def build_run_log(
         [
             f"input_file_path={input_file_path}",
             f"output_file_path={output_file_path}",
+            f"drop_columns_path={drop_columns_path}",
             f"config_file_path={config['CONFIG_PATH']}",
         ]
     )
@@ -1816,6 +1852,7 @@ def run_pipeline(
     input_file_path: Path = DEFAULT_DB_PATH,
     output_file_path: Path = DEFAULT_OUTPUT_PATH,
     config_file_path: Path = DEFAULT_CONFIG_PATH,
+    drop_columns_path: Path = DEFAULT_DROP_COLUMNS_PATH,
 ) -> PipelineArtifacts:
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
     tables = load_tables(input_file_path)
@@ -1839,11 +1876,25 @@ def run_pipeline(
     cross_features = build_cross_table_features(merged.df, config)
     targets = build_targets(cross_features.df, maps, config)
 
-    logs = [build_run_log(input_file_path=input_file_path, output_file_path=output_file_path, config=config)]
+    logs = [
+        build_run_log(
+            input_file_path=input_file_path,
+            output_file_path=output_file_path,
+            drop_columns_path=drop_columns_path,
+            config=config,
+        )
+    ]
     logs.extend([result.log for result in results.values()])
     logs.extend([merged.log, cross_features.log, targets.log])
 
-    targets.df.to_csv(output_file_path, index=False)
+    export_dataset_outputs(
+        targets.df,
+        output_file_path,
+        drop_columns_path=drop_columns_path,
+    )
+    targets.log.notes.append(
+        f"Full dataset keeps all columns. Filtered dataset uses drop-columns file: {drop_columns_path}"
+    )
     export_logs(
         logs,
         summary_output_path=output_file_path.with_name(
@@ -1881,6 +1932,15 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_CONFIG_PATH,
         help=f"Full path to the preprocessing config file, including filename. Default: {DEFAULT_CONFIG_PATH}",
     )
+    parser.add_argument(
+        "--drop-columns-path",
+        type=Path,
+        default=DEFAULT_DROP_COLUMNS_PATH,
+        help=(
+            "Full path to a text file listing columns or glob patterns to drop "
+            f"from the filtered output CSV. Default: {DEFAULT_DROP_COLUMNS_PATH}"
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1890,6 +1950,7 @@ def main() -> None:
         input_file_path=args.input_path,
         output_file_path=args.output_path,
         config_file_path=args.config_path,
+        drop_columns_path=args.drop_columns_path,
     )
 
 

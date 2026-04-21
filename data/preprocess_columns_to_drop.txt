@@ -1,0 +1,11 @@
+# Columns or glob patterns to drop from the filtered preprocessing output.
+# The full output CSV keeps these columns.
+
+# Detailed comorbidity dummies collapsed into canceres_si_no and hepatopatias_si_no.
+tipo_cancer_*
+tipo_hepatopatia_*
+
+# Source culture indicators retained in the full dataset.
+# Filtered output keeps the combined all_cult_* columns and all_cult_org.
+hemo_*_binary
+otros_cult_*
