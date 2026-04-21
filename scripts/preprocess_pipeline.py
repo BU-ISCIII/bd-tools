@@ -438,12 +438,29 @@ def build_reference_maps(
         .assign(name=lambda df: df["name"].str.split(" | ").str[-1])
     )
     symptom_map = {str(float(row["value"])): row["name"] for _, row in symptom_map_df.iterrows()}
+    antibiotic_code_name_map = (
+        codes[codes["variable"] == "antimicrobiano_previo"][["value", "name"]]
+        .assign(
+            name=lambda df: (
+                df["name"].str.split(" | ", regex=False).str[-1].str.split("; ", regex=False).str[0]
+            )
+        )
+        .set_index("value")["name"]
+        .to_dict()
+    )
+    antibiotic_name_family_map = {
+        drug_name: family
+        for _, family, drug_name in config["ANTIMICROBIAL_GROUPS"]
+        if drug_name is not None
+    }
 
     return {
         "organism_codes_map": dict(zip(microorganisms["snomed_code"], microorganisms["label"])),
         "foco_map": foco_map,
         "phenomap": phenomap,
         "symptom_map": symptom_map,
+        "antibiotic_code_name_map": antibiotic_code_name_map,
+        "antibiotic_name_family_map": antibiotic_name_family_map,
     }
 
 
@@ -935,9 +952,236 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Template only: move 90-day filtering, drug standardization, ultimo_antib, dias_ultimo_antib, family binaries, and antib_previo_total_veces here.")
-    log.warnings.append("Not implemented yet in this template.")
-    result = PreprocessResult(df=df, log=log)
+    merge_keys = ["person_id", "fecha_ingreso_urgencias"]
+
+    df["antib_previo_si_no"] = np.where(df["dias_trat_antimicrobiano"] > 0, 1, 0)
+    rows_before_prior_filter = len(df)
+    df = df[df["antib_previo_si_no"] == 1].copy()
+    removed_without_prior_antibiotic = rows_before_prior_filter - len(df)
+    log.validation_checks.append(
+        f"rows_removed_without_prior_antibiotic:{removed_without_prior_antibiotic}"
+    )
+    log.notes.append(
+        f"Removed {removed_without_prior_antibiotic} rows because antib_previo_si_no == 0 "
+        "(dias_trat_antimicrobiano <= 0 or missing)."
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="dias_trat_antimicrobiano",
+        target="antib_previo_si_no",
+        how="1 if dias_trat_antimicrobiano > 0, then keep only rows with previous antibiotic exposure",
+    )
+
+    df["antimicrobiano_previo_nombre"] = df["antimicrobiano_previo"].map(
+        maps["antibiotic_code_name_map"]
+    )
+    add_change(
+        log,
+        "recoded_variables",
+        source="antimicrobiano_previo",
+        target="antimicrobiano_previo_nombre",
+        how="map prior antibiotic codes to decoded drug names using antibiotic_code_name_map",
+    )
+
+    df["prev_betalactamase_inhib"] = (
+        df["antimicrobiano_previo_nombre"]
+        .str.contains("beta-lactamase inhibitor", na=False)
+        .groupby([df[col] for col in merge_keys])
+        .transform("max")
+        .astype(int)
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="antimicrobiano_previo_nombre",
+        target="prev_betalactamase_inhib",
+        how="per patient/admission flag: 1 if any decoded previous antibiotic contains 'beta-lactamase inhibitor'",
+    )
+
+    df["fecha_ingreso_urgencias_dt"] = pd.to_datetime(
+        df["fecha_ingreso_urgencias"], errors="coerce"
+    )
+    df["fecha_administracion_antib_dt"] = pd.to_datetime(
+        df["fecha_administracion_antib"], errors="coerce"
+    )
+    add_change(
+        log,
+        "transformed_variables",
+        source=["fecha_ingreso_urgencias", "fecha_administracion_antib"],
+        target=["fecha_ingreso_urgencias_dt", "fecha_administracion_antib_dt"],
+        how="parse dates for pre-admission window filtering and days-since-last-antibiotic calculation",
+    )
+
+    days_since_administration = (
+        df["fecha_ingreso_urgencias_dt"] - df["fecha_administracion_antib_dt"]
+    ).dt.total_seconds() / 86400.0
+    window_days = config["PRIOR_ANTIBIOTIC_WINDOW_DAYS"]
+    within_window = days_since_administration < window_days
+    df["antimicrobiano_previo_90d_nombre"] = (
+        df["antimicrobiano_previo_nombre"].where(within_window).fillna("NEGATIVE")
+    )
+    df["antimicrobiano_previo_familia"] = df["antimicrobiano_previo_90d_nombre"].map(
+        maps["antibiotic_name_family_map"]
+    )
+    log.validation_checks.append(
+        f"rows_outside_{window_days}_day_antibiotic_window:{int((~within_window).sum())}"
+    )
+    add_change(
+        log,
+        "recoded_variables",
+        source="antimicrobiano_previo_nombre",
+        target=["antimicrobiano_previo_90d_nombre", "antimicrobiano_previo_familia"],
+        how=(
+            f"keep decoded drug names only when admission minus administration date is < {window_days} days; "
+            "set older or missing-window rows to NEGATIVE, then map drug names to configured antibiotic families"
+        ),
+    )
+
+    rows_before_future_filter = len(df)
+    valid_pre_admission_date = (
+        df["fecha_administracion_antib_dt"] <= df["fecha_ingreso_urgencias_dt"]
+    )
+    df = df[valid_pre_admission_date].copy()
+    removed_date_mismatch = rows_before_future_filter - len(df)
+    log.validation_checks.append(
+        f"rows_removed_with_antibiotic_date_after_admission:{removed_date_mismatch}"
+    )
+    log.notes.append(
+        f"Removed {removed_date_mismatch} rows because fecha_administracion_antib was after "
+        "fecha_ingreso_urgencias."
+    )
+    add_change(
+        log,
+        "transformed_variables",
+        source=["fecha_ingreso_urgencias_dt", "fecha_administracion_antib_dt"],
+        target="row_filter",
+        how="remove rows where fecha_administracion_antib is after fecha_ingreso_urgencias",
+    )
+
+    if df.empty:
+        result_df = pd.DataFrame(
+            columns=[
+                "person_id",
+                "fecha_ingreso_urgencias",
+                "antib_previo_si_no",
+                "ultimo_antib",
+                "dias_ultimo_antib",
+                "prev_betalactamase_inhib",
+                "antib_previo_total_veces",
+            ]
+        )
+    else:
+        base = (
+            df.groupby(merge_keys, dropna=False)
+            .agg(
+                antib_previo_si_no=("antib_previo_si_no", "max"),
+                prev_betalactamase_inhib=("prev_betalactamase_inhib", "max"),
+            )
+            .reset_index()
+        )
+
+        last_antibiotic = (
+            df.sort_values(merge_keys + ["fecha_administracion_antib_dt"])
+            .groupby(merge_keys, dropna=False)
+            .tail(1)[
+                merge_keys
+                + [
+                    "antimicrobiano_previo_familia",
+                    "fecha_ingreso_urgencias_dt",
+                    "fecha_administracion_antib_dt",
+                ]
+            ]
+            .copy()
+        )
+        last_antibiotic["dias_ultimo_antib"] = (
+            last_antibiotic["fecha_ingreso_urgencias_dt"]
+            - last_antibiotic["fecha_administracion_antib_dt"]
+        ).dt.total_seconds() / 86400.0
+        last_antibiotic = last_antibiotic.rename(
+            columns={"antimicrobiano_previo_familia": "ultimo_antib"}
+        )[merge_keys + ["ultimo_antib", "dias_ultimo_antib"]]
+
+        family_rows = df[df["antimicrobiano_previo_familia"].notna()].copy()
+        if family_rows.empty:
+            family_binary_columns: list[str] = []
+            family_pivot = base[merge_keys].copy()
+        else:
+            family_pivot = (
+                family_rows.assign(presence=1)
+                .pivot_table(
+                    index=merge_keys,
+                    columns="antimicrobiano_previo_familia",
+                    values="presence",
+                    aggfunc="sum",
+                    fill_value=0,
+                )
+                .reset_index()
+            )
+            family_columns = [
+                col for col in family_pivot.columns if col not in merge_keys
+            ]
+            family_binary_columns = []
+            for family in family_columns:
+                binary_column = f"{family}_binary"
+                family_pivot[binary_column] = np.where(family_pivot[family] >= 1, 1, 0)
+                family_binary_columns.append(binary_column)
+            family_pivot = family_pivot.drop(columns=family_columns)
+
+        result_df = base.merge(last_antibiotic, on=merge_keys, how="left")
+        result_df = result_df.merge(family_pivot, on=merge_keys, how="left")
+        for column in family_binary_columns:
+            result_df[column] = result_df[column].fillna(0).astype(int)
+        result_df["antib_previo_total_veces"] = (
+            result_df[family_binary_columns].sum(axis=1).astype(int)
+            if family_binary_columns
+            else 0
+        )
+
+        add_change(
+            log,
+            "created_variables",
+            source=["fecha_ingreso_urgencias", "fecha_administracion_antib", "antimicrobiano_previo_familia"],
+            target=["ultimo_antib", "dias_ultimo_antib"],
+            how="per patient/admission, keep the family of the latest previous antibiotic administration and compute days to admission",
+        )
+        add_change(
+            log,
+            "created_variables",
+            source="antimicrobiano_previo_familia",
+            target=family_binary_columns,
+            how="pivot configured antibiotic families to binary exposure flags per patient/admission",
+        )
+        add_change(
+            log,
+            "created_variables",
+            source=family_binary_columns,
+            target="antib_previo_total_veces",
+            how="sum explicit antibiotic-family binary columns; does not use positional column indexes",
+        )
+
+    add_change(
+        log,
+        "dropped_variables",
+        source=[
+            "fecha_administracion_antib",
+            "antimicrobiano_previo",
+            "via_administ_antib_prev",
+            "dias_trat_antimicrobiano",
+        ],
+        target=[
+            "antib_previo_si_no",
+            "prev_betalactamase_inhib",
+            "ultimo_antib",
+            "dias_ultimo_antib",
+            "*_binary",
+            "antib_previo_total_veces",
+        ],
+        how="aggregate raw previous-antibiotic treatment rows into one patient/admission feature row",
+    )
+    log.output_rows = len(result_df)
+    log.output_columns = result_df.columns.tolist()
+    result = PreprocessResult(df=result_df, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 
