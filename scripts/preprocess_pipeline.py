@@ -390,6 +390,31 @@ def strip_resistance_prefix(value: str) -> str:
     return value.split(" resistente a ")[-1]
 
 
+def phenotype_values_tuple(values: Iterable[Any]) -> tuple[Any, ...]:
+    normalized_values: list[Any] = []
+    for value in values:
+        for item in as_tuple(value):
+            if pd.isna(item):
+                continue
+            try:
+                numeric_value = float(item)
+            except (TypeError, ValueError):
+                if str(item) != "NEGATIVE":
+                    normalized_values.append(item)
+                continue
+            if numeric_value == 0:
+                continue
+            normalized_values.append(
+                int(numeric_value) if numeric_value.is_integer() else numeric_value
+            )
+    deduplicated = sorted(set(normalized_values), key=str)
+    return tuple(deduplicated) if deduplicated else ("NEGATIVE",)
+
+
+def combine_phenotype_tuple_columns(row: pd.Series, columns: list[str]) -> tuple[Any, ...]:
+    return phenotype_values_tuple(row[column] for column in columns if column in row.index)
+
+
 def clean_outliers_iqr(
     df: pd.DataFrame,
     variables: list[str],
@@ -1005,6 +1030,82 @@ def preprocess_tbl_infecciones_previas(
         pivoted[f"infprev_{feature_name(organism)}_binary"] = np.where(pivoted[organism] >= 1, 1, 0)
         pivoted = pivoted.drop(columns=organism)
 
+    detail_rows = df[df["grupo_microorganismo"].notna()].copy()
+    detail_rows["bmr_infec_previa_numeric"] = pd.to_numeric(
+        detail_rows["bmr_infec_previa"], errors="coerce"
+    ).fillna(0)
+    infprev_bmr_columns: list[str] = []
+    infprev_phenotype_columns: list[str] = []
+    if not detail_rows.empty:
+        bmr_pivot = (
+            detail_rows.pivot_table(
+                index=["person_id", "fecha_ingreso_urgencias"],
+                columns="grupo_microorganismo",
+                values="bmr_infec_previa_numeric",
+                aggfunc="max",
+                fill_value=0,
+            )
+            .reset_index()
+        )
+        bmr_organism_columns = [
+            column
+            for column in bmr_pivot.columns
+            if column not in ["person_id", "fecha_ingreso_urgencias"]
+        ]
+        for organism in bmr_organism_columns:
+            target_column = f"infprev_bmr_{feature_name(organism)}_binary"
+            bmr_pivot[target_column] = np.where(bmr_pivot[organism] > 0, 1, 0)
+            infprev_bmr_columns.append(target_column)
+            bmr_pivot = bmr_pivot.drop(columns=organism)
+        pivoted = pivoted.merge(
+            bmr_pivot,
+            on=["person_id", "fecha_ingreso_urgencias"],
+            how="left",
+        )
+
+        phenotype_by_organism = (
+            detail_rows.groupby(
+                ["person_id", "fecha_ingreso_urgencias", "grupo_microorganismo"],
+                dropna=False,
+            )["feno_resist_infec_prev"]
+            .apply(phenotype_values_tuple)
+            .reset_index(name="phenotype_tuple")
+        )
+        phenotype_pivot = (
+            phenotype_by_organism.pivot(
+                index=["person_id", "fecha_ingreso_urgencias"],
+                columns="grupo_microorganismo",
+                values="phenotype_tuple",
+            )
+            .reset_index()
+        )
+        phenotype_organism_columns = [
+            column
+            for column in phenotype_pivot.columns
+            if column not in ["person_id", "fecha_ingreso_urgencias"]
+        ]
+        phenotype_rename = {
+            organism: f"infprev_fenotipo_{feature_name(organism)}_tuple"
+            for organism in phenotype_organism_columns
+        }
+        phenotype_pivot = phenotype_pivot.rename(columns=phenotype_rename)
+        infprev_phenotype_columns = list(phenotype_rename.values())
+        for column in infprev_phenotype_columns:
+            phenotype_pivot[column] = phenotype_pivot[column].apply(
+                lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+            )
+        pivoted = pivoted.merge(
+            phenotype_pivot,
+            on=["person_id", "fecha_ingreso_urgencias"],
+            how="left",
+        )
+    for column in infprev_bmr_columns:
+        pivoted[column] = pivoted[column].fillna(0).astype(int)
+    for column in infprev_phenotype_columns:
+        pivoted[column] = pivoted[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+
     infection_broad_group_columns: list[str] = []
     for broad_group in sorted(set(config["MICROORGANISM_BROAD_GROUP_MAP"].values())):
         target_column = f"Inf_{feature_name(broad_group)}"
@@ -1040,6 +1141,20 @@ def preprocess_tbl_infecciones_previas(
         source="grupo_microorganismo",
         target=[col for col in result.columns if col.startswith("infprev_") and col.endswith("_binary")],
         how="pivot grouped organisms and binarize per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["grupo_microorganismo", "bmr_infec_previa"],
+        target=infprev_bmr_columns,
+        how="create organism-specific previous-infection BMR binary flags using max bmr_infec_previa per patient/admission/organism",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["grupo_microorganismo", "feno_resist_infec_prev"],
+        target=infprev_phenotype_columns,
+        how="create organism-specific previous-infection phenotype tuples using non-zero deduplicated feno_resist_infec_prev codes",
     )
     add_change(
         log,
@@ -1483,6 +1598,63 @@ def preprocess_tbl_hemocultivo_de_urgencias(
     hemo_organism_columns = list(organism_column_rename.values())
 
     result_df = base.merge(organism_pivot, on=merge_keys, how="left")
+
+    hemo_bmr_columns: list[str] = []
+    hemo_phenotype_columns: list[str] = []
+    bmr_pivot = (
+        grouped.pivot_table(
+            index=merge_keys,
+            columns="microorganismo",
+            values="bmr_etiologia",
+            aggfunc="max",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    bmr_organism_columns = [
+        column for column in bmr_pivot.columns if column not in merge_keys
+    ]
+    for organism in bmr_organism_columns:
+        target_column = f"hemo_bmr_{feature_name(organism)}_binary"
+        bmr_pivot[target_column] = np.where(bmr_pivot[organism] > 0, 1, 0)
+        hemo_bmr_columns.append(target_column)
+        bmr_pivot = bmr_pivot.drop(columns=organism)
+    result_df = result_df.merge(bmr_pivot, on=merge_keys, how="left")
+
+    phenotype_by_organism = (
+        grouped.groupby(merge_keys + ["microorganismo"], dropna=False)["fenotipo_resistencia"]
+        .apply(lambda values: phenotype_values_tuple(item for phenotype in values for item in phenotype))
+        .reset_index(name="phenotype_tuple")
+    )
+    phenotype_pivot = (
+        phenotype_by_organism.pivot(
+            index=merge_keys,
+            columns="microorganismo",
+            values="phenotype_tuple",
+        )
+        .reset_index()
+    )
+    phenotype_organism_columns = [
+        column for column in phenotype_pivot.columns if column not in merge_keys
+    ]
+    phenotype_rename = {
+        organism: f"hemo_fenotipo_{feature_name(organism)}_tuple"
+        for organism in phenotype_organism_columns
+    }
+    phenotype_pivot = phenotype_pivot.rename(columns=phenotype_rename)
+    hemo_phenotype_columns = list(phenotype_rename.values())
+    for column in hemo_phenotype_columns:
+        phenotype_pivot[column] = phenotype_pivot[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+    result_df = result_df.merge(phenotype_pivot, on=merge_keys, how="left")
+    for column in hemo_bmr_columns:
+        result_df[column] = result_df[column].fillna(0).astype(int)
+    for column in hemo_phenotype_columns:
+        result_df[column] = result_df[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+
     result_df = result_df.merge(pre_correction_result, on=merge_keys, how="left")
 
     dominant_organism_columns = {
@@ -1516,6 +1688,20 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source="microorganismo",
         target=hemo_organism_columns,
         how="pivot grouped hemoculture organisms to binary columns per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["microorganismo", "bmr_etiologia"],
+        target=hemo_bmr_columns,
+        how="create organism-specific hemoculture BMR binary flags using max bmr_etiologia per patient/admission/organism",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["microorganismo", "fenotipo_resistencia"],
+        target=hemo_phenotype_columns,
+        how="create organism-specific hemoculture phenotype tuples using non-zero deduplicated fenotipo_resistencia codes",
     )
     add_change(
         log,
@@ -1614,6 +1800,70 @@ def preprocess_tbl_colonizaciones_previas(
         colonization_binary_columns.append(binary_column)
         pivoted = pivoted.drop(columns=organism)
 
+    detail_rows = df[df["microorganism_colonizador_grupo"].notna()].copy()
+    detail_rows["bmr_colonizador_numeric"] = pd.to_numeric(
+        detail_rows["bmr_colonizador"], errors="coerce"
+    ).fillna(0)
+    colonization_bmr_columns: list[str] = []
+    colonization_phenotype_columns: list[str] = []
+    if not detail_rows.empty:
+        bmr_pivot = (
+            detail_rows.pivot_table(
+                index=merge_keys,
+                columns="microorganism_colonizador_grupo",
+                values="bmr_colonizador_numeric",
+                aggfunc="max",
+                fill_value=0,
+            )
+            .reset_index()
+        )
+        bmr_organism_columns = [
+            column for column in bmr_pivot.columns if column not in merge_keys
+        ]
+        for organism in bmr_organism_columns:
+            target_column = f"colo_bmr_{feature_name(organism)}_binary"
+            bmr_pivot[target_column] = np.where(bmr_pivot[organism] > 0, 1, 0)
+            colonization_bmr_columns.append(target_column)
+            bmr_pivot = bmr_pivot.drop(columns=organism)
+        pivoted = pivoted.merge(bmr_pivot, on=merge_keys, how="left")
+
+        phenotype_by_organism = (
+            detail_rows.groupby(
+                merge_keys + ["microorganism_colonizador_grupo"],
+                dropna=False,
+            )["feno_resist_colo"]
+            .apply(phenotype_values_tuple)
+            .reset_index(name="phenotype_tuple")
+        )
+        phenotype_pivot = (
+            phenotype_by_organism.pivot(
+                index=merge_keys,
+                columns="microorganism_colonizador_grupo",
+                values="phenotype_tuple",
+            )
+            .reset_index()
+        )
+        phenotype_organism_columns = [
+            column for column in phenotype_pivot.columns if column not in merge_keys
+        ]
+        phenotype_rename = {
+            organism: f"colo_fenotipo_{feature_name(organism)}_tuple"
+            for organism in phenotype_organism_columns
+        }
+        phenotype_pivot = phenotype_pivot.rename(columns=phenotype_rename)
+        colonization_phenotype_columns = list(phenotype_rename.values())
+        for column in colonization_phenotype_columns:
+            phenotype_pivot[column] = phenotype_pivot[column].apply(
+                lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+            )
+        pivoted = pivoted.merge(phenotype_pivot, on=merge_keys, how="left")
+    for column in colonization_bmr_columns:
+        pivoted[column] = pivoted[column].fillna(0).astype(int)
+    for column in colonization_phenotype_columns:
+        pivoted[column] = pivoted[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+
     pivoted["colonizacion_total_grouped"] = (
         pivoted[colonization_binary_columns].sum(axis=1).astype(int)
         if colonization_binary_columns
@@ -1642,6 +1892,20 @@ def preprocess_tbl_colonizaciones_previas(
         source="microorganism_colonizador_grupo",
         target=colonization_binary_columns,
         how="pivot grouped colonizing organisms to binary columns per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["microorganism_colonizador_grupo", "bmr_colonizador"],
+        target=colonization_bmr_columns,
+        how="create organism-specific colonization BMR binary flags using max bmr_colonizador per patient/admission/organism",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["microorganism_colonizador_grupo", "feno_resist_colo"],
+        target=colonization_phenotype_columns,
+        how="create organism-specific colonization phenotype tuples using non-zero deduplicated feno_resist_colo codes",
     )
     add_change(
         log,
@@ -1749,12 +2013,87 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
     result_df = pivoted.rename(columns=rename_columns)
     other_culture_columns = list(rename_columns.values())
 
+    df["bmr_etiologia_otros_numeric"] = pd.to_numeric(
+        df["bmr_etiologia_otros"], errors="coerce"
+    ).fillna(0)
+    other_culture_bmr_columns: list[str] = []
+    other_culture_phenotype_columns: list[str] = []
+    bmr_pivot = (
+        df.pivot_table(
+            index=merge_keys,
+            columns="otro_cult_microorganismo",
+            values="bmr_etiologia_otros_numeric",
+            aggfunc="max",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    bmr_organism_columns = [
+        column for column in bmr_pivot.columns if column not in merge_keys
+    ]
+    for organism in bmr_organism_columns:
+        target_column = f"otros_cult_bmr_{feature_name(organism)}_binary"
+        bmr_pivot[target_column] = np.where(bmr_pivot[organism] > 0, 1, 0)
+        other_culture_bmr_columns.append(target_column)
+        bmr_pivot = bmr_pivot.drop(columns=organism)
+    result_df = result_df.merge(bmr_pivot, on=merge_keys, how="left")
+
+    phenotype_by_organism = (
+        df.groupby(merge_keys + ["otro_cult_microorganismo"], dropna=False)[
+            "fenotipo_resistencia_otros"
+        ]
+        .apply(phenotype_values_tuple)
+        .reset_index(name="phenotype_tuple")
+    )
+    phenotype_pivot = (
+        phenotype_by_organism.pivot(
+            index=merge_keys,
+            columns="otro_cult_microorganismo",
+            values="phenotype_tuple",
+        )
+        .reset_index()
+    )
+    phenotype_organism_columns = [
+        column for column in phenotype_pivot.columns if column not in merge_keys
+    ]
+    phenotype_rename = {
+        organism: f"otros_cult_fenotipo_{feature_name(organism)}_tuple"
+        for organism in phenotype_organism_columns
+    }
+    phenotype_pivot = phenotype_pivot.rename(columns=phenotype_rename)
+    other_culture_phenotype_columns = list(phenotype_rename.values())
+    for column in other_culture_phenotype_columns:
+        phenotype_pivot[column] = phenotype_pivot[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+    result_df = result_df.merge(phenotype_pivot, on=merge_keys, how="left")
+    for column in other_culture_bmr_columns:
+        result_df[column] = result_df[column].fillna(0).astype(int)
+    for column in other_culture_phenotype_columns:
+        result_df[column] = result_df[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+
     add_change(
         log,
         "created_variables",
         source="otro_cult_microorganismo",
         target=other_culture_columns,
         how="pivot grouped other emergency culture organisms to count columns per patient/admission",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["otro_cult_microorganismo", "bmr_etiologia_otros"],
+        target=other_culture_bmr_columns,
+        how="create organism-specific other-culture BMR binary flags using max bmr_etiologia_otros per patient/admission/organism",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["otro_cult_microorganismo", "fenotipo_resistencia_otros"],
+        target=other_culture_phenotype_columns,
+        how="create organism-specific other-culture phenotype tuples using non-zero deduplicated fenotipo_resistencia_otros codes",
     )
     add_change(
         log,
@@ -1974,6 +2313,57 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
             "dominant urgent-culture organism: if any organism has combined count >= 2 choose the max; "
             "if exactly one organism has count == 1 choose it; otherwise NEGATIVE"
         ),
+    )
+
+    all_culture_bmr_columns: list[str] = []
+    all_culture_phenotype_columns: list[str] = []
+    for organism in organism_groups:
+        hemo_bmr_column = f"hemo_bmr_{organism}_binary"
+        other_bmr_column = f"otros_cult_bmr_{organism}_binary"
+        all_bmr_column = f"all_cult_bmr_{organism}_binary"
+        hemo_bmr_values = (
+            result[hemo_bmr_column].fillna(0)
+            if hemo_bmr_column in result.columns
+            else pd.Series(0, index=result.index)
+        )
+        other_bmr_values = (
+            result[other_bmr_column].fillna(0)
+            if other_bmr_column in result.columns
+            else pd.Series(0, index=result.index)
+        )
+        result[all_bmr_column] = np.where(
+            (hemo_bmr_values > 0) | (other_bmr_values > 0),
+            1,
+            0,
+        )
+        all_culture_bmr_columns.append(all_bmr_column)
+
+        hemo_phenotype_column = f"hemo_fenotipo_{organism}_tuple"
+        other_phenotype_column = f"otros_cult_fenotipo_{organism}_tuple"
+        all_phenotype_column = f"all_cult_fenotipo_{organism}_tuple"
+        phenotype_source_columns = [
+            column
+            for column in [hemo_phenotype_column, other_phenotype_column]
+            if column in result.columns
+        ]
+        result[all_phenotype_column] = result.apply(
+            lambda row: combine_phenotype_tuple_columns(row, phenotype_source_columns),
+            axis=1,
+        )
+        all_culture_phenotype_columns.append(all_phenotype_column)
+    add_change(
+        log,
+        "created_variables",
+        source=["hemo_bmr_*_binary", "otros_cult_bmr_*_binary"],
+        target=all_culture_bmr_columns,
+        how="combine hemoculture and other-culture organism-specific BMR flags into urgent-culture organism-specific BMR flags",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["hemo_fenotipo_*_tuple", "otros_cult_fenotipo_*_tuple"],
+        target=all_culture_phenotype_columns,
+        how="combine hemoculture and other-culture organism-specific phenotype tuples into urgent-culture organism-specific phenotype tuples",
     )
 
     synthetic_feature_sources = {

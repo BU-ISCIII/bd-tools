@@ -11,3 +11,15 @@ tipo_hepatopatia_*
 hemo_*_binary
 otros_cult_*
 all_cult_*_count
+
+# Experimental organism-specific BMR/phenotype detail retained only in the full output.
+infprev_bmr_*_binary
+infprev_fenotipo_*_tuple
+hemo_bmr_*_binary
+hemo_fenotipo_*_tuple
+colo_bmr_*_binary
+colo_fenotipo_*_tuple
+otros_cult_bmr_*_binary
+otros_cult_fenotipo_*_tuple
+all_cult_bmr_*_binary
+all_cult_fenotipo_*_tuple
