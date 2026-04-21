@@ -325,6 +325,10 @@ def drop_columns_with_log(
     return df.drop(columns=existing_columns)
 
 
+def feature_name(value: Any) -> str:
+    return str(value).strip().replace(" ", "_")
+
+
 def clean_outliers_iqr(
     df: pd.DataFrame,
     variables: list[str],
@@ -907,7 +911,7 @@ def preprocess_tbl_infecciones_previas(
         fill_value=0,
     ).reset_index()
     for organism in organisms:
-        pivoted[f"{organism}_binary"] = np.where(pivoted[organism] >= 1, 1, 0)
+        pivoted[f"infprev_{feature_name(organism)}_binary"] = np.where(pivoted[organism] >= 1, 1, 0)
         pivoted = pivoted.drop(columns=organism)
 
     visits = df[["person_id", "fecha_ingreso_urgencias", "fecha_infeccion"]].copy()
@@ -925,7 +929,7 @@ def preprocess_tbl_infecciones_previas(
         log,
         "created_variables",
         source="grupo_microorganismo",
-        target=[col for col in result.columns if col.endswith("_binary")],
+        target=[col for col in result.columns if col.startswith("infprev_") and col.endswith("_binary")],
         how="pivot grouped organisms and binarize per patient/admission",
     )
     add_change(
@@ -1126,7 +1130,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             ]
             family_binary_columns = []
             for family in family_columns:
-                binary_column = f"{family}_binary"
+                binary_column = f"{feature_name(family)}_binary"
                 family_pivot[binary_column] = np.where(family_pivot[family] >= 1, 1, 0)
                 family_binary_columns.append(binary_column)
             family_pivot = family_pivot.drop(columns=family_columns)
@@ -1353,23 +1357,35 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         for column in organism_pivot.columns
         if column not in merge_keys
     ]
+    organism_column_rename = {
+        column: f"hemo_{feature_name(column)}_binary"
+        for column in organism_columns
+    }
     for column in organism_columns:
         organism_pivot[column] = np.where(organism_pivot[column] >= 1, 1, 0)
+    organism_pivot = organism_pivot.rename(columns=organism_column_rename)
+    hemo_organism_columns = list(organism_column_rename.values())
 
     result_df = base.merge(organism_pivot, on=merge_keys, how="left")
     result_df = result_df.merge(pre_correction_result, on=merge_keys, how="left")
 
-    dominant_organism_columns = [
-        column for column in organism_columns if column != "NEGATIVE"
-    ]
+    dominant_organism_columns = {
+        organism_column_rename[column]: column
+        for column in organism_columns
+        if column != "NEGATIVE"
+    }
 
     def build_resultado_hemo(row: pd.Series) -> str:
-        organisms = [column for column in dominant_organism_columns if row[column] == 1]
+        organisms = [
+            organism
+            for column, organism in dominant_organism_columns.items()
+            if row[column] == 1
+        ]
         return organisms[0] if organisms else "NEGATIVE"
 
     result_df["resultado_hemo"] = result_df.apply(build_resultado_hemo, axis=1)
     remaining_multiorganism_rows = int(
-        result_df[dominant_organism_columns].sum(axis=1).gt(1).sum()
+        result_df[list(dominant_organism_columns)].sum(axis=1).gt(1).sum()
     ) if dominant_organism_columns else 0
     log.validation_checks.append(
         f"post_clinical_correction_multiorganism_rows:{remaining_multiorganism_rows}"
@@ -1382,13 +1398,13 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         log,
         "created_variables",
         source="microorganismo",
-        target=organism_columns,
+        target=hemo_organism_columns,
         how="pivot grouped hemoculture organisms to binary columns per patient/admission",
     )
     add_change(
         log,
         "created_variables",
-        source=dominant_organism_columns,
+        source=list(dominant_organism_columns),
         target="resultado_hemo",
         how="scalar dominant organism after clinician co-infection correction; NEGATIVE if no positive non-NEGATIVE organism column exists",
     )
