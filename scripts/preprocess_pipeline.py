@@ -104,17 +104,35 @@ def finalize_log(
     )
 
 
-def export_logs(logs: list[TableLog], output_path: Path) -> pd.DataFrame:
-    records: list[dict[str, Any]] = []
+def export_logs(
+    logs: list[TableLog],
+    *,
+    summary_output_path: Path,
+    detailed_output_path: Path,
+) -> pd.DataFrame:
+    summary_records: list[dict[str, Any]] = []
+    detailed_records: list[dict[str, Any]] = []
     for log in logs:
-        base = {
+        columns_lost = sorted(set(log.input_columns) - set(log.output_columns))
+        columns_dropped = [change.source for change in log.dropped_variables]
+        columns_dropped_count = sum(
+            len(source) if isinstance(source, list) else 1
+            for source in columns_dropped
+        )
+        columns_dropped_text = "; ".join(
+            ", ".join(source) if isinstance(source, list) else str(source)
+            for source in columns_dropped
+        )
+        summary = {
             "table_name": log.table_name,
             "input_rows": log.input_rows,
             "output_rows": log.output_rows,
             "input_column_count": len(log.input_columns),
             "output_column_count": len(log.output_columns),
-            "columns_dropped_count": log.columns_dropped_count,
-            "columns_lost": "; ".join(log.columns_lost) if log.columns_lost else "",
+            "columns_dropped_count": columns_dropped_count,
+            "columns_dropped": columns_dropped_text,
+            "columns_lost_count": len(columns_lost),
+            "columns_lost": "; ".join(columns_lost) if columns_lost else "",
             "merge_keys": ",".join(log.merge_keys),
             "warning_count": len(log.warnings),
             "note_count": len(log.notes),
@@ -122,9 +140,35 @@ def export_logs(logs: list[TableLog], output_path: Path) -> pd.DataFrame:
             "config_name": log.metadata.get("config_name", ""),
             "config_version": log.metadata.get("config_version", ""),
         }
-        records.append(base)
-    df = pd.DataFrame.from_records(records)
-    df.to_csv(output_path, index=False)
+        log_dict = asdict(log)
+        detail = {
+            "table_name": log_dict["table_name"],
+            "input_rows": log_dict["input_rows"],
+            "output_rows": log_dict["output_rows"],
+            "input_columns": log_dict["input_columns"],
+            "output_columns": log_dict["output_columns"],
+            "input_column_number": len(log.input_columns),
+            "output_column_number": len(log.output_columns),
+            "merge_keys": log_dict["merge_keys"],
+            "created_variables": log_dict["created_variables"],
+            "recoded_variables": log_dict["recoded_variables"],
+            "transformed_variables": log_dict["transformed_variables"],
+            "dropped_variables": log_dict["dropped_variables"],
+            "columns_dropped_count": columns_dropped_count,
+            "columns_dropped": columns_dropped,
+            "columns_lost_count": len(columns_lost),
+            "columns_lost": columns_lost,
+            "warnings": log_dict["warnings"],
+            "notes": log_dict["notes"],
+            "validation_checks": log_dict["validation_checks"],
+        }
+        summary_records.append(summary)
+        detailed_records.append(detail)
+
+    df = pd.DataFrame.from_records(summary_records)
+    df.to_csv(summary_output_path, index=False)
+    with detailed_output_path.open("w", encoding="utf-8") as fh:
+        json.dump(detailed_records, fh, indent=2, ensure_ascii=False)
     return df
 
 
@@ -995,85 +1039,12 @@ def build_targets(
     )
 
 
-def prepare_logs_for_json(logs: list[TableLog]) -> list[dict[str, Any]]:
-    """Prepare logs for JSON serialization with dropped and lost columns info."""
-    result = []
-    for log in logs:
-        # Recalculate columns_lost based on actual input/output columns
-        input_cols = set(log.input_columns)
-        output_cols = set(log.output_columns)
-        columns_lost = sorted(input_cols - output_cols)
-        
-        # Extract dropped columns from dropped_variables and count actual columns
-        dropped_sources = []
-        dropped_count = 0
-        for drop in log.dropped_variables:
-            source_key = drop.source if isinstance(drop.source, str) else "; ".join(drop.source)
-            dropped_sources.append(source_key)
-            # Count individual columns (if source is a list, count its elements; if string, count as 1)
-            if isinstance(drop.source, list):
-                dropped_count += len(drop.source)
-            else:
-                dropped_count += 1
-        
-        log_dict = asdict(log)
-        # Override columns_lost with recalculated value
-        log_dict["columns_lost"] = columns_lost
-        # Remove columns_dropped_count from log_dict so it doesn't overwrite our calculated value
-        log_dict.pop("columns_dropped_count", None)
-        
-        # Reconstruct dict in desired order with counts after column lists
-        ordered_dict = {}
-        for key in log_dict:
-            if key == "input_columns":
-                ordered_dict[key] = log_dict[key]
-                ordered_dict["input_columns_count"] = len(log_dict[key])
-            elif key == "output_columns":
-                ordered_dict[key] = log_dict[key]
-                ordered_dict["output_columns_count"] = len(log_dict[key])
-            elif key == "columns_lost":
-                # Insert dropped info before columns_lost
-                ordered_dict["columns_dropped"] = dropped_sources
-                # Use calculated dropped_count from dropped_variables
-                ordered_dict["columns_dropped_count"] = dropped_count
-                # columns_lost_count is the length of recalculated columns_lost
-                ordered_dict["columns_lost_count"] = len(columns_lost)
-                ordered_dict[key] = log_dict[key]
-            else:
-                ordered_dict[key] = log_dict[key]
-        result.append(ordered_dict)
-    return result
-
-
-
 def build_run_log(
     *,
     input_file_path: Path,
     output_file_path: Path,
     config: dict[str, Any],
 ) -> TableLog:
-    log = TableLog(
-        table_name="_pipeline_run",
-        input_rows=0,
-        output_rows=0,
-        input_columns=[],
-        output_columns=[],
-        merge_keys=[],
-    )
-    attach_run_metadata(log, config)
-    log.notes.extend(
-        [
-            f"input_file_path={input_file_path}",
-            f"output_file_path={output_file_path}",
-            f"config_file_path={config['CONFIG_PATH']}",
-        ]
-    )
-    log.metadata["config_values"] = config
-    return log
-
-
-
-
     log = TableLog(
         table_name="_pipeline_run",
         input_rows=0,
@@ -1126,10 +1097,15 @@ def run_pipeline(
     logs.extend([merged.log, cross_features.log, targets.log])
 
     targets.df.to_csv(output_file_path, index=False)
-    export_logs(logs, output_file_path.with_name(f"{output_file_path.stem}_log_summary.csv"))
-
-    with output_file_path.with_name(f"{output_file_path.stem}_log_detailed.json").open("w", encoding="utf-8") as fh:
-        json.dump(prepare_logs_for_json(logs), fh, indent=2, ensure_ascii=False)
+    export_logs(
+        logs,
+        summary_output_path=output_file_path.with_name(
+            f"{output_file_path.stem}_log_summary.csv"
+        ),
+        detailed_output_path=output_file_path.with_name(
+            f"{output_file_path.stem}_log_detailed.json"
+        ),
+    )
 
     return PipelineArtifacts(
         tables={name: result.df for name, result in results.items()} | {"final": targets.df},

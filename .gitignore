@@ -61,6 +61,12 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Local preprocessing data and generated outputs
+db_mepram_sepsis_vf.sqlite3
+preprocess_test.csv
+preprocess_test_log_detailed.json
+preprocess_test_log_summary.csv
+
 # Flask stuff:
 instance/
 .webassets-cache
