@@ -58,13 +58,7 @@ Question for clinicians:
 - Or can it mean prior antibiotic exposure was present but duration was not recorded?
 - If duration is missing but `antimicrobiano_previo` or `fecha_administracion_antib` is present, should that row still contribute to prior-antibiotic features?
 
-## Items To Confirm With Clinicians
-
-1. Missing `tbl_sintomas` row = unknown vs no symptoms.
-2. Missing rows in other history tables (`tbl_colonizaciones_previas`, `tbl_infecciones_previas`, prior antibiotics) = unknown vs absence.
-3. Whether any variables should be explicitly recoded to `0` at preprocessing time instead of leaving them missing.
-
-## Open Question: Previous Infection Detail (`tbl_infecciones_previas`)
+### Previous Infection Detail (`tbl_infecciones_previas`)
 
 The current rewrite preserves previous infection history mainly as:
 
@@ -80,7 +74,7 @@ But the original raw table also contains:
 
 These are currently not preserved in the aggregated output.
 
-### Clinical concern
+#### Clinical concern
 
 If we aggregate previous infections only at the patient/admission level, we can lose the association between:
 
@@ -95,7 +89,7 @@ Example:
 
 If we keep only a global flag such as `bmr_infec_previa_any = 1`, then we lose which microorganism was actually associated with the resistant infection.
 
-### Question for clinicians
+#### Question for clinicians
 
 Should previous infection detail be kept as:
 
@@ -110,7 +104,7 @@ Possible microorganism-specific representations:
 
 This would preserve the link between microorganism and BMR / phenotype / syndrome, at the cost of more columns and more sparsity.
 
-### Current grouped-microorganism counts in `tbl_infecciones_previas`
+#### Current grouped-microorganism counts in `tbl_infecciones_previas`
 
 Using the current grouped microorganism mapping in the preprocessing pipeline, the previous-infections table contains the following grouped counts:
 
@@ -128,7 +122,7 @@ Using the current grouped microorganism mapping in the preprocessing pipeline, t
 
 So the current grouped microorganism space is effectively around `10` categories, not the full raw microorganism code space.
 
-### Current grouped-microorganism × BMR counts
+#### Current grouped-microorganism × BMR counts
 
 - `Escherichia coli`: total `1000`, `bmr_1=739`, `bmr_0=261`
 - `Klebsiella pneumoniae`: total `680`, `bmr_1=550`, `bmr_0=130`
@@ -151,3 +145,111 @@ Question to review:
 
 - should these `58` rows be investigated and reassigned to one of the grouped categories?
 - or should they be kept explicitly as an `unknown / unmapped microorganism history` category?
+
+### Previous Colonisation Detail (`tbl_colonizaciones_previas`)
+
+The current rewrite preserves previous colonisation history mainly as:
+
+- grouped colonising microorganism binary columns prefixed with `colo_`
+- `colonizacion_total_grouped`
+
+But the original raw table also contains:
+
+- `bmr_colonizador`
+- `feno_resist_colo`
+- `fecha_colonizacion`
+
+These are currently not preserved in the aggregated output, matching the original notebook.
+
+#### Clinical concern
+
+As with previous infections, aggregating colonisations only as grouped organism binaries can lose the association between:
+
+- the colonising microorganism
+- whether that colonisation was BMR
+- which resistance phenotype was observed
+- when the colonisation occurred
+
+Example:
+
+- previous *Escherichia coli* colonisation had a resistance phenotype
+- previous *Klebsiella pneumoniae* colonisation had a different resistance phenotype
+
+If we only keep `colo_Escherichia_coli_binary = 1` and `colo_Klebsiella_pneumoniae_binary = 1`, then the organism-phenotype link is lost.
+
+#### Current grouped-microorganism counts in `tbl_colonizaciones_previas`
+
+Using the current grouped microorganism mapping in the preprocessing pipeline, the colonisation table contains:
+
+- `Escherichia coli`: `251`
+- `Klebsiella pneumoniae`: `188`
+- `_Enterobacteria`: `116`
+- `_Other bacteria`: `102`
+- `Pseudomonas aeruginosa`: `81`
+- `Staphylococcus aureus`: `41`
+- `_Fungi`: `37`
+- `Enterococcus`: `15`
+- `_Virus`: `5`
+- `Streptococcus pneumoniae`: `1`
+
+So the current grouped microorganism space is `10` categories.
+
+#### Current grouped-microorganism × BMR counts
+
+In this table, `bmr_colonizador` is only populated as `1` or missing; there are no explicit `0` values in the current data extract.
+
+- `Escherichia coli`: total `251`, `bmr_1=232`, `bmr_missing=19`
+- `Klebsiella pneumoniae`: total `188`, `bmr_1=186`, `bmr_missing=2`
+- `_Enterobacteria`: total `116`, `bmr_1=104`, `bmr_missing=12`
+- `_Other bacteria`: total `102`, `bmr_1=76`, `bmr_missing=26`
+- `Pseudomonas aeruginosa`: total `81`, `bmr_1=66`, `bmr_missing=15`
+- `Staphylococcus aureus`: total `41`, `bmr_1=34`, `bmr_missing=7`
+- `_Fungi`: total `37`, `bmr_1=0`, `bmr_missing=37`
+- `Enterococcus`: total `15`, `bmr_1=5`, `bmr_missing=10`
+- `_Virus`: total `5`, `bmr_1=0`, `bmr_missing=5`
+- `Streptococcus pneumoniae`: total `1`, `bmr_1=0`, `bmr_missing=1`
+
+Practical implication:
+
+- Adding one BMR feature per grouped organism would add around `10` columns.
+- However, clinicians should confirm whether missing `bmr_colonizador` means non-BMR or unknown.
+
+#### Current resistance phenotype counts
+
+`feno_resist_colo` has `11` non-null phenotype codes and `138` missing rows.
+
+- code `6`: `123` rows, `Bacilo Gram negativo resistente a ceftrixona o cefotaxima`
+- code `4`: `120` rows, `Bacilo Gram negativo resistente a amoxicilina/clavulánico`
+- code `8`: `108` rows, `Bacilo Gram negativo resistente a ceftazidima`
+- code `9`: `88` rows, `Bacilo Gram negativo resistente a ciprofloxacino`
+- code `5`: `75` rows, `Bacilo Gram negativo resistente a piperacilina/tazobactam`
+- code `7`: `74` rows, `Bacilo Gram negativo resistente a cefepima`
+- code `10`: `36` rows, `Bacilo Gram negativo resistente a meropenem`
+- code `1`: `32` rows, `Coco Gram positivo resistente a ampicilina o penicilina`
+- code `2`: `22` rows, `Coco Gram positivo resistente a meticilina`
+- code `11`: `12` rows, `Bacilo Gram negativo resistente a ceftolozano/tazobactam`
+- code `12`: `9` rows, `Bacilo Gram negativo resistente a ceftazidima/avibactam`
+
+#### Potential column increase if phenotype detail is preserved
+
+- Global phenotype binaries would add up to `11` columns.
+- Organism-specific BMR features would add up to `10` columns.
+- Organism-specific phenotype features would add `49` observed organism-phenotype pair columns in the current extract.
+- A full grouped organism × phenotype matrix would be up to `10 × 11 = 110` columns, but many combinations are not observed.
+
+Observed organism-phenotype pair counts by group:
+
+- `Enterococcus`: `1` phenotype code
+- `Escherichia coli`: `10` phenotype codes
+- `Klebsiella pneumoniae`: `8` phenotype codes
+- `Pseudomonas aeruginosa`: `7` phenotype codes
+- `Staphylococcus aureus`: `2` phenotype codes
+- `_Enterobacteria`: `10` phenotype codes
+- `_Other bacteria`: `11` phenotype codes
+
+Questions for clinicians:
+
+- Should `bmr_colonizador` be preserved as global summary features or organism-specific features?
+- Does missing `bmr_colonizador` mean non-BMR or unknown?
+- Should `feno_resist_colo` be preserved globally, organism-specifically, or not used?
+- Is `fecha_colonizacion` clinically useful for a “time since last colonisation” feature?
