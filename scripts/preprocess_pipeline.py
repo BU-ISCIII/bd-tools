@@ -2064,6 +2064,47 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         how="create synthetic features after table merge, because they combine patient, infection-history, and risk-factor columns",
     )
 
+    organism_total_columns: list[str] = []
+    for organism_label in sorted(
+        {
+            label
+            for label in config["MICROORGANISM_LABEL_MAP"].values()
+            if pd.notna(label)
+        }
+    ):
+        organism_feature = feature_name(organism_label)
+        target_column = f"{organism_feature}_total"
+        source_columns = [
+            f"infprev_{organism_feature}_binary",
+            f"colo_{organism_feature}_binary",
+            f"hemo_{organism_feature}_binary",
+            f"otros_cult_{organism_feature}_count",
+        ]
+        existing_source_columns = [
+            column for column in source_columns if column in result.columns
+        ]
+        result[target_column] = (
+            result[existing_source_columns].fillna(0).sum(axis=1)
+            if existing_source_columns
+            else 0
+        )
+        organism_total_columns.append(target_column)
+    add_change(
+        log,
+        "created_variables",
+        source=[
+            "infprev_*_binary",
+            "colo_*_binary",
+            "hemo_*_binary",
+            "otros_cult_*_count",
+        ],
+        target=organism_total_columns,
+        how=(
+            "create per-organism total columns using explicit source-specific organism features; "
+            "does not include all_cult_*_count to avoid double-counting hemoculture and other-culture evidence"
+        ),
+    )
+
     log.notes.append(
         "Original source columns not dropped in the log are retained in the full dataset; "
         "use the drop-columns file to remove them from filtered outputs if desired."
