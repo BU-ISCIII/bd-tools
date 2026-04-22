@@ -90,6 +90,7 @@ TARGET_REMOVE = [
     "sepsis",
     "resultado_hemo",
     "resultado_hemo_grouped",
+    "resultado_hemo_multilabel",
     "all_cult_org",
     "infected_yes_no",
     "bmr_etiologia",
