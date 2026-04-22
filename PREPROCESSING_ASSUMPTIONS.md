@@ -450,4 +450,4 @@ Questions for clinicians:
 
 
 
-Infección previa en redcap tiene cultivo si/no e infección completa/incompleta/nosesabe
+- Infección previa en redcap tiene cultivo si/no e infección completa/incompleta/nosesabe
