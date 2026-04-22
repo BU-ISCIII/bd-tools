@@ -447,3 +447,7 @@ Questions for clinicians:
 - Is the current aggregate `bmr_etiologia = max(...)` sufficient, or should BMR be organism-specific?
 - Should resistance phenotype be kept as global multi-hot labels, organism-specific labels, or target-specific labels only?
 - Should `resultado_hemo_multilabel` be used for QA only, or should it remain available to downstream modelling?
+
+
+
+Infección previa en redcap tiene cultivo si/no e infección completa/incompleta/nosesabe
