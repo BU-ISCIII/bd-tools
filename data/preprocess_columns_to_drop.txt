@@ -23,3 +23,9 @@ otros_cult_bmr_*_binary
 otros_cult_fenotipo_*_tuple
 all_cult_bmr_*_binary
 all_cult_fenotipo_*_tuple
+
+## foco_ dummy variables that are generated in model.
+foco_*_binary
+
+## Remove not needed hepatopatia variable
+hepatopatia
