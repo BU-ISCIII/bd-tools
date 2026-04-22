@@ -950,6 +950,18 @@ def preprocess_tbl_sepsis(
             target="foco",
             how="map foco codes to readable labels using foco_map",
         )
+        foco_dummy_columns = []
+        for foco_label in sorted(df["foco"].dropna().unique()):
+            dummy_column = f"foco_{feature_name(foco_label)}_binary"
+            df[dummy_column] = np.where(df["foco"] == foco_label, 1, 0)
+            foco_dummy_columns.append(dummy_column)
+        add_change(
+            log,
+            "created_variables",
+            source="foco",
+            target=foco_dummy_columns,
+            how="create one binary dummy column per mapped foco category while keeping the original categorical foco column",
+        )
 
     sepsis_outlier_columns = [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns]
     sepsis_quartile_columns = [
@@ -1141,6 +1153,27 @@ def preprocess_tbl_infecciones_previas(
 
     result = pivoted.merge(num_visitas, on="person_id", how="left")
     result = result.merge(ultima[["person_id", "tiempo_ultima"]], on="person_id", how="left")
+    master_admissions = tables["tbl_paciente"][["person_id", "fecha_ingreso_urgencias"]].drop_duplicates()
+    result = master_admissions.merge(
+        result,
+        on=["person_id", "fecha_ingreso_urgencias"],
+        how="left",
+    )
+    infprev_zero_columns = [
+        column
+        for column in result.columns
+        if column not in ["person_id", "fecha_ingreso_urgencias"]
+        and not column.endswith("_tuple")
+    ]
+    infprev_tuple_columns = [
+        column for column in result.columns if column.endswith("_tuple")
+    ]
+    for column in infprev_zero_columns:
+        result[column] = result[column].fillna(0)
+    for column in infprev_tuple_columns:
+        result[column] = result[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
     add_change(
         log,
         "created_variables",
@@ -1175,6 +1208,13 @@ def preprocess_tbl_infecciones_previas(
         source="fecha_infeccion",
         target=["num_inf_previas", "tiempo_ultima"],
         how="derive previous infection count and days since last infection",
+    )
+    add_change(
+        log,
+        "transformed_variables",
+        source="missing patient/admission rows after previous-infection aggregation",
+        target=infprev_zero_columns + infprev_tuple_columns,
+        how="complete output to all master patient/admissions; fill absent previous-infection exposure/count columns with 0 and organism-specific phenotype tuples with NEGATIVE",
     )
     log.output_rows = len(result)
     log.output_columns = result.columns.tolist()
@@ -1303,6 +1343,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         how="remove rows where fecha_administracion_antib is after fecha_ingreso_urgencias",
     )
 
+    family_binary_columns: list[str] = []
     if df.empty:
         result_df = pd.DataFrame(
             columns=[
@@ -1348,7 +1389,6 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
 
         family_rows = df[df["antimicrobiano_previo_familia"].notna()].copy()
         if family_rows.empty:
-            family_binary_columns: list[str] = []
             family_pivot = base[merge_keys].copy()
         else:
             family_pivot = (
@@ -1365,7 +1405,6 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             family_columns = [
                 col for col in family_pivot.columns if col not in merge_keys
             ]
-            family_binary_columns = []
             for family in family_columns:
                 binary_column = f"{feature_name(family)}_binary"
                 family_pivot[binary_column] = np.where(family_pivot[family] >= 1, 1, 0)
@@ -1422,6 +1461,24 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             "antib_previo_total_veces",
         ],
         how="aggregate raw previous-antibiotic treatment rows into one patient/admission feature row",
+    )
+    master_admissions = tables["tbl_paciente"][merge_keys].drop_duplicates()
+    result_df = master_admissions.merge(result_df, on=merge_keys, how="left")
+    antibiotic_zero_columns = [
+        column
+        for column in result_df.columns
+        if column not in merge_keys + ["dias_ultimo_antib"]
+    ]
+    for column in antibiotic_zero_columns:
+        result_df[column] = result_df[column].fillna(0)
+    if "dias_ultimo_antib" in result_df.columns:
+        result_df["dias_ultimo_antib"] = result_df["dias_ultimo_antib"].replace(0.0, np.nan)
+    add_change(
+        log,
+        "transformed_variables",
+        source="missing patient/admission rows after previous-antibiotic aggregation",
+        target=antibiotic_zero_columns + ["dias_ultimo_antib"],
+        how="complete output to all master patient/admissions; fill absent previous-antibiotic exposure/count columns with 0 and keep dias_ultimo_antib as NaN when no valid previous antibiotic exists",
     )
     log.output_rows = len(result_df)
     log.output_columns = result_df.columns.tolist()
@@ -1938,6 +1995,30 @@ def preprocess_tbl_colonizaciones_previas(
         ],
         target=colonization_binary_columns + ["colonizacion_total_grouped"],
         how="replace raw colonization rows with grouped organism binary features; notebook did not preserve colonization BMR or phenotype detail",
+    )
+
+    master_admissions = tables["tbl_paciente"][merge_keys].drop_duplicates()
+    pivoted = master_admissions.merge(pivoted, on=merge_keys, how="left")
+    colonization_zero_columns = [
+        column
+        for column in pivoted.columns
+        if column not in merge_keys and not column.endswith("_tuple")
+    ]
+    colonization_tuple_columns = [
+        column for column in pivoted.columns if column.endswith("_tuple")
+    ]
+    for column in colonization_zero_columns:
+        pivoted[column] = pivoted[column].fillna(0)
+    for column in colonization_tuple_columns:
+        pivoted[column] = pivoted[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+    add_change(
+        log,
+        "transformed_variables",
+        source="missing patient/admission rows after colonization aggregation",
+        target=colonization_zero_columns + colonization_tuple_columns,
+        how="complete output to all master patient/admissions; fill absent colonization exposure/count columns with 0 and organism-specific phenotype tuples with NEGATIVE",
     )
 
     log.output_rows = len(pivoted)
