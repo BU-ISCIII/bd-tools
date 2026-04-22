@@ -111,21 +111,34 @@ def explicit_source_to_repo_renames() -> dict[str, str]:
         renames[f"{organism}_binary"] = f"infprev_{organism_feature}_binary"
         renames[f"colo_{organism}_binary"] = f"colo_{organism_feature}_binary"
 
-    antibiotic_classes = [
-        "Aminoglucósidos",
-        "Cefalosporinas 1 gen",
-        "Cefalosporinas 2 gen",
-        "Cefalosporinas 3 gen",
-        "Cefalosporinas 4 gen",
-        "Glicopéptidos",
-        "Lipopéptidos",
-        "Macrólidos",
-        "Monobactámicos",
-        "Nitrofurantoína",
-    ]
-    for antibiotic_class in antibiotic_classes:
-        renames[f"{antibiotic_class}_binary"] = (
-            f"{feature_name(antibiotic_class)}_binary"
+    antibiotic_classes = {
+        "Aminoglucósidos": "Aminoglucosidos",
+        "AntiTuberculoso": "AntiTuberculoso",
+        "Azoles": "Azoles",
+        "Carbapenemas": "Carbapenemas",
+        "Cefalosporinas 1 gen": "Cefalosporinas 1 gen",
+        "Cefalosporinas 2 gen": "Cefalosporinas 2 gen",
+        "Cefalosporinas 3 gen": "Cefalosporinas 3 gen",
+        "Cefalosporinas 4 gen": "Cefalosporinas 4 gen",
+        "Equinocandinas": "Equinocandinas",
+        "Fosfomicina": "Fosfomicina",
+        "Glicopéptidos": "Glicopéptidos",
+        "Lincosamidas": "Lincosamidas",
+        "Lipopéptidos": "Lipopeptidos",
+        "Macrólidos": "Macrolidos",
+        "Metronidazol": "Metronidazol",
+        "Monobactámicos": "Monobactamicos",
+        "Nitrofurantoína": "Nitrofurantoina",
+        "Penicilinas": "Penicilinas",
+        "Quinolonas": "Quinolonas",
+        "Sulfonamidas": "Sulfonamidas",
+        "Tetraciclinas": "Tetraciclinas",
+        "Tigeciclina": "Tigeciclina",
+    }
+    for source_class, repo_class in antibiotic_classes.items():
+        renames[source_class] = f"antib_previo_{feature_name(repo_class)}_counts"
+        renames[f"{source_class}_binary"] = (
+            f"antib_previo_{feature_name(repo_class)}_binary"
         )
 
     organism_totals = [
