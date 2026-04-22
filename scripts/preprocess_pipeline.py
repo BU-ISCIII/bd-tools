@@ -2636,6 +2636,19 @@ def build_targets(
         how="POSITIVE if resultado_hemo is not NEGATIVE, else NEGATIVE",
     )
 
+    result["bmr_etiologia"] = np.where(
+        pd.to_numeric(result["bmr_etiologia"], errors="coerce") == 1.0,
+        "BMR resistente",
+        "NEGATIVE",
+    )
+    add_change(
+        log,
+        "recoded_variables",
+        source="bmr_etiologia",
+        target="bmr_etiologia",
+        how="match notebook target encoding: 1.0 becomes BMR resistente, all other values become NEGATIVE",
+    )
+
     antibiotic_name_family_map = {
         drug_name: family
         for _, family, drug_name in config["ANTIMICROBIAL_GROUPS"]
