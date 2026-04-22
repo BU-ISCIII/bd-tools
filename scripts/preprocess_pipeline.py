@@ -600,6 +600,20 @@ def preprocess_tbl_paciente(
         how="patient-level flag built from any previous infection with bmr_infec_previa > 0",
     )
 
+    notebook_false_fill_columns = ["mujer_gestante", "center", "dag"]
+    existing_false_fill_columns = [
+        column for column in notebook_false_fill_columns if column in df.columns
+    ]
+    if existing_false_fill_columns:
+        df[existing_false_fill_columns] = df[existing_false_fill_columns].fillna(False)
+        add_change(
+            log,
+            "recoded_variables",
+            source=existing_false_fill_columns,
+            target=existing_false_fill_columns,
+            how="match notebook patient preprocessing: fill missing values with False after joining center and previous-infection data",
+        )
+
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
