@@ -634,14 +634,19 @@ def preprocess_tbl_comorbilidad(
     hepatopathy_dummy_columns = [
         column for column in df.columns if column.startswith("tipo_hepatopatia_")
     ]
+    hepatopathy_source_columns = (
+        ["hepatopatia"] if "hepatopatia" in df.columns else []
+    ) + hepatopathy_dummy_columns
     df["canceres_si_no"] = (
         df[cancer_dummy_columns].sum(axis=1).gt(0).astype(int)
         if cancer_dummy_columns
         else 0
     )
     df["hepatopatias_si_no"] = (
-        df[hepatopathy_dummy_columns].sum(axis=1).gt(0).astype(int)
-        if hepatopathy_dummy_columns
+        pd.to_numeric(df[hepatopathy_source_columns].sum(axis=1), errors="coerce")
+        .gt(0)
+        .astype(int)
+        if hepatopathy_source_columns
         else 0
     )
     log = finalize_log(
@@ -668,9 +673,9 @@ def preprocess_tbl_comorbilidad(
     add_change(
         log,
         "created_variables",
-        source=hepatopathy_dummy_columns,
+        source=hepatopathy_source_columns,
         target="hepatopatias_si_no",
-        how="collapsed hepatopathy dummy columns to binary flag: 1 if any tipo_hepatopatia_* column is positive, else 0",
+        how="match notebook final aggregation: 1 if raw hepatopatia or any tipo_hepatopatia_* dummy column is positive, else 0",
     )
     add_change(
         log,
@@ -2107,7 +2112,8 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
             f"Removed {rows_removed} rows with missing merge keys or mapped other-culture organism after mapping."
         )
 
-    pivot_source = df[merge_keys + ["otro_cult_microorganismo"]].copy()
+    count_source = df[merge_keys + ["tipo_cultivo", "otro_cult_microorganismo"]].drop_duplicates()
+    pivot_source = count_source[merge_keys + ["otro_cult_microorganismo"]].copy()
     pivot_source["dummy"] = 1
     pivoted = (
         pivot_source.pivot_table(
@@ -2128,6 +2134,16 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
     }
     result_df = pivoted.rename(columns=rename_columns)
     other_culture_columns = list(rename_columns.values())
+    add_change(
+        log,
+        "transformed_variables",
+        source=["tipo_cultivo", "otro_cult_microorganismo"],
+        target=other_culture_columns,
+        how=(
+            "match notebook other-culture counting: drop duplicate patient/admission/culture-type/organism "
+            "rows before pivoting organism counts"
+        ),
+    )
 
     df["bmr_etiologia_otros_numeric"] = pd.to_numeric(
         df["bmr_etiologia_otros"], errors="coerce"
