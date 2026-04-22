@@ -2704,7 +2704,7 @@ def build_targets(
             if family is not None:
                 families.append(family)
         deduplicated = sorted(set(families))
-        return deduplicated if deduplicated else ["NEGATIVE"]
+        return deduplicated
 
     result["fenotipo_resistencia"] = result["fenotipo_resistencia"].apply(
         phenotype_codes_to_families
@@ -2714,7 +2714,7 @@ def build_targets(
         "recoded_variables",
         source="fenotipo_resistencia",
         target="fenotipo_resistencia",
-        how="decode phenotype resistance codes to drug names, map drugs to antimicrobial families, deduplicate, and set NEGATIVE when no mapped phenotype remains",
+        how="decode phenotype resistance codes to drug names, map drugs to antimicrobial families, deduplicate, and keep an empty list when no mapped phenotype remains",
     )
 
     result["resistente_cefalosporina"] = result["fenotipo_resistencia"].apply(
