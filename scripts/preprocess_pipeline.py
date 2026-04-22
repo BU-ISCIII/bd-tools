@@ -1368,17 +1368,24 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
                 "dias_ultimo_antib",
                 "prev_betalactamase_inhib",
                 "antib_previo_total_veces",
+                "antib_previo_total_familias",
             ]
         )
     else:
+        df["antibiotic_raw_count_in_window"] = (
+            df["antimicrobiano_previo_90d_nombre"].notna()
+            & (df["antimicrobiano_previo_90d_nombre"] != "NEGATIVE")
+        ).astype(int)
         base = (
             df.groupby(merge_keys, dropna=False)
             .agg(
                 antib_previo_si_no=("antib_previo_si_no", "max"),
                 prev_betalactamase_inhib=("prev_betalactamase_inhib", "max"),
+                antib_previo_total_veces=("antibiotic_raw_count_in_window", "sum"),
             )
             .reset_index()
         )
+        base["antib_previo_total_veces"] = base["antib_previo_total_veces"].astype(int)
 
         last_antibiotic = (
             df.sort_values(merge_keys + ["fecha_administracion_antib_dt"])
@@ -1429,7 +1436,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         result_df = result_df.merge(family_pivot, on=merge_keys, how="left")
         for column in family_binary_columns:
             result_df[column] = result_df[column].fillna(0).astype(int)
-        result_df["antib_previo_total_veces"] = (
+        result_df["antib_previo_total_familias"] = (
             result_df[family_binary_columns].sum(axis=1).astype(int)
             if family_binary_columns
             else 0
@@ -1452,9 +1459,16 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         add_change(
             log,
             "created_variables",
-            source=family_binary_columns,
+            source="antimicrobiano_previo_90d_nombre",
             target="antib_previo_total_veces",
-            how="sum explicit antibiotic-family binary columns; does not use positional column indexes",
+            how="count raw in-window prior antibiotic rows per patient/admission; does not count generated binary columns",
+        )
+        add_change(
+            log,
+            "created_variables",
+            source=family_binary_columns,
+            target="antib_previo_total_familias",
+            how="sum explicit antibiotic-family binary columns to count distinct prior antibiotic families; does not use raw row counts",
         )
 
     add_change(
@@ -1473,6 +1487,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             "dias_ultimo_antib",
             "*_binary",
             "antib_previo_total_veces",
+            "antib_previo_total_familias",
         ],
         how="aggregate raw previous-antibiotic treatment rows into one patient/admission feature row",
     )
@@ -2623,14 +2638,20 @@ def build_targets(
     result["resultado_hemo_grouped"] = (
         result["resultado_hemo"]
         .map(config["MICROORGANISM_BROAD_GROUP_MAP"])
-        .fillna(result["resultado_hemo"])
+        .fillna("NEGATIVE")
     )
     add_change(
         log,
         "created_variables",
         source="resultado_hemo",
         target="resultado_hemo_grouped",
-        how="map selected organisms to broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP; unmapped labels keep their original value",
+        how=(
+            "map configured target hemoculture organisms to broad Gram-stain groups using "
+            "MICROORGANISM_BROAD_GROUP_MAP; collapse original NEGATIVE and non-target/unmapped "
+            "organisms such as Enterococcus, _Other bacteria, _Fungi, and _Virus to NEGATIVE. "
+            "For this grouped target, NEGATIVE can therefore mean no detected organism or a "
+            "detected non-target bacterium/fungus/virus."
+        ),
     )
 
     result["infected_yes_no"] = np.where(
