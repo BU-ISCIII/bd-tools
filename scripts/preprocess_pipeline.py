@@ -1362,7 +1362,23 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         how="remove rows where fecha_administracion_antib is after fecha_ingreso_urgencias",
     )
 
-    family_binary_columns: list[str] = []
+    configured_antibiotic_families = sorted(
+        {
+            family
+            for _, family, drug_name in config["ANTIMICROBIAL_GROUPS"]
+            if drug_name is not None
+        }
+    )
+    family_binary_columns_by_family = {
+        family: f"antib_previo_{feature_name(family)}_binary"
+        for family in configured_antibiotic_families
+    }
+    family_count_columns_by_family = {
+        family: f"antib_previo_{feature_name(family)}_counts"
+        for family in configured_antibiotic_families
+    }
+    family_binary_columns = list(family_binary_columns_by_family.values())
+    family_count_columns = list(family_count_columns_by_family.values())
     if df.empty:
         result_df = pd.DataFrame(
             columns=[
@@ -1375,6 +1391,8 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
                 "antib_previo_total_veces",
                 "antib_previo_total_familias",
             ]
+            + family_binary_columns
+            + family_count_columns
         )
     else:
         df["antibiotic_raw_count_in_window"] = (
@@ -1414,10 +1432,12 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         )[merge_keys + ["ultimo_antib", "dias_ultimo_antib"]]
 
         family_rows = df[df["antimicrobiano_previo_familia"].notna()].copy()
+        family_pivot = base[merge_keys].copy()
         if family_rows.empty:
-            family_pivot = base[merge_keys].copy()
+            for column in family_binary_columns + family_count_columns:
+                family_pivot[column] = 0
         else:
-            family_pivot = (
+            family_count_pivot = (
                 family_rows.assign(presence=1)
                 .pivot_table(
                     index=merge_keys,
@@ -1428,19 +1448,35 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
                 )
                 .reset_index()
             )
-            family_columns = [
-                col for col in family_pivot.columns if col not in merge_keys
-            ]
-            for family in family_columns:
-                binary_column = f"{feature_name(family)}_binary"
-                family_pivot[binary_column] = np.where(family_pivot[family] >= 1, 1, 0)
-                family_binary_columns.append(binary_column)
-            family_pivot = family_pivot.drop(columns=family_columns)
+            family_count_pivot = family_count_pivot.rename(
+                columns={
+                    family: family_count_columns_by_family[family]
+                    for family in configured_antibiotic_families
+                    if family in family_count_pivot.columns
+                }
+            )
+            family_pivot = family_pivot.merge(
+                family_count_pivot,
+                on=merge_keys,
+                how="left",
+            )
+            for family, count_column in family_count_columns_by_family.items():
+                binary_column = family_binary_columns_by_family[family]
+                family_pivot[binary_column] = np.where(
+                    family_pivot[count_column].fillna(0) >= 1,
+                    1,
+                    0,
+                )
+            for column in family_binary_columns + family_count_columns:
+                if column not in family_pivot.columns:
+                    family_pivot[column] = 0
 
         result_df = base.merge(last_antibiotic, on=merge_keys, how="left")
         result_df = result_df.merge(family_pivot, on=merge_keys, how="left")
         for column in family_binary_columns:
-            result_df[column] = result_df[column].fillna(0).astype(int)
+            result_df[column] = np.where(result_df[column].fillna(0) >= 1, 1, 0)
+        for column in family_count_columns:
+            result_df[column] = result_df[column].fillna(0)
         result_df["antib_previo_total_familias"] = (
             result_df[family_binary_columns].sum(axis=1).astype(int)
             if family_binary_columns
@@ -1459,7 +1495,18 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             "created_variables",
             source="antimicrobiano_previo_familia",
             target=family_binary_columns,
-            how="pivot configured antibiotic families to binary exposure flags per patient/admission",
+            how="pivot configured in-window prior antibiotic families to antib_previo_*_binary exposure flags per patient/admission",
+        )
+        add_change(
+            log,
+            "created_variables",
+            source="antimicrobiano_previo_familia",
+            target=family_count_columns,
+            how=(
+                "match notebook behavior: count in-window prior antibiotic records per configured family "
+                "into antib_previo_*_counts columns; these are record counts, not summed treatment days, and "
+                "missing family exposure is filled with 0"
+            ),
         )
         add_change(
             log,
@@ -1490,7 +1537,8 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             "prev_betalactamase_inhib",
             "ultimo_antib",
             "dias_ultimo_antib",
-            "*_binary",
+            "antib_previo_*",
+            "antib_previo_*_binary",
             "antib_previo_total_veces",
             "antib_previo_total_familias",
         ],
