@@ -1315,7 +1315,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         df["fecha_ingreso_urgencias_dt"] - df["fecha_administracion_antib_dt"]
     ).dt.total_seconds() / 86400.0
     window_days = config["PRIOR_ANTIBIOTIC_WINDOW_DAYS"]
-    within_window = days_since_administration < window_days
+    within_window = days_since_administration <= window_days
     df["antimicrobiano_previo_90d_nombre"] = (
         df["antimicrobiano_previo_nombre"].where(within_window).fillna("NEGATIVE")
     )
@@ -1331,7 +1331,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
         source="antimicrobiano_previo_nombre",
         target=["antimicrobiano_previo_90d_nombre", "antimicrobiano_previo_familia"],
         how=(
-            f"keep decoded drug names only when admission minus administration date is < {window_days} days; "
+            f"keep decoded drug names only when admission minus administration date is <= {window_days} days; "
             "set older or missing-window rows to NEGATIVE, then map drug names to configured antibiotic families"
         ),
     )
@@ -2570,8 +2570,6 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         source_columns = [
             f"infprev_{organism_feature}_binary",
             f"colo_{organism_feature}_binary",
-            f"hemo_{organism_feature}_binary",
-            f"otros_cult_{organism_feature}_count",
         ]
         existing_source_columns = [
             column for column in source_columns if column in result.columns
@@ -2588,13 +2586,11 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         source=[
             "infprev_*_binary",
             "colo_*_binary",
-            "hemo_*_binary",
-            "otros_cult_*_count",
         ],
         target=organism_total_columns,
         how=(
-            "create per-organism total columns using explicit source-specific organism features; "
-            "does not include all_cult_*_count to avoid double-counting hemoculture and other-culture evidence"
+            "create per-organism history total columns from previous-infection and previous-colonization features only; "
+            "current hemoculture and other urgent-culture organism features are target-side information and are excluded"
         ),
     )
 
