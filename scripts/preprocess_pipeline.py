@@ -233,7 +233,35 @@ def load_tables(db_file_path: Path) -> dict[str, pd.DataFrame]:
 
 
 def extract_numeric(series: pd.Series) -> pd.Series:
-    extracted = series.astype(str).str.extract(r"(\d+\.\d+|\d+)")[0]
+    """
+    Extract numeric values from mixed text fields.
+    Handles:
+    - Values with = prefix (= 3.79)
+    - Negative numbers (-5)
+    - Numbers with units (12 mg/dL)
+    - Decimal and integer numbers
+    """
+    # Convert to string
+    str_series = series.astype(str).str.strip()
+    
+    # Replace common non-numeric text with empty string first
+    str_series = str_series.replace({
+        'nan': '',
+        'None': '',
+        'N/A': '',
+        'NA': '',
+        'n/a': '',
+        'unknown': '',
+        '': ''
+    })
+    
+    # Extract numeric pattern:
+    extracted = str_series.str.extract(r'(-?\s*=\s*\d+\.?\d*|-?\d+\.?\d*)')[0]
+    
+    # Clean up any remaining whitespace or = signs
+    extracted = extracted.str.replace(r'[\s=]', '', regex=True)
+    
+    # Convert to numeric, coercing unparseable to NaN
     return pd.to_numeric(extracted, errors="coerce")
 
 
@@ -951,6 +979,7 @@ def preprocess_tbl_sepsis(
     )
 
     numeric_columns = [col for col in config["SEPSIS_NUMERIC_COLUMNS"] if col in df.columns and col != "lactato_serico"]
+
     for column in numeric_columns:
         df[column] = extract_numeric(df[column])
 
@@ -993,6 +1022,7 @@ def preprocess_tbl_sepsis(
         sepsis_quartile_columns,
         iqr_multiplier=config["IQR_DEFAULT_MULTIPLIER"],
     )
+
     iqr_only_columns = [col for col in sepsis_outlier_columns if col not in sepsis_quartile_columns]
     if iqr_only_columns:
         df = clean_outliers_iqr(
@@ -1015,9 +1045,11 @@ def preprocess_tbl_sepsis(
             target=info["new_column"],
             how=format_quartile_recode_info(info),
         )
+
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
+
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
 

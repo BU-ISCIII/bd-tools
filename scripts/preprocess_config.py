@@ -19,6 +19,14 @@ SIGNOS_NUMERIC_COLUMNS = [
 SEPSIS_NUMERIC_COLUMNS = [
     "lactato_serico",
     "proteina_c_reactiva",
+    "sofa",
+    "respiracion",
+    "snc_glasgow",
+    "cardiovascular",
+    "bilirrubina",
+    "plaquetas",
+    "creatinina",
+    "qsofa"
 ]
 
 SIGNOS_THRESHOLDS = {
@@ -68,6 +76,7 @@ MICROORGANISM_BROAD_GROUP_MAP = {
     "Pseudomonas aeruginosa": "Bacilo gram-",
     "Staphylococcus aureus": "Coco gram+",
     "Streptococcus pneumoniae": "Coco gram+",
+    "Enterococcus": "Coco gram+"
 }
 
 FENOTYPE_DRUG_TRANSLATIONS = {
