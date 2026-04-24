@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import math
 import re
 import unicodedata
 from collections import defaultdict
@@ -16,9 +15,6 @@ DEFAULT_SOURCE_CSV = Path(
 )
 DEFAULT_REPO_CSV = Path("preprocess_test_filtered.csv")
 DEFAULT_OUTPUT_DIR = Path("csv_comparison_report")
-
-SCORE_RE = re.compile(r"^=\s*([-+]?\d+(?:\.\d+)?)\s*score$", re.I)
-
 
 def strip_accents(value: str) -> str:
     return "".join(
@@ -43,24 +39,7 @@ def canonical_column_name(value: str) -> str:
 def normalized_value(value: Any) -> str:
     if value is None:
         return ""
-    text = str(value).strip()
-    if text.lower() in {"nan", "none", "null", "na", "n/a"}:
-        return ""
-    score_match = SCORE_RE.match(text)
-    if score_match:
-        text = score_match.group(1)
-    if text.lower() == "false":
-        return "0"
-    if text.lower() == "true":
-        return "1"
-    try:
-        if text:
-            number = float(text)
-            if math.isfinite(number):
-                return str(int(number)) if number.is_integer() else f"{number:.12g}"
-    except ValueError:
-        pass
-    return strip_accents(text)
+    return strip_accents(str(value).strip())
 
 
 def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
