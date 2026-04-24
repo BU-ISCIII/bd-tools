@@ -982,6 +982,13 @@ def preprocess_tbl_sepsis(
 
     for column in numeric_columns:
         df[column] = extract_numeric(df[column])
+    add_change(
+        log,
+        "transformed_variables",
+        source=list(numeric_columns),
+        target=list(numeric_columns),
+        how="extract numeric values from mixed text fields, including '= N score' score strings",
+    )
 
     if "foco" in df.columns:
         df["foco"] = (
