@@ -534,6 +534,11 @@ def build_reference_maps(
 ) -> dict[str, dict[Any, Any]]:
     codes = tables["tbl_codes2names"].copy()
     microorganisms = tables["tbl_microorganismos"].copy()
+    microorganisms["raw_label"] = microorganisms["snomed_name"].astype(str).str.replace(
+        " (organismo)",
+        "",
+        regex=False,
+    )
     microorganisms["label"] = microorganisms["label"].map(config["MICROORGANISM_LABEL_MAP"])
     microorganisms = (
         microorganisms.sort_values(by=["snomed_code", "label"])
@@ -574,6 +579,7 @@ def build_reference_maps(
 
     return {
         "organism_codes_map": dict(zip(microorganisms["snomed_code"], microorganisms["label"])),
+        "organism_raw_codes_map": dict(zip(microorganisms["snomed_code"], microorganisms["raw_label"])),
         "foco_map": foco_map,
         "phenomap": phenomap,
         "symptom_map": symptom_map,
@@ -1629,6 +1635,9 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         .astype(str)
         .replace("<NA>", "0")
     )
+    df["microorganismo_original"] = (
+        microorganism_codes.map(maps["organism_raw_codes_map"]).fillna("NEGATIVE")
+    )
     df["microorganismo"] = microorganism_codes.map(maps["organism_codes_map"]).fillna("NEGATIVE")
     df["microorganismo_pre_correccion_clinica"] = df["microorganismo"]
     add_change(
@@ -1637,6 +1646,13 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source="microorganismo",
         target="microorganismo",
         how="map hemoculture microorganism SNOMED codes to grouped organism labels; missing and unmapped codes become NEGATIVE",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="microorganismo",
+        target="microorganismo_original",
+        how="map hemoculture microorganism SNOMED codes to original SQLite microorganism names before clinical grouping",
     )
 
     conflicts = (
@@ -1689,6 +1705,40 @@ def preprocess_tbl_hemocultivo_de_urgencias(
     pre_correction_result = pre_correction_pivot[
         merge_keys + ["resultado_hemo_multilabel"]
     ]
+
+    raw_microorganism_grouped = (
+        df.groupby(merge_keys + ["microorganismo_original"], as_index=False, dropna=False)
+        .agg(hemo_positivo_si_no=("hemo_positivo_si_no", "max"))
+    )
+    raw_microorganism_pivot = (
+        raw_microorganism_grouped.pivot_table(
+            index=merge_keys,
+            columns="microorganismo_original",
+            values="hemo_positivo_si_no",
+            aggfunc="sum",
+            fill_value=0,
+        )
+        .reset_index()
+    )
+    raw_microorganism_columns = [
+        column
+        for column in raw_microorganism_pivot.columns
+        if column not in merge_keys and column != "NEGATIVE"
+    ]
+
+    def build_resultado_hemo_mo(row: pd.Series) -> str:
+        organisms = [
+            organism
+            for organism in raw_microorganism_columns
+            if row[organism] >= 1
+        ]
+        return organisms[0] if organisms else "NEGATIVE"
+
+    raw_microorganism_pivot["resultado_hemo_mo"] = raw_microorganism_pivot.apply(
+        build_resultado_hemo_mo,
+        axis=1,
+    )
+    raw_microorganism_result = raw_microorganism_pivot[merge_keys + ["resultado_hemo_mo"]]
 
     override_mask = df["person_id"].isin(coinfection_map)
     override_person_count = int(df.loc[override_mask, "person_id"].nunique())
@@ -1840,6 +1890,7 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         )
 
     result_df = result_df.merge(pre_correction_result, on=merge_keys, how="left")
+    result_df = result_df.merge(raw_microorganism_result, on=merge_keys, how="left")
 
     dominant_organism_columns = {
         organism_column_rename[column]: column
@@ -1897,6 +1948,13 @@ def preprocess_tbl_hemocultivo_de_urgencias(
     add_change(
         log,
         "created_variables",
+        source="microorganismo_original",
+        target="resultado_hemo_mo",
+        how="scalar original microorganism name before clinical grouping; NEGATIVE if no positive original microorganism exists",
+    )
+    add_change(
+        log,
+        "created_variables",
         source="microorganismo_pre_correccion_clinica",
         target="resultado_hemo_multilabel",
         how="pre-clinician-correction tuple of all positive grouped organisms; NEGATIVE tuple if no positive organism exists",
@@ -1914,6 +1972,7 @@ def preprocess_tbl_hemocultivo_de_urgencias(
             "bmr_etiologia",
             "fenotipo_resistencia",
             "*organism_binary_columns",
+            "resultado_hemo_mo",
             "resultado_hemo",
             "resultado_hemo_multilabel",
         ],
@@ -2813,6 +2872,14 @@ def build_targets(
                 return str(maps["phenomap"][candidate])
         return None
 
+    def phenotype_codes_to_individual_names(value: Any) -> list[str]:
+        names: list[str] = []
+        for code in as_tuple(value):
+            phenotype_name = phenotype_code_to_name(code)
+            if phenotype_name is not None:
+                names.append(phenotype_name)
+        return sorted(set(names))
+
     def phenotype_codes_to_families(value: Any) -> list[str]:
         families: list[str] = []
         for code in as_tuple(value):
@@ -2825,6 +2892,17 @@ def build_targets(
                 families.append(family)
         deduplicated = sorted(set(families))
         return deduplicated
+
+    result["fenotipo_resistencia_individual"] = result["fenotipo_resistencia"].apply(
+        phenotype_codes_to_individual_names
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="fenotipo_resistencia",
+        target="fenotipo_resistencia_individual",
+        how="decode phenotype resistance codes to individual resistance phenotype labels before family grouping",
+    )
 
     result["fenotipo_resistencia"] = result["fenotipo_resistencia"].apply(
         phenotype_codes_to_families
