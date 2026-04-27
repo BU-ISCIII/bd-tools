@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import sqlite3
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -12,6 +14,7 @@ DEFAULT_SUMMARY_LOG_PATH = Path("preprocess_test_log_summary.csv")
 DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
+DEFAULT_SQLITE_PATH = Path("db_mepram_sepsis_vf.sqlite3")
 DEFAULT_OUTPUT_DIR = Path("preprocess_report")
 
 COLORS = {
@@ -22,6 +25,30 @@ COLORS = {
     "transformed": "#CC79A7",
     "dropped": "#D55E00",
 }
+VARIABLE_GROUP_LABELS = [
+    "Demographics",
+    "Comorbidities",
+    "Signs / sepsis",
+    "Infection history",
+    "Antibiotics",
+    "Cultures",
+    "Derived variables",
+]
+
+CHART_FONT_SIZES = {
+    "title": 18,
+    "axis_label": 15,
+    "tick": 12,
+    "legend": 12,
+    "value": 11,
+}
+EXCLUDE_FROM_PLOTS = {"_pipeline_run"}
+
+
+def filter_plot_stages(df: pd.DataFrame) -> pd.DataFrame:
+    if "table_name" not in df.columns:
+        return df
+    return df.loc[~df["table_name"].isin(EXCLUDE_FROM_PLOTS)].copy()
 
 
 def write_before_after_chart_png(
@@ -34,11 +61,15 @@ def write_before_after_chart_png(
     title: str,
     x_label: str,
 ) -> None:
-    plot_df = df[[label_column, before_column, after_column]].copy()
+    plot_df = (
+        filter_plot_stages(df)[[label_column, before_column, after_column]]
+        .copy()
+        .reset_index(drop=True)
+    )
     plot_df[before_column] = pd.to_numeric(plot_df[before_column], errors="coerce").fillna(0)
     plot_df[after_column] = pd.to_numeric(plot_df[after_column], errors="coerce").fillna(0)
-    height = max(4.5, 0.38 * len(plot_df))
-    fig, ax = plt.subplots(figsize=(12, height))
+    height = max(6, 0.55 * len(plot_df))
+    fig, ax = plt.subplots(figsize=(15, height))
     y_positions = list(range(len(plot_df)))
     bar_height = 0.38
     ax.barh(
@@ -56,15 +87,31 @@ def write_before_after_chart_png(
         color=COLORS["output"],
     )
     ax.set_yticks(y_positions)
-    ax.set_yticklabels(plot_df[label_column])
+    ax.set_yticklabels(plot_df[label_column], fontsize=CHART_FONT_SIZES["tick"])
     ax.invert_yaxis()
-    ax.set_title(title)
-    ax.set_xlabel(x_label)
+    ax.set_title(title, fontsize=CHART_FONT_SIZES["title"])
+    ax.set_xlabel(x_label, fontsize=CHART_FONT_SIZES["axis_label"])
+    ax.tick_params(axis="x", labelsize=CHART_FONT_SIZES["tick"])
     ax.grid(axis="x", alpha=0.25)
-    ax.legend(loc="upper right")
+    ax.legend(loc="upper right", fontsize=CHART_FONT_SIZES["legend"])
+    max_value = max(plot_df[[before_column, after_column]].max().max(), 1)
+    label_offset = max_value * 0.01
+    ax.set_xlim(0, max_value * 1.14)
     for index, row in plot_df.iterrows():
-        ax.text(row[before_column], index - bar_height / 2, f" {int(row[before_column]):,}", va="center", fontsize=8)
-        ax.text(row[after_column], index + bar_height / 2, f" {int(row[after_column]):,}", va="center", fontsize=8)
+        ax.text(
+            row[before_column] + label_offset,
+            index - bar_height / 2,
+            f" {int(row[before_column]):,}",
+            va="center",
+            fontsize=CHART_FONT_SIZES["value"],
+        )
+        ax.text(
+            row[after_column] + label_offset,
+            index + bar_height / 2,
+            f" {int(row[after_column]):,}",
+            va="center",
+            fontsize=CHART_FONT_SIZES["value"],
+        )
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
@@ -76,9 +123,9 @@ def write_stacked_change_chart_png(
     output_path: Path,
 ) -> None:
     columns = ["created", "recoded", "transformed", "dropped"]
-    plot_df = change_counts[["table_name"] + columns].copy()
-    height = max(4.5, 0.38 * len(plot_df))
-    fig, ax = plt.subplots(figsize=(12, height))
+    plot_df = filter_plot_stages(change_counts)[["table_name"] + columns].copy()
+    height = max(6, 0.55 * len(plot_df))
+    fig, ax = plt.subplots(figsize=(15, height))
     left = pd.Series(0, index=plot_df.index, dtype=float)
     for column in columns:
         values = pd.to_numeric(plot_df[column], errors="coerce").fillna(0)
@@ -91,10 +138,18 @@ def write_stacked_change_chart_png(
         )
         left = left + values
     ax.invert_yaxis()
-    ax.set_title("Logged Preprocessing Operations by Stage")
-    ax.set_xlabel("Number of logged operations")
+    ax.set_title(
+        "Preprocessing Variables by Stage",
+        fontsize=CHART_FONT_SIZES["title"],
+    )
+    ax.set_xlabel(
+        "Number of variables",
+        fontsize=CHART_FONT_SIZES["axis_label"],
+    )
+    ax.tick_params(axis="x", labelsize=CHART_FONT_SIZES["tick"])
+    ax.tick_params(axis="y", labelsize=CHART_FONT_SIZES["tick"])
     ax.grid(axis="x", alpha=0.25)
-    ax.legend(loc="lower right")
+    ax.legend(loc="lower right", fontsize=CHART_FONT_SIZES["legend"])
     fig.tight_layout()
     fig.savefig(output_path, dpi=160)
     plt.close(fig)
@@ -108,36 +163,892 @@ def write_missingness_chart_png(
     missing_percent = df.isna().mean().mul(100).sort_values(ascending=False)
     plot_df = missing_percent.reset_index()
     plot_df.columns = ["column", "missing_percent"]
-    width = max(18, 0.12 * len(plot_df))
-    fig, ax = plt.subplots(figsize=(width, 7))
+    width = max(22, 0.13 * len(plot_df))
+    fig, ax = plt.subplots(figsize=(width, 9.5))
     ax.bar(
         range(len(plot_df)),
         plot_df["missing_percent"],
         color=COLORS["input"],
         width=0.85,
     )
-    ax.set_title("Missing Values in Filtered Dataset")
-    ax.set_ylabel("Missing values (%)")
-    ax.set_xlabel("Filtered variables, sorted from most to least missing")
+    ax.set_title("Missing Values in Filtered Dataset", fontsize=24, pad=18)
+    ax.set_ylabel("Missing values (%)", fontsize=20)
+    ax.set_xlabel(
+        f"Filtered variables (n={len(plot_df):,})",
+        fontsize=20,
+        labelpad=16,
+    )
     ax.set_ylim(0, 100)
+    ax.set_xlim(-0.5, len(plot_df) - 0.5)
+    ax.margins(x=0)
     ax.set_xticks(range(len(plot_df)))
-    ax.set_xticklabels(plot_df["column"], rotation=90, ha="center", fontsize=6)
+    ax.set_xticklabels(plot_df["column"], rotation=90, ha="center", fontsize=11)
+    ax.tick_params(axis="y", labelsize=15)
     ax.grid(axis="y", alpha=0.25)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=180)
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
     plt.close(fig)
+
+
+def grouped_slide_missingness(df: pd.DataFrame) -> pd.DataFrame:
+    missing_percent = df.isna().mean().mul(100)
+    all_columns = set(df.columns)
+
+    def existing(columns: list[str]) -> list[str]:
+        return [column for column in columns if column in all_columns]
+
+    groups = [
+        (
+            "Patient / demographics",
+            existing(
+                [
+                    "person_id",
+                    "fecha_ingreso_urgencias",
+                    "fecha_nacimiento",
+                    "edad",
+                    "sexo",
+                    "codigo_postal",
+                    "mujer_gestante",
+                    "mayor_65",
+                    "paciente_residencia",
+                    "center",
+                    "dag",
+                ]
+            ),
+        ),
+        (
+            "Comorbidities / Charlson",
+            existing(
+                [
+                    "infarto",
+                    "insuficiencia_cardiaca",
+                    "evp",
+                    "e_cerebrovascular",
+                    "demencia",
+                    "e_pulmonar_cronica",
+                    "ulcera_peptica",
+                    "colagenopatia",
+                    "hemiplejia",
+                    "erc",
+                    "neoplasia",
+                    "linfoma",
+                    "leucemia",
+                    "sida",
+                    "diabetes",
+                    "indice_de_charlson",
+                    "inmunosupresion",
+                    "causa_inmunosupresion",
+                    "situacion_funcional_basal",
+                    "canceres_si_no",
+                    "hepatopatias_si_no",
+                ]
+            ),
+        ),
+        (
+            "Healthcare exposure / devices",
+            existing(
+                [
+                    "hospit_ano_previo",
+                    "hospit_mes_previo",
+                    "hospit_ano_previo_uci",
+                    "cirugia_previa_sin_implant",
+                    "cirugia_previa_con_implant",
+                    "asistencia_sanitaria_prev",
+                    "hemodialisis_permanente",
+                    "dialisis_peritoneal",
+                    "cateter_venoso",
+                    "sonda_urinaria",
+                    "sonda_nasogastrica",
+                    "derivacion_ventriculoper",
+                    "valvula_prot_cardiaca",
+                    "portador_otros_disposit",
+                    "residencia_dialisis",
+                    "carga_dispositivos",
+                    "total_inmunoriesgo_cat",
+                ]
+            ),
+        ),
+        (
+            "Sepsis / organ dysfunction",
+            existing(
+                [
+                    "foco",
+                    "sepsis",
+                    "shock_septico",
+                    "sofa",
+                    "respiracion",
+                    "snc_glasgow",
+                    "cardiovascular",
+                    "bilirrubina",
+                    "plaquetas",
+                    "creatinina",
+                    "lactato_serico",
+                    "vasopresores",
+                    "proteina_c_reactiva",
+                    "qsofa",
+                    "estado_mental_alterado",
+                    "proteina_c_reactiva_recoded",
+                ]
+            ),
+        ),
+        (
+            "Vital signs",
+            [
+                column
+                for column in df.columns
+                if column
+                in {
+                    "temperatura",
+                    "hipotermia_hipertermia",
+                    "frec_cardiaca",
+                    "taquicardia",
+                    "frec_respiratoria",
+                    "taquipnea",
+                    "tension_arterial",
+                    "hipotension",
+                    "saturacion_o2",
+                    "hipoxemia",
+                    "temperatura_recoded",
+                    "frec_respiratoria_recoded",
+                    "frec_cardiaca_recoded",
+                    "tension_arterial_recoded",
+                    "saturacion_o2_recoded",
+                }
+            ],
+        ),
+        (
+            "Symptoms",
+            [column for column in df.columns if column.startswith("sintoma_")],
+        ),
+        (
+            "Previous infections",
+            [
+                column
+                for column in df.columns
+                if column.startswith("infprev_")
+                or column
+                in {
+                    "inf_previa_sino",
+                    "bmr_infec_previa",
+                    "Inf_Bacilo_gram-",
+                    "Inf_Coco_gram+",
+                    "num_inf_previas",
+                    "tiempo_ultima",
+                }
+            ],
+        ),
+        (
+            "Previous antibiotic summary",
+            existing(
+                [
+                    "antib_previo_si_no",
+                    "prev_betalactamase_inhib",
+                    "antib_previo_total_veces",
+                    "ultimo_antib",
+                    "dias_ultimo_antib",
+                    "antib_previo_total_familias",
+                ]
+            ),
+        ),
+        (
+            "Previous antibiotic family counts",
+            [
+                column
+                for column in df.columns
+                if column.startswith("antib_previo_") and column.endswith("_counts")
+            ],
+        ),
+        (
+            "Previous antibiotic family binaries",
+            [
+                column
+                for column in df.columns
+                if column.startswith("antib_previo_") and column.endswith("_binary")
+            ],
+        ),
+        (
+            "Previous colonization",
+            [
+                column
+                for column in df.columns
+                if column.startswith("colo_")
+                or column
+                in {
+                    "Colo_Bacilo_gram-",
+                    "Colo_Coco_gram+",
+                    "colonizacion_total_grouped",
+                }
+            ],
+        ),
+        (
+            "Culture / organism totals",
+            [
+                column
+                for column in df.columns
+                if column.endswith("_total")
+                or column
+                in {
+                    "dominant_all_cult_org",
+                    "densidad_inf",
+                }
+            ],
+        ),
+        (
+            "Targets / outcomes",
+            existing(
+                [
+                    "bmr_etiologia",
+                    "fenotipo_resistencia",
+                    "resultado_hemo_multilabel",
+                    "resultado_hemo",
+                    "recurrencia_precoz",
+                    "resultado_hemo_grouped",
+                    "infected_yes_no",
+                    "resistente_cefalosporina",
+                    "resistente_cefalosporina_multi",
+                    "sample_weight",
+                ]
+            ),
+        ),
+    ]
+
+    bands = [
+        ("0%", lambda values: values == 0),
+        (">0-10%", lambda values: (values > 0) & (values <= 10)),
+        ("10-40%", lambda values: (values > 10) & (values <= 40)),
+        ("40-80%", lambda values: (values > 40) & (values <= 80)),
+        ("80-100%", lambda values: values > 80),
+    ]
+    rows = []
+    assigned_columns: set[str] = set()
+    for label, columns in groups:
+        columns = [column for column in columns if column not in assigned_columns]
+        if not columns:
+            continue
+        assigned_columns.update(columns)
+        group_missing = missing_percent[columns]
+        row = {"group": label, "variables": len(columns)}
+        for band_label, mask_fn in bands:
+            row[band_label] = int(mask_fn(group_missing).sum())
+        row["max_missing_percent"] = round(float(group_missing.max()), 1)
+        rows.append(
+            row
+        )
+
+    return pd.DataFrame.from_records(rows)
+
+
+def write_grouped_missingness_chart_png(
+    df: pd.DataFrame,
+    *,
+    output_path: Path,
+) -> pd.DataFrame:
+    plot_df = grouped_slide_missingness(df)
+    band_columns = ["0%", ">0-10%", "10-40%", "40-80%", "80-100%"]
+    band_colors = {
+        "0%": "#009E73",
+        ">0-10%": "#56B4E9",
+        "10-40%": "#E69F00",
+        "40-80%": "#D55E00",
+        "80-100%": "#CC79A7",
+    }
+    fig, ax = plt.subplots(figsize=(16, 9))
+    bottom = pd.Series(0, index=plot_df.index, dtype=float)
+    x_positions = range(len(plot_df))
+    for band in band_columns:
+        ax.bar(
+            x_positions,
+            plot_df[band],
+            bottom=bottom,
+            color=band_colors[band],
+            label=band,
+            width=0.78,
+        )
+        bottom = bottom + plot_df[band]
+    ax.set_title("Missingness Bands by Variable Group", fontsize=26, pad=18)
+    ax.set_ylabel("Number of variables", fontsize=20)
+    ax.set_xlabel(
+        f"Filtered variables grouped for slides (n={len(df.columns):,})",
+        fontsize=20,
+        labelpad=16,
+    )
+    ax.set_ylim(0, max(plot_df["variables"].max() * 1.12, 1))
+    ax.set_xlim(-0.5, len(plot_df) - 0.5)
+    ax.margins(x=0)
+    ax.set_xticks(range(len(plot_df)))
+    ax.set_xticklabels(
+        [f"{row.group}\n(n={row.variables})" for row in plot_df.itertuples()],
+        rotation=45,
+        ha="right",
+        fontsize=13,
+    )
+    ax.tick_params(axis="y", labelsize=16)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(title="Missingness band", title_fontsize=13, fontsize=12, loc="upper right")
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
+    return plot_df
+
+
+def targets_from_changes(changes: list[dict[str, object]]) -> list[str]:
+    targets: list[str] = []
+    for change in changes:
+        value = change.get("target", [])
+        values = value if isinstance(value, list) else [value]
+        targets.extend(str(item) for item in values if item)
+    return targets
+
+
+def columns_from_stage(
+    detailed_logs_by_table: dict[str, dict[str, object]],
+    table_name: str,
+    available_columns: set[str],
+    *,
+    exclude_keys: bool = True,
+) -> list[str]:
+    columns = detailed_logs_by_table[table_name]["output_columns"]
+    key_columns = {"person_id", "fecha_ingreso_urgencias"} if exclude_keys else set()
+    return [
+        str(column)
+        for column in columns
+        if column in available_columns and column not in key_columns
+    ]
+
+
+def variable_distribution_by_group(
+    columns: list[str],
+    detailed_logs: list[dict[str, object]],
+) -> pd.DataFrame:
+    available_columns = set(columns)
+    detailed_logs_by_table = {str(log["table_name"]): log for log in detailed_logs}
+
+    groups = {
+        "Demographics": [
+            column
+            for column in detailed_logs_by_table["tbl_paciente"]["output_columns"]
+            if column in available_columns
+            and column not in {"inf_previa_sino", "bmr_infec_previa"}
+        ],
+        "Comorbidities": columns_from_stage(
+            detailed_logs_by_table,
+            "tbl_comorbilidad",
+            available_columns,
+        ),
+        "Signs / sepsis": (
+            columns_from_stage(detailed_logs_by_table, "tbl_signos", available_columns)
+            + columns_from_stage(detailed_logs_by_table, "tbl_sepsis", available_columns)
+            + columns_from_stage(detailed_logs_by_table, "tbl_sintomas", available_columns)
+        ),
+        "Infection history": (
+            [
+                column
+                for column in ["inf_previa_sino", "bmr_infec_previa"]
+                if column in available_columns
+            ]
+            + columns_from_stage(
+                detailed_logs_by_table,
+                "tbl_factores_riesgo_bmr",
+                available_columns,
+            )
+            + columns_from_stage(
+                detailed_logs_by_table,
+                "tbl_infecciones_previas",
+                available_columns,
+            )
+            + columns_from_stage(
+                detailed_logs_by_table,
+                "tbl_colonizaciones_previas",
+                available_columns,
+            )
+        ),
+        "Antibiotics": columns_from_stage(
+            detailed_logs_by_table,
+            "tbl_tratamiento_antibiotico_previo",
+            available_columns,
+        ),
+        "Cultures": (
+            columns_from_stage(
+                detailed_logs_by_table,
+                "tbl_hemocultivo_de_urgencias",
+                available_columns,
+            )
+            + columns_from_stage(
+                detailed_logs_by_table,
+                "tbl_otros_cultivos_en_urgencias",
+                available_columns,
+            )
+        ),
+        "Derived variables": (
+            [
+                column
+                for column in targets_from_changes(
+                    detailed_logs_by_table["cross_table_features"].get(
+                        "created_variables", []
+                    )
+                )
+                if column in available_columns
+            ]
+            + [
+                column
+                for column in targets_from_changes(
+                    detailed_logs_by_table["target_building"].get("created_variables", [])
+                )
+                if column in available_columns
+            ]
+        ),
+    }
+
+    assigned_columns: set[str] = set()
+    records = []
+    for group in VARIABLE_GROUP_LABELS:
+        group_columns = []
+        for column in groups[group]:
+            if column not in assigned_columns:
+                group_columns.append(column)
+                assigned_columns.add(column)
+        records.append({"group": group, "variables": len(group_columns)})
+
+    unassigned_columns = [column for column in columns if column not in assigned_columns]
+    if unassigned_columns:
+        raise ValueError(
+            "Unclassified variables in distribution: "
+            + ", ".join(unassigned_columns[:20])
+        )
+
+    return pd.DataFrame.from_records(records)
+
+
+def variable_distribution_filtered_vs_unfiltered(
+    *,
+    full_df: pd.DataFrame,
+    filtered_df: pd.DataFrame,
+    detailed_logs: list[dict[str, object]],
+) -> pd.DataFrame:
+    full_distribution = variable_distribution_by_group(full_df.columns.tolist(), detailed_logs)
+    filtered_distribution = variable_distribution_by_group(
+        filtered_df.columns.tolist(),
+        detailed_logs,
+    )
+    result = full_distribution.rename(columns={"variables": "unfiltered_variables"}).merge(
+        filtered_distribution.rename(columns={"variables": "filtered_variables"}),
+        on="group",
+        how="left",
+    )
+    result["removed_by_filter"] = (
+        result["unfiltered_variables"] - result["filtered_variables"]
+    )
+    return result
+
+
+def write_variable_distribution_chart_png(
+    distribution: pd.DataFrame,
+    *,
+    output_path: Path,
+) -> None:
+    plot_df = distribution.copy()
+    x_positions = list(range(len(plot_df)))
+    bar_width = 0.38
+
+    fig, ax = plt.subplots(figsize=(15, 8.5))
+    ax.bar(
+        [position - bar_width / 2 for position in x_positions],
+        plot_df["unfiltered_variables"],
+        width=bar_width,
+        label=f"Unfiltered (n={int(plot_df['unfiltered_variables'].sum()):,})",
+        color=COLORS["input"],
+    )
+    ax.bar(
+        [position + bar_width / 2 for position in x_positions],
+        plot_df["filtered_variables"],
+        width=bar_width,
+        label=f"Filtered (n={int(plot_df['filtered_variables'].sum()):,})",
+        color=COLORS["output"],
+    )
+    ax.set_title("Variable Distribution by Group", fontsize=24, pad=18)
+    ax.set_ylabel("Number of variables", fontsize=18)
+    ax.set_xlabel("Variable group", fontsize=18, labelpad=16)
+    ax.set_xticks(x_positions)
+    ax.set_xticklabels(plot_df["group"], rotation=35, ha="right", fontsize=13)
+    ax.tick_params(axis="y", labelsize=14)
+    ax.grid(axis="y", alpha=0.25)
+    ax.legend(fontsize=13, loc="upper right")
+    max_value = max(
+        plot_df["unfiltered_variables"].max(),
+        plot_df["filtered_variables"].max(),
+        1,
+    )
+    ax.set_ylim(0, max_value * 1.18)
+    label_offset = max_value * 0.015
+    for position, row in zip(x_positions, plot_df.itertuples(index=False)):
+        ax.text(
+            position - bar_width / 2,
+            row.unfiltered_variables + label_offset,
+            f"{int(row.unfiltered_variables)}",
+            ha="center",
+            va="bottom",
+            fontsize=12,
+        )
+        ax.text(
+            position + bar_width / 2,
+            row.filtered_variables + label_offset,
+            f"{int(row.filtered_variables)}",
+            ha="center",
+            va="bottom",
+            fontsize=12,
+        )
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
+    plt.close(fig)
+
+
+def predictive_target_summary(filtered_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    target_specs = [
+        {
+            "model": "Model 1 - Sepsis",
+            "target_column": "sepsis",
+            "subset": filtered_df,
+            "class_labels": {
+                0: "Sepsis (-)",
+                1: "Sepsis (+)",
+                "0": "Sepsis (-)",
+                "1": "Sepsis (+)",
+            },
+            "notes": "No exclusions; binary target over the full cohort.",
+        },
+        {
+            "model": "Model 2 - Etiology",
+            "target_column": "resultado_hemo_grouped",
+            "subset": filtered_df,
+            "class_labels": {
+                "NEGATIVE": "Negative blood culture",
+                "Bacilo gram-": "Gram-negative bacillus",
+                "Coco gram+": "Gram-positive coccus",
+            },
+            "notes": (
+                "Grouped hemoculture target. NEGATIVE includes negative blood "
+                "cultures and non-target or unmapped detected organisms."
+            ),
+        },
+        {
+            "model": "Model 3 - Resistance",
+            "target_column": "resistente_cefalosporina",
+            "subset": filtered_df.loc[
+                filtered_df["resultado_hemo_grouped"] != "NEGATIVE"
+            ],
+            "class_labels": {
+                "NEGATIVE": "Not resistant",
+                "RESIST_CEFALOSPORINAS_3a_4a": "Resistant to cephalosporins 3a/4a",
+            },
+            "notes": (
+                "Restricted to grouped positive blood cultures "
+                "(resultado_hemo_grouped != NEGATIVE); grouped as binary "
+                "cephalosporin 3a/4a resistance."
+            ),
+        },
+    ]
+
+    summary_records = []
+    class_records = []
+    for spec in target_specs:
+        target_column = spec["target_column"]
+        subset = spec["subset"]
+        if target_column not in subset.columns:
+            raise ValueError(f"Missing target column: {target_column}")
+        target = subset[target_column].dropna()
+        counts = target.value_counts(dropna=False)
+        sample_count = int(target.shape[0])
+        majority_count = int(counts.max()) if sample_count else 0
+        majority_raw = counts.idxmax() if sample_count else ""
+        majority_label = spec["class_labels"].get(majority_raw, str(majority_raw))
+        class_count = int(target.nunique(dropna=True))
+        majority_percent = round((majority_count / sample_count) * 100, 1) if sample_count else 0
+
+        summary_records.append(
+            {
+                "model": spec["model"],
+                "target_column": target_column,
+                "samples": sample_count,
+                "classes": class_count,
+                "majority_class": majority_label,
+                "majority_class_percent": majority_percent,
+                "exclusions_or_grouping": spec["notes"],
+            }
+        )
+
+        for raw_value, count in counts.sort_index().items():
+            class_records.append(
+                {
+                    "model": spec["model"],
+                    "target_column": target_column,
+                    "class": spec["class_labels"].get(raw_value, str(raw_value)),
+                    "raw_value": raw_value,
+                    "samples": int(count),
+                    "percent": round((int(count) / sample_count) * 100, 1)
+                    if sample_count
+                    else 0,
+                }
+            )
+
+    return pd.DataFrame.from_records(summary_records), pd.DataFrame.from_records(class_records)
+
+
+def normalize_list_target(value: object) -> str:
+    if isinstance(value, list):
+        labels = value
+    else:
+        try:
+            labels = ast.literal_eval(str(value))
+        except (SyntaxError, ValueError):
+            labels = []
+    labels = [str(label) for label in labels if str(label)]
+    if not labels:
+        return "NEGATIVE"
+    return " + ".join(labels)
+
+
+def series_balance_records(
+    *,
+    domain: str,
+    target_version: str,
+    target_column: str,
+    values: pd.Series,
+    notes: str,
+    top_n: int = 4,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    target = values.dropna()
+    counts = target.value_counts(dropna=False)
+    sample_count = int(target.shape[0])
+    class_count = int(target.nunique(dropna=True))
+    majority_count = int(counts.max()) if sample_count else 0
+    majority_class = str(counts.idxmax()) if sample_count else ""
+    majority_percent = round((majority_count / sample_count) * 100, 1) if sample_count else 0
+    top_classes = "; ".join(
+        f"{class_name}: {int(count):,}"
+        for class_name, count in counts.head(top_n).items()
+    )
+    summary = {
+        "domain": domain,
+        "target_version": target_version,
+        "target_column": target_column,
+        "samples": sample_count,
+        "classes": class_count,
+        "majority_class": majority_class,
+        "majority_class_count": majority_count,
+        "majority_class_percent": majority_percent,
+        "top_classes": top_classes,
+        "notes": notes,
+    }
+    class_records = [
+        {
+            "domain": domain,
+            "target_version": target_version,
+            "target_column": target_column,
+            "class": str(class_name),
+            "samples": int(count),
+            "percent": round((int(count) / sample_count) * 100, 1)
+            if sample_count
+            else 0,
+        }
+        for class_name, count in counts.items()
+    ]
+    return summary, class_records
+
+
+def raw_phenotype_target_from_sqlite(
+    filtered_df: pd.DataFrame,
+    sqlite_path: Path | None,
+) -> pd.Series | None:
+    if sqlite_path is None or not sqlite_path.exists():
+        return None
+
+    with sqlite3.connect(sqlite_path) as connection:
+        raw = pd.read_sql_query(
+            """
+            SELECT person_id, fecha_ingreso_urgencias, fenotipo_resistencia
+            FROM tbl_hemocultivo_de_urgencias
+            """,
+            connection,
+        )
+        code_names = pd.read_sql_query(
+            """
+            SELECT value, name
+            FROM tbl_codes2names
+            WHERE variable = 'fenotipo_resistencia'
+            """,
+            connection,
+        )
+
+    phenotype_name_map = {
+        str(row.value): str(row.name)
+        for row in code_names.itertuples(index=False)
+        if pd.notna(row.value) and pd.notna(row.name)
+    }
+
+    def decode_codes(values: pd.Series) -> str:
+        labels = []
+        for value in values.dropna():
+            try:
+                key = str(int(float(value)))
+            except (TypeError, ValueError):
+                key = str(value)
+            if key in phenotype_name_map:
+                labels.append(phenotype_name_map[key])
+        labels = sorted(set(labels))
+        if not labels:
+            return "NEGATIVE"
+        return " + ".join(labels)
+
+    grouped = (
+        raw.groupby(["person_id", "fecha_ingreso_urgencias"], dropna=False)[
+            "fenotipo_resistencia"
+        ]
+        .apply(decode_codes)
+        .reset_index(name="raw_fenotipo_resistencia")
+    )
+    merged = filtered_df[["person_id", "fecha_ingreso_urgencias"]].merge(
+        grouped,
+        on=["person_id", "fecha_ingreso_urgencias"],
+        how="left",
+    )
+    return merged["raw_fenotipo_resistencia"].fillna("NEGATIVE")
+
+
+def target_evolution_summary(
+    filtered_df: pd.DataFrame,
+    *,
+    sqlite_path: Path | None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    required_columns = {
+        "resultado_hemo",
+        "resultado_hemo_grouped",
+        "fenotipo_resistencia",
+        "resistente_cefalosporina",
+    }
+    missing_columns = sorted(required_columns - set(filtered_df.columns))
+    if missing_columns:
+        raise ValueError(
+            "Missing columns for target evolution summary: "
+            + ", ".join(missing_columns)
+        )
+
+    summaries: list[dict[str, object]] = []
+    class_records: list[dict[str, object]] = []
+
+    microorganism_column = (
+        "resultado_hemo_mo"
+        if "resultado_hemo_mo" in filtered_df.columns
+        else "resultado_hemo"
+    )
+    target_series = [
+        (
+            "Etiology",
+            "Microorganism target",
+            microorganism_column,
+            filtered_df[microorganism_column],
+            "Hemoculture microorganism target after clinician coinfection resolution.",
+        ),
+        (
+            "Etiology",
+            "Clinical organism grouping",
+            "resultado_hemo",
+            filtered_df["resultado_hemo"],
+            "Configured clinical organism grouping from the preprocessing pipeline.",
+        ),
+        (
+            "Etiology",
+            "Gram grouped",
+            "resultado_hemo_grouped",
+            filtered_df["resultado_hemo_grouped"],
+            "Pipeline target grouped into negative, Gram-negative bacillus, and Gram-positive coccus.",
+        ),
+    ]
+
+    if "fenotipo_resistencia_individual" in filtered_df.columns:
+        target_series.append(
+            (
+                "Resistance",
+                "Individual phenotype combinations",
+                "fenotipo_resistencia_individual",
+                filtered_df["fenotipo_resistencia_individual"].map(normalize_list_target),
+                "Individual resistance phenotype labels before antibiotic-family grouping.",
+            )
+        )
+    else:
+        raw_phenotype = raw_phenotype_target_from_sqlite(filtered_df, sqlite_path)
+        if raw_phenotype is not None:
+            target_series.append(
+                (
+                    "Resistance",
+                    "Individual phenotype combinations",
+                    "raw_fenotipo_resistencia",
+                    raw_phenotype,
+                    "Derived from SQLite hemoculture phenotype codes and decoded with tbl_codes2names.",
+                )
+            )
+    target_series.extend(
+        [
+            (
+                "Resistance",
+                "Antibiotic family combinations",
+                "fenotipo_resistencia",
+                filtered_df["fenotipo_resistencia"].map(normalize_list_target),
+                "Pipeline target after mapping raw resistance phenotypes to antibiotic families.",
+            ),
+            (
+                "Resistance",
+                "Cephalosporin yes/no",
+                "resistente_cefalosporina",
+                filtered_df["resistente_cefalosporina"],
+                "Final binary target: any cephalosporin 3a/4a resistance versus negative.",
+            ),
+        ]
+    )
+
+    for domain, version, column, series, notes in target_series:
+        summary, records = series_balance_records(
+            domain=domain,
+            target_version=version,
+            target_column=column,
+            values=series,
+            notes=notes,
+        )
+        summaries.append(summary)
+        class_records.extend(records)
+
+    return pd.DataFrame.from_records(summaries), pd.DataFrame.from_records(class_records)
+
+
+def count_change_variables(changes: list[dict[str, object]], field: str) -> int:
+    variables: set[str] = set()
+    non_column_targets = {"row_filter"}
+    for change in changes:
+        value = change.get(field, [])
+        values = value if isinstance(value, list) else [value]
+        for item in values:
+            if not item:
+                continue
+            variable = str(item)
+            if variable in non_column_targets:
+                continue
+            variables.add(variable)
+    return len(variables)
 
 
 def summarize_change_counts(detailed_logs: list[dict[str, Any]]) -> pd.DataFrame:
     records = []
     for log in detailed_logs:
+        created_variables = log.get("created_variables", [])
+        recoded_variables = log.get("recoded_variables", [])
+        transformed_variables = log.get("transformed_variables", [])
+        dropped_variables = log.get("dropped_variables", [])
         records.append(
             {
                 "table_name": log["table_name"],
-                "created": len(log.get("created_variables", [])),
-                "recoded": len(log.get("recoded_variables", [])),
-                "transformed": len(log.get("transformed_variables", [])),
-                "dropped": len(log.get("dropped_variables", [])),
+                "created": count_change_variables(created_variables, "target"),
+                "recoded": count_change_variables(recoded_variables, "target"),
+                "transformed": count_change_variables(transformed_variables, "target"),
+                "dropped": count_change_variables(dropped_variables, "source"),
                 "warnings": len(log.get("warnings", [])),
                 "notes": len(log.get("notes", [])),
             }
@@ -162,6 +1073,10 @@ def write_markdown_report(
     detailed_logs: list[dict[str, Any]],
     full_df: pd.DataFrame | None,
     filtered_df: pd.DataFrame | None,
+    target_summary: pd.DataFrame | None,
+    target_class_counts: pd.DataFrame | None,
+    evolution_summary: pd.DataFrame | None,
+    evolution_class_counts: pd.DataFrame | None,
     chart_paths: dict[str, Path],
 ) -> None:
     filtered_row = summary.loc[summary["table_name"] == "filtered_dataset"]
@@ -219,16 +1134,82 @@ def write_markdown_report(
             "",
             f"![Columns before and after preprocessing stage]({chart_paths['columns'].name})",
             "",
-            f"![Logged preprocessing operations by stage]({chart_paths['changes'].name})",
+            f"![Preprocessing variables by stage]({chart_paths['changes'].name})",
             "",
             f"![Missingness in filtered variables]({chart_paths['missingness'].name})",
             "",
-            "## Most Feature-Creating Steps",
+            f"![Grouped missingness for slides]({chart_paths['grouped_missingness'].name})",
+            "",
+            f"![Variable distribution by group]({chart_paths['variable_distribution'].name})",
+            "",
+            "## Most Feature-Creating Stages",
             "",
         ]
     )
     for item in top_created:
-        lines.append(f"- `{item['table_name']}`: `{item['created']}` created-variable log entries")
+        lines.append(f"- `{item['table_name']}`: `{item['created']}` created variables")
+
+    lines.extend(["", "## Predictive Targets", ""])
+    if target_summary is not None and target_class_counts is not None:
+        lines.extend(
+            [
+                "| Model | Target column | Samples | Classes | Majority class | Majority class % |",
+                "|---|---|---:|---:|---|---:|",
+            ]
+        )
+        for _, row in target_summary.iterrows():
+            lines.append(
+                f"| {row['model']} | `{row['target_column']}` | "
+                f"{int(row['samples']):,} | {int(row['classes'])} | "
+                f"{row['majority_class']} | {row['majority_class_percent']}% |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "| Model | Class | Samples | % within target |",
+                "|---|---|---:|---:|",
+            ]
+        )
+        for _, row in target_class_counts.iterrows():
+            lines.append(
+                f"| {row['model']} | {row['class']} | "
+                f"{int(row['samples']):,} | {row['percent']}% |"
+            )
+
+        lines.extend(
+            [
+                "",
+                "| Model | Exclusions or grouping |",
+                "|---|---|",
+            ]
+        )
+        for _, row in target_summary.iterrows():
+            lines.append(f"| {row['model']} | {row['exclusions_or_grouping']} |")
+    else:
+        lines.append("- Filtered dataset was not provided, so target summaries were not computed.")
+
+    lines.extend(["", "## Target Evolution", ""])
+    if evolution_summary is not None and evolution_class_counts is not None:
+        lines.extend(
+            [
+                "| Domain | Target version | Target column | Samples | Classes | Majority class | Majority class % | Top classes |",
+                "|---|---|---|---:|---:|---|---:|---|",
+            ]
+        )
+        for _, row in evolution_summary.iterrows():
+            lines.append(
+                f"| {row['domain']} | {row['target_version']} | "
+                f"`{row['target_column']}` | {int(row['samples']):,} | "
+                f"{int(row['classes'])} | {row['majority_class']} | "
+                f"{row['majority_class_percent']}% | {row['top_classes']} |"
+            )
+
+        lines.extend(["", "| Domain | Target version | Notes |", "|---|---|---|"])
+        for _, row in evolution_summary.iterrows():
+            lines.append(f"| {row['domain']} | {row['target_version']} | {row['notes']} |")
+    else:
+        lines.append("- Filtered dataset was not provided, so target evolution was not computed.")
 
     lines.extend(["", "## Warnings", ""])
     if warnings:
@@ -264,6 +1245,7 @@ def build_report(
     detailed_log_path: Path,
     full_dataset_path: Path | None,
     filtered_dataset_path: Path | None,
+    sqlite_path: Path | None,
     output_dir: Path,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -282,6 +1264,10 @@ def build_report(
     columns_chart = output_dir / "columns_by_stage.png"
     changes_chart = output_dir / "logged_operations_by_stage.png"
     missingness_chart = output_dir / "filtered_missingness.png"
+    grouped_missingness_chart = output_dir / "filtered_missingness_grouped_for_slides.png"
+    variable_distribution_chart = (
+        output_dir / "variable_distribution_filtered_vs_unfiltered.png"
+    )
 
     write_before_after_chart_png(
         summary,
@@ -304,6 +1290,48 @@ def build_report(
     write_stacked_change_chart_png(change_counts, output_path=changes_chart)
     if filtered_df is not None:
         write_missingness_chart_png(filtered_df, output_path=missingness_chart)
+        grouped_missingness = write_grouped_missingness_chart_png(
+            filtered_df,
+            output_path=grouped_missingness_chart,
+        )
+        grouped_missingness.to_csv(
+            output_dir / "grouped_missingness_for_slides.csv",
+            index=False,
+        )
+    if full_df is not None and filtered_df is not None:
+        variable_distribution = variable_distribution_filtered_vs_unfiltered(
+            full_df=full_df,
+            filtered_df=filtered_df,
+            detailed_logs=detailed_logs,
+        )
+        write_variable_distribution_chart_png(
+            variable_distribution,
+            output_path=variable_distribution_chart,
+        )
+        variable_distribution.to_csv(
+            output_dir / "variable_distribution_filtered_vs_unfiltered.csv",
+            index=False,
+        )
+    target_summary = None
+    target_class_counts = None
+    evolution_summary = None
+    evolution_class_counts = None
+    if filtered_df is not None:
+        target_summary, target_class_counts = predictive_target_summary(filtered_df)
+        target_summary.to_csv(output_dir / "predictive_targets_summary.csv", index=False)
+        target_class_counts.to_csv(
+            output_dir / "predictive_targets_class_counts.csv",
+            index=False,
+        )
+        evolution_summary, evolution_class_counts = target_evolution_summary(
+            filtered_df,
+            sqlite_path=sqlite_path,
+        )
+        evolution_summary.to_csv(output_dir / "target_evolution_summary.csv", index=False)
+        evolution_class_counts.to_csv(
+            output_dir / "target_evolution_class_counts.csv",
+            index=False,
+        )
 
     change_counts.to_csv(output_dir / "change_counts_by_stage.csv", index=False)
     write_markdown_report(
@@ -313,11 +1341,17 @@ def build_report(
         detailed_logs=detailed_logs,
         full_df=full_df,
         filtered_df=filtered_df,
+        target_summary=target_summary,
+        target_class_counts=target_class_counts,
+        evolution_summary=evolution_summary,
+        evolution_class_counts=evolution_class_counts,
         chart_paths={
             "rows": rows_chart,
             "columns": columns_chart,
             "changes": changes_chart,
             "missingness": missingness_chart,
+            "grouped_missingness": grouped_missingness_chart,
+            "variable_distribution": variable_distribution_chart,
         },
     )
 
@@ -330,6 +1364,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--detailed-log-path", type=Path, default=DEFAULT_DETAILED_LOG_PATH)
     parser.add_argument("--full-dataset-path", type=Path, default=DEFAULT_FULL_DATASET_PATH)
     parser.add_argument("--filtered-dataset-path", type=Path, default=DEFAULT_FILTERED_DATASET_PATH)
+    parser.add_argument("--sqlite-path", type=Path, default=DEFAULT_SQLITE_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 
@@ -341,6 +1376,7 @@ def main() -> None:
         detailed_log_path=args.detailed_log_path,
         full_dataset_path=args.full_dataset_path,
         filtered_dataset_path=args.filtered_dataset_path,
+        sqlite_path=args.sqlite_path,
         output_dir=args.output_dir,
     )
 
