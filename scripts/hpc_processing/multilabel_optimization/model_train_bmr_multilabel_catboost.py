@@ -96,7 +96,7 @@ DELETE_COLUMNS = {
     "mujer_gestante",
 }
 
-TARGET_REMOVE = ["sepsis", "resultado_hemo", "infected_yes_no", "bmr_etiologia", "fenotipo_resistencia", "resistente_cefalosporina"]
+TARGET_REMOVE = ["sepsis", "resultado_hemo", "resultado_hemo_mo", "infected_yes_no", "bmr_etiologia", "fenotipo_resistencia", "fenotipo_resistencia_individual", "resistente_cefalosporina"]
 
 FOCUS_TO_EXCLUDE = {
     "piel",

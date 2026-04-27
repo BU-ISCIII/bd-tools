@@ -62,7 +62,7 @@ FOCUS_MAP = {
     12: "desconocido",
 }
 
-TARGET_REMOVE = ["sepsis", "resultado_hemo", "resultado_hemo_grouped", "all_cult_org", "infected_yes_no", "bmr_etiologia", "fenotipo_resistencia", "resistente_cefalosporina"]
+TARGET_REMOVE = ["sepsis", "resultado_hemo", "resultado_hemo_mo", "resultado_hemo_grouped", "all_cult_org", "infected_yes_no", "bmr_etiologia", "fenotipo_resistencia", "fenotipo_resistencia_individual", "resistente_cefalosporina"]
 
 DELETE_COLUMNS = ["qsofa", "vasopresores", "hipotension", "freq_bacteria", "freq_bac_foco", "Unnamed: 0", "person_id", "fecha_ingreso_urgencias", "fecha_ingreso_urgencias_x", "shock_septico", "sintoma_nan", "fecha_nacimiento", "codigo_postal", "center", "dag", "mujer_gestante"]
 

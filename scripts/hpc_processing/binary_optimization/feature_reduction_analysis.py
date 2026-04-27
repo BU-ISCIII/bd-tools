@@ -63,9 +63,17 @@ FOCUS_MAP = {
 }
 
 TARGET_REMOVE = [
-    "sepsis", "resultado_hemo", "resultado_hemo_grouped", "all_cult_org",
-    "infected_yes_no", "bmr_etiologia", "fenotipo_resistencia",
-    "fenotipo_resistencia_grouped", "resistente_cefalosporina",
+    "sepsis",
+    "resultado_hemo",
+    "resultado_hemo_mo",
+    "resultado_hemo_grouped",
+    "all_cult_org",
+    "infected_yes_no",
+    "bmr_etiologia",
+    "fenotipo_resistencia",
+    "fenotipo_resistencia_individual",
+    "fenotipo_resistencia_grouped",
+    "resistente_cefalosporina",
 ]
 
 DELETE_COLUMNS = [
