@@ -1,0 +1,225 @@
+domain,target_version,target_column,class,samples,percent
+Etiology,Microorganism target,resultado_hemo_mo,NEGATIVE,2067,52.8
+Etiology,Microorganism target,resultado_hemo_mo,Escherichia coli,836,21.4
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella pneumoniae,201,5.1
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus aureus,168,4.3
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus pneumoniae,106,2.7
+Etiology,Microorganism target,resultado_hemo_mo,Pseudomonas aeruginosa,83,2.1
+Etiology,Microorganism target,resultado_hemo_mo,Proteus mirabilis,39,1.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterobacter cloacae,37,0.9
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus epidermidis,33,0.8
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus faecalis,32,0.8
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus hominis,31,0.8
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella oxytoca,28,0.7
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus faecium,17,0.4
+Etiology,Microorganism target,resultado_hemo_mo,Salmonella enterica,13,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella aerogenes,10,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Serratia marcescens,10,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter freundii,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Haemophilus influenzae,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus agalactiae,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter koseri,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Bacteroides fragilis,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus gallolyticus,7,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus anginosus,6,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Morganella morganii,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus capitis,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus mitis,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus haemolyticus,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Listeria monocytogenes,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium afermentans,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Salmonella,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus oralis,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Streptococcus,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus parasanguinis,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Candida glabrata,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Fusobacterium nucleatum,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Providencia stuartii,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus dysgalactiae,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Brevibacterium epidermidis,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Clostridium perfringens,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Candida parapsilosis,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Brevibacillus,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Candida albicans,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium striatum,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Elizabethkingia,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus sanguinis,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Parvimonas micra,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus equi,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Micrococcus luteus,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus beta - hemolítico,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Bacteroides thetaiotaomicron,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Peptoniphilus harei,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter youngae,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Eggerthella lenta,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus pyogenes,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Micrococcus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pseudomonas stutzeri,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus constellatus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pseudomonas fluorescens,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Staphylococcus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium jeikeium,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Prevotella denticola,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Bacteroides,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Proteus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Schaalia odontolytica,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterobacter asburiae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Bacillus thuringiensis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Morganella,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus durans,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus lutetiensis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,"Staphylococcus, coagulasa negativo",1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Capnocytophaga canimorsus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter farmeri,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella variicola,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium mucifaciens,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Bacillus cereus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Neisseria meningitidis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Acinetobacter haemolyticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Facklamia languida,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Brevibacillus agri,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,familia Enterobacteriaceae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Thomasclavelia ramosa,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Aerococcus urinae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Moraxella osloensis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Clostridium paraputrificum,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Brachybacterium muris,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus equinus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,cocobacilo anaeróbico grampositivo,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Peptoniphilus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Odoribacter splanchnicus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Roseomonas mucosa,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Acinetobacter pittii,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Campylobacter fetus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Campylobacter jejuni,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus saprophyticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pasteurella multocida,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Vibrio parahaemolyticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Enterobacter,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus avium,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Abiotrophia defectiva,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus gallinarum,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Anaerococcus vaginalis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Arthrobacter,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Acinetobacter lwoffii,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Aeromonas caviae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Raoultella ornithinolytica,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Clostridium tertium,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Aeromonas hydrophila,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pantoea agglomerans,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter amalonaticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Providencia rettgeri,1,0.0
+Etiology,Clinical organism grouping,resultado_hemo,NEGATIVE,2072,53.0
+Etiology,Clinical organism grouping,resultado_hemo,Escherichia coli,850,21.7
+Etiology,Clinical organism grouping,resultado_hemo,Klebsiella pneumoniae,210,5.4
+Etiology,Clinical organism grouping,resultado_hemo,_Other bacteria,198,5.1
+Etiology,Clinical organism grouping,resultado_hemo,_Enterobacteria,176,4.5
+Etiology,Clinical organism grouping,resultado_hemo,Staphylococcus aureus,171,4.4
+Etiology,Clinical organism grouping,resultado_hemo,Streptococcus pneumoniae,106,2.7
+Etiology,Clinical organism grouping,resultado_hemo,Pseudomonas aeruginosa,84,2.1
+Etiology,Clinical organism grouping,resultado_hemo,Enterococcus,39,1.0
+Etiology,Clinical organism grouping,resultado_hemo,_Fungi,7,0.2
+Etiology,Gram grouped,resultado_hemo_grouped,NEGATIVE,2277,58.2
+Etiology,Gram grouped,resultado_hemo_grouped,Bacilo gram-,1320,33.7
+Etiology,Gram grouped,resultado_hemo_grouped,Coco gram+,316,8.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,NEGATIVE,3152,80.6
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico,153,3.9
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Coco Gram positivo resistente a ampicilina o penicilina,98,2.5
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino,67,1.7
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a piperacilina/tazobactam,50,1.3
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino,48,1.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Coco Gram positivo resistente a meticilina,33,0.8
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,31,0.8
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,29,0.7
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,28,0.7
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Coco Gram positivo resistente a ampicilina o penicilina + Coco Gram positivo resistente a meticilina,24,0.6
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,17,0.4
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima,12,0.3
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina,10,0.3
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,9,0.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftrixona o cefotaxima,9,0.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a piperacilina/tazobactam,8,0.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Coco Gram positivo resistente a ampicilina o penicilina,7,0.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,7,0.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftrixona o cefotaxima,6,0.2
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina,5,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima,5,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam,5,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima,4,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,4,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina,4,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,4,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina,4,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam,4,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Coco Gram positivo resistente a ampicilina o penicilina,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a piperacilina/tazobactam,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,3,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a meropenem,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ciprofloxacino,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftolozano/tazobactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Coco Gram positivo resistente a ampicilina o penicilina + Coco Gram positivo resistente a vancomicina,2,0.1
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ciprofloxacino,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftolozano/tazobactam + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ciprofloxacino,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftolozano/tazobactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a piperacilina/tazobactam,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Coco Gram positivo resistente a ampicilina o penicilina,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Coco Gram positivo resistente a meticilina,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino,1,0.0
+Resistance,Individual phenotype combinations,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina,1,0.0
+Resistance,Antibiotic family combinations,fenotipo_resistencia,NEGATIVE,3152,80.6
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Penicilinas,377,9.6
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Cefalosporinas 4 gen + Penicilinas + Quinolonas,88,2.2
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Penicilinas + Quinolonas,75,1.9
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Quinolonas,67,1.7
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Cefalosporinas 4 gen + Quinolonas,36,0.9
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Penicilinas + Quinolonas,25,0.6
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Penicilinas,21,0.5
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Cefalosporinas 4 gen + Penicilinas,20,0.5
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Cefalosporinas 4 gen,12,0.3
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen + Quinolonas,10,0.3
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 3 gen,7,0.2
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 4 gen + Penicilinas + Quinolonas,4,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 4 gen + Penicilinas,3,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas + Cefalosporinas 3 gen + Cefalosporinas 4 gen + Penicilinas + Quinolonas,3,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas,2,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas + Cefalosporinas 3 gen + Quinolonas,2,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Glicopéptidos + Penicilinas,2,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 4 gen + Quinolonas,2,0.1
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas + Penicilinas + Quinolonas,1,0.0
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas + Cefalosporinas 3 gen + Penicilinas + Quinolonas,1,0.0
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas + Penicilinas,1,0.0
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Carbapenemas + Quinolonas,1,0.0
+Resistance,Antibiotic family combinations,fenotipo_resistencia,Cefalosporinas 4 gen,1,0.0
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,NEGATIVE,3678,94.0
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,RESIST_CEFALOSPORINAS_3a_4a,235,6.0
