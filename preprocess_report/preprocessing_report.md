@@ -78,6 +78,218 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 | Resistance | Antibiotic family combinations | Pipeline target after mapping raw resistance phenotypes to antibiotic families. |
 | Resistance | Cephalosporin yes/no | Final binary target: any cephalosporin 3a/4a resistance versus negative. |
 
+## Prediction Target Details
+
+### Sepsis
+
+Binary sepsis prediction target.
+
+- Dataset shape: `3,913` rows x `215` columns
+- Target column: `sepsis`
+- Classes: `2`
+
+| Class | Rows | % within target |
+|---|---:|---:|
+| Sepsis (-) | 1,989 | 50.8% |
+| Sepsis (+) | 1,924 | 49.2% |
+
+### Etiology - microorganisms
+
+Original microorganism target before clinical grouping; shown as top 50 classes plus Other.
+
+- Dataset shape: `3,913` rows x `215` columns
+- Target column: `resultado_hemo_mo`
+- Classes: `110`
+
+| Class | Rows | % within target |
+|---|---:|---:|
+| NEGATIVE | 2,067 | 52.8% |
+| Escherichia coli | 836 | 21.4% |
+| Klebsiella pneumoniae | 201 | 5.1% |
+| Staphylococcus aureus | 168 | 4.3% |
+| Streptococcus pneumoniae | 106 | 2.7% |
+| Pseudomonas aeruginosa | 83 | 2.1% |
+| Proteus mirabilis | 39 | 1.0% |
+| Enterobacter cloacae | 37 | 0.9% |
+| Staphylococcus epidermidis | 33 | 0.8% |
+| Enterococcus faecalis | 32 | 0.8% |
+| Staphylococcus hominis | 31 | 0.8% |
+| Klebsiella oxytoca | 28 | 0.7% |
+| Enterococcus faecium | 17 | 0.4% |
+| Salmonella enterica | 13 | 0.3% |
+| Klebsiella aerogenes | 10 | 0.3% |
+| Serratia marcescens | 10 | 0.3% |
+| Citrobacter freundii | 8 | 0.2% |
+| Haemophilus influenzae | 8 | 0.2% |
+| Streptococcus agalactiae | 8 | 0.2% |
+| Citrobacter koseri | 8 | 0.2% |
+| Bacteroides fragilis | 8 | 0.2% |
+| Streptococcus gallolyticus | 7 | 0.2% |
+| Streptococcus anginosus | 6 | 0.2% |
+| Morganella morganii | 5 | 0.1% |
+| Staphylococcus capitis | 5 | 0.1% |
+| Streptococcus mitis | 5 | 0.1% |
+| Staphylococcus haemolyticus | 5 | 0.1% |
+| Listeria monocytogenes | 4 | 0.1% |
+| Corynebacterium afermentans | 4 | 0.1% |
+| género Salmonella | 4 | 0.1% |
+| Streptococcus oralis | 4 | 0.1% |
+| género Streptococcus | 4 | 0.1% |
+| Streptococcus parasanguinis | 4 | 0.1% |
+| Candida glabrata | 4 | 0.1% |
+| Fusobacterium nucleatum | 3 | 0.1% |
+| Providencia stuartii | 3 | 0.1% |
+| Streptococcus dysgalactiae | 3 | 0.1% |
+| Brevibacterium epidermidis | 3 | 0.1% |
+| Clostridium perfringens | 3 | 0.1% |
+| Candida parapsilosis | 2 | 0.1% |
+| género Brevibacillus | 2 | 0.1% |
+| Candida albicans | 2 | 0.1% |
+| Corynebacterium striatum | 2 | 0.1% |
+| género Elizabethkingia | 2 | 0.1% |
+| Streptococcus sanguinis | 2 | 0.1% |
+| Parvimonas micra | 2 | 0.1% |
+| Streptococcus equi | 2 | 0.1% |
+| Micrococcus luteus | 2 | 0.1% |
+| Streptococcus beta - hemolítico | 2 | 0.1% |
+| Bacteroides thetaiotaomicron | 2 | 0.1% |
+| Other | 64 | 1.6% |
+
+### Resistance - individual phenotypes
+
+Individual resistance phenotype combinations before antibiotic-family grouping.
+
+- Dataset shape: `3,913` rows x `215` columns
+- Target column: `fenotipo_resistencia_individual`
+- Classes: `75`
+
+| Class | Rows | % within target |
+|---|---:|---:|
+| NEGATIVE | 3,152 | 80.6% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico | 153 | 3.9% |
+| Coco Gram positivo resistente a ampicilina o penicilina | 98 | 2.5% |
+| Bacilo Gram negativo resistente a ciprofloxacino | 67 | 1.7% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a piperacilina/tazobactam | 50 | 1.3% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino | 48 | 1.2% |
+| Coco Gram positivo resistente a meticilina | 33 | 0.8% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 31 | 0.8% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 29 | 0.7% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 28 | 0.7% |
+| Coco Gram positivo resistente a ampicilina o penicilina + Coco Gram positivo resistente a meticilina | 24 | 0.6% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 17 | 0.4% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 12 | 0.3% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina | 10 | 0.3% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 9 | 0.2% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 9 | 0.2% |
+| Bacilo Gram negativo resistente a piperacilina/tazobactam | 8 | 0.2% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Coco Gram positivo resistente a ampicilina o penicilina | 7 | 0.2% |
+| Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 7 | 0.2% |
+| Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 6 | 0.2% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina | 5 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 5 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 5 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 4 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 4 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina | 4 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 4 | 0.1% |
+| Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina | 4 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 4 | 0.1% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 3 | 0.1% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Coco Gram positivo resistente a ampicilina o penicilina | 3 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 3 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 3 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 3 | 0.1% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Coco Gram positivo resistente a ampicilina o penicilina | 3 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina | 3 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 3 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 3 | 0.1% |
+| Bacilo Gram negativo resistente a meropenem | 2 | 0.1% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ciprofloxacino | 2 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 2 | 0.1% |
+| Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem | 2 | 0.1% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 2 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam | 2 | 0.1% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino | 2 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina | 2 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftolozano/tazobactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 2 | 0.1% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima | 2 | 0.1% |
+| Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 2 | 0.1% |
+| Coco Gram positivo resistente a ampicilina o penicilina + Coco Gram positivo resistente a vancomicina | 2 | 0.1% |
+| Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ciprofloxacino | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a meropenem + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a meropenem | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftolozano/tazobactam + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima | 1 | 0.0% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 1 | 0.0% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ciprofloxacino | 1 | 0.0% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftolozano/tazobactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ceftazidima/avibactam + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina | 1 | 0.0% |
+| Bacilo Gram negativo resistente a cefepima | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a ciprofloxacino + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a piperacilina/tazobactam | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Coco Gram positivo resistente a ampicilina o penicilina | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Coco Gram positivo resistente a meticilina | 1 | 0.0% |
+| Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ciprofloxacino | 1 | 0.0% |
+| Bacilo Gram negativo resistente a amoxicilina/clavulánico + Bacilo Gram negativo resistente a cefepima + Bacilo Gram negativo resistente a ceftazidima + Bacilo Gram negativo resistente a ceftrixona o cefotaxima + Bacilo Gram negativo resistente a piperacilina/tazobactam + Coco Gram positivo resistente a ampicilina o penicilina | 1 | 0.0% |
+
+### Resistance - antibiotic families
+
+Resistance phenotypes grouped into antibiotic-family combinations.
+
+- Dataset shape: `3,913` rows x `215` columns
+- Target column: `fenotipo_resistencia`
+- Classes: `24`
+
+| Class | Rows | % within target |
+|---|---:|---:|
+| NEGATIVE | 3,152 | 80.6% |
+| Penicilinas | 377 | 9.6% |
+| Cefalosporinas 3 gen + Cefalosporinas 4 gen + Penicilinas + Quinolonas | 88 | 2.2% |
+| Penicilinas + Quinolonas | 75 | 1.9% |
+| Quinolonas | 67 | 1.7% |
+| Cefalosporinas 3 gen + Cefalosporinas 4 gen + Quinolonas | 36 | 0.9% |
+| Cefalosporinas 3 gen + Penicilinas + Quinolonas | 25 | 0.6% |
+| Cefalosporinas 3 gen + Penicilinas | 21 | 0.5% |
+| Cefalosporinas 3 gen + Cefalosporinas 4 gen + Penicilinas | 20 | 0.5% |
+| Cefalosporinas 3 gen + Cefalosporinas 4 gen | 12 | 0.3% |
+| Cefalosporinas 3 gen + Quinolonas | 10 | 0.3% |
+| Cefalosporinas 3 gen | 7 | 0.2% |
+| Cefalosporinas 4 gen + Penicilinas + Quinolonas | 4 | 0.1% |
+| Cefalosporinas 4 gen + Penicilinas | 3 | 0.1% |
+| Carbapenemas + Cefalosporinas 3 gen + Cefalosporinas 4 gen + Penicilinas + Quinolonas | 3 | 0.1% |
+| Carbapenemas | 2 | 0.1% |
+| Carbapenemas + Cefalosporinas 3 gen + Quinolonas | 2 | 0.1% |
+| Glicopéptidos + Penicilinas | 2 | 0.1% |
+| Cefalosporinas 4 gen + Quinolonas | 2 | 0.1% |
+| Carbapenemas + Penicilinas + Quinolonas | 1 | 0.0% |
+| Carbapenemas + Cefalosporinas 3 gen + Penicilinas + Quinolonas | 1 | 0.0% |
+| Carbapenemas + Penicilinas | 1 | 0.0% |
+| Carbapenemas + Quinolonas | 1 | 0.0% |
+| Cefalosporinas 4 gen | 1 | 0.0% |
+
+### Resistance - cephalosporins
+
+Final binary cephalosporin resistance target.
+
+- Dataset shape: `3,913` rows x `215` columns
+- Target column: `resistente_cefalosporina`
+- Classes: `2`
+
+| Class | Rows | % within target |
+|---|---:|---:|
+| Not resistant | 3,678 | 94.0% |
+| Resistant to cephalosporins 3a/4a | 235 | 6.0% |
+
+
 ## Warnings
 
 - `tbl_hemocultivo_de_urgencias`: 43 person_id/id_hemocultivo groups have conflicting bmr_etiologia values; aggregation uses max.

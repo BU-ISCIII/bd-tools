@@ -1019,6 +1019,145 @@ def target_evolution_summary(
     return pd.DataFrame.from_records(summaries), pd.DataFrame.from_records(class_records)
 
 
+def class_count_records(
+    *,
+    section: str,
+    target_column: str,
+    values: pd.Series,
+    class_labels: dict[object, str] | None = None,
+    top_n: int | None = None,
+    other_label: str = "Other",
+) -> list[dict[str, object]]:
+    target = values.dropna()
+    counts = target.value_counts(dropna=False)
+    sample_count = int(target.shape[0])
+
+    rows: list[dict[str, object]] = []
+    count_items = list(counts.items())
+    if top_n is not None and len(count_items) > top_n:
+        displayed_items = count_items[:top_n]
+        other_count = sum(int(count) for _, count in count_items[top_n:])
+        displayed_items.append((other_label, other_count))
+    else:
+        displayed_items = count_items
+
+    for class_value, count in displayed_items:
+        class_name = (
+            class_labels.get(class_value, str(class_value))
+            if class_labels is not None
+            else str(class_value)
+        )
+        rows.append(
+            {
+                "section": section,
+                "target_column": target_column,
+                "class": class_name,
+                "rows": int(count),
+                "percent": round((int(count) / sample_count) * 100, 1)
+                if sample_count
+                else 0,
+            }
+        )
+    return rows
+
+
+def prediction_detail_tables(
+    filtered_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    row_count = len(filtered_df)
+    column_count = len(filtered_df.columns)
+    required_columns = {
+        "sepsis",
+        "resultado_hemo_mo",
+        "fenotipo_resistencia_individual",
+        "fenotipo_resistencia",
+        "resistente_cefalosporina",
+    }
+    missing_columns = sorted(required_columns - set(filtered_df.columns))
+    if missing_columns:
+        raise ValueError(
+            "Missing columns for prediction detail tables: "
+            + ", ".join(missing_columns)
+        )
+
+    specs = [
+        {
+            "section": "Sepsis",
+            "description": "Binary sepsis prediction target.",
+            "target_column": "sepsis",
+            "values": filtered_df["sepsis"],
+            "class_labels": {
+                0: "Sepsis (-)",
+                1: "Sepsis (+)",
+                "0": "Sepsis (-)",
+                "1": "Sepsis (+)",
+            },
+            "top_n": None,
+        },
+        {
+            "section": "Etiology - microorganisms",
+            "description": "Original microorganism target before clinical grouping; shown as top 50 classes plus Other.",
+            "target_column": "resultado_hemo_mo",
+            "values": filtered_df["resultado_hemo_mo"],
+            "class_labels": None,
+            "top_n": 50,
+        },
+        {
+            "section": "Resistance - individual phenotypes",
+            "description": "Individual resistance phenotype combinations before antibiotic-family grouping.",
+            "target_column": "fenotipo_resistencia_individual",
+            "values": filtered_df["fenotipo_resistencia_individual"].map(normalize_list_target),
+            "class_labels": None,
+            "top_n": None,
+        },
+        {
+            "section": "Resistance - antibiotic families",
+            "description": "Resistance phenotypes grouped into antibiotic-family combinations.",
+            "target_column": "fenotipo_resistencia",
+            "values": filtered_df["fenotipo_resistencia"].map(normalize_list_target),
+            "class_labels": None,
+            "top_n": None,
+        },
+        {
+            "section": "Resistance - cephalosporins",
+            "description": "Final binary cephalosporin resistance target.",
+            "target_column": "resistente_cefalosporina",
+            "values": filtered_df["resistente_cefalosporina"],
+            "class_labels": {
+                "NEGATIVE": "Not resistant",
+                "RESIST_CEFALOSPORINAS_3a_4a": "Resistant to cephalosporins 3a/4a",
+            },
+            "top_n": None,
+        },
+    ]
+
+    summary_records = []
+    class_records = []
+    for spec in specs:
+        values = spec["values"].dropna()
+        summary_records.append(
+            {
+                "section": spec["section"],
+                "description": spec["description"],
+                "target_column": spec["target_column"],
+                "rows": row_count,
+                "columns": column_count,
+                "classes": int(values.nunique(dropna=True)),
+            }
+        )
+        class_records.extend(
+            class_count_records(
+                section=spec["section"],
+                target_column=spec["target_column"],
+                values=values,
+                class_labels=spec["class_labels"],
+                top_n=spec["top_n"],
+            )
+        )
+
+    return pd.DataFrame.from_records(summary_records), pd.DataFrame.from_records(class_records)
+
+
 def count_change_variables(changes: list[dict[str, object]], field: str) -> int:
     variables: set[str] = set()
     non_column_targets = {"row_filter"}
@@ -1077,6 +1216,8 @@ def write_markdown_report(
     target_class_counts: pd.DataFrame | None,
     evolution_summary: pd.DataFrame | None,
     evolution_class_counts: pd.DataFrame | None,
+    prediction_detail_summary: pd.DataFrame | None,
+    prediction_detail_class_counts: pd.DataFrame | None,
     chart_paths: dict[str, Path],
 ) -> None:
     filtered_row = summary.loc[summary["table_name"] == "filtered_dataset"]
@@ -1211,6 +1352,39 @@ def write_markdown_report(
     else:
         lines.append("- Filtered dataset was not provided, so target evolution was not computed.")
 
+    lines.extend(["", "## Prediction Target Details", ""])
+    if (
+        prediction_detail_summary is not None
+        and prediction_detail_class_counts is not None
+    ):
+        for _, section_row in prediction_detail_summary.iterrows():
+            section = section_row["section"]
+            lines.extend(
+                [
+                    f"### {section}",
+                    "",
+                    section_row["description"],
+                    "",
+                    f"- Dataset shape: `{int(section_row['rows']):,}` rows x `{int(section_row['columns']):,}` columns",
+                    f"- Target column: `{section_row['target_column']}`",
+                    f"- Classes: `{int(section_row['classes']):,}`",
+                    "",
+                    "| Class | Rows | % within target |",
+                    "|---|---:|---:|",
+                ]
+            )
+            class_rows = prediction_detail_class_counts.loc[
+                prediction_detail_class_counts["section"] == section
+            ]
+            for _, class_row in class_rows.iterrows():
+                lines.append(
+                    f"| {class_row['class']} | {int(class_row['rows']):,} | "
+                    f"{class_row['percent']}% |"
+                )
+            lines.append("")
+    else:
+        lines.append("- Filtered dataset was not provided, so prediction detail tables were not computed.")
+
     lines.extend(["", "## Warnings", ""])
     if warnings:
         for table_name, warning in warnings:
@@ -1316,6 +1490,8 @@ def build_report(
     target_class_counts = None
     evolution_summary = None
     evolution_class_counts = None
+    prediction_detail_summary = None
+    prediction_detail_class_counts = None
     if filtered_df is not None:
         target_summary, target_class_counts = predictive_target_summary(filtered_df)
         target_summary.to_csv(output_dir / "predictive_targets_summary.csv", index=False)
@@ -1332,6 +1508,17 @@ def build_report(
             output_dir / "target_evolution_class_counts.csv",
             index=False,
         )
+        prediction_detail_summary, prediction_detail_class_counts = (
+            prediction_detail_tables(filtered_df)
+        )
+        prediction_detail_summary.to_csv(
+            output_dir / "prediction_detail_summary.csv",
+            index=False,
+        )
+        prediction_detail_class_counts.to_csv(
+            output_dir / "prediction_detail_class_counts.csv",
+            index=False,
+        )
 
     change_counts.to_csv(output_dir / "change_counts_by_stage.csv", index=False)
     write_markdown_report(
@@ -1345,6 +1532,8 @@ def build_report(
         target_class_counts=target_class_counts,
         evolution_summary=evolution_summary,
         evolution_class_counts=evolution_class_counts,
+        prediction_detail_summary=prediction_detail_summary,
+        prediction_detail_class_counts=prediction_detail_class_counts,
         chart_paths={
             "rows": rows_chart,
             "columns": columns_chart,
