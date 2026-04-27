@@ -169,3 +169,8 @@ cython_debug/
 #.idea/
 .~lock.preprocess_test.csv#
 .codex
+csv_comparison_report/differences_after_name_normalization.csv
+csv_comparison_report/columns_in_repo_not_in_source_after_name_normalization.csv
+csv_comparison_report/columns_in_source_not_in_repo_after_name_normalization.csv
+20260413_df_merged_full_multilabel_grouped.csv
+ANALYSIS_GUIDE_README.md
