@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import ast
 import json
+import math
 import re
 import zipfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -18,12 +20,41 @@ DETAILED_LOG = ROOT / "preprocess_test_log_detailed.json"
 OUTPUT_XLSX = ROOT / "report" / "tables" / "clinician_variable_dictionary.xlsx"
 
 
-HEADERS = ["variable name", "description. how it's been created/transformed/recoded...", "dropped (yes/no)", "notes"]
+HEADERS = [
+    "variable name",
+    "type",
+    "number of classes",
+    "data type",
+    "missing %",
+    "min",
+    "median",
+    "max",
+    "number of options",
+    "dominant option",
+    "dominant option %",
+    "top 3 options",
+    "description. how it's been created/transformed/recoded...",
+    "dropped (yes/no)",
+    "notes",
+]
 
 
 def read_header(path: Path) -> list[str]:
     with path.open(newline="", encoding="utf-8") as handle:
         return next(csv.reader(handle))
+
+
+def read_csv_columns(path: Path) -> tuple[list[str], dict[str, list[str]]]:
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        if reader.fieldnames is None:
+            return [], {}
+        columns = list(reader.fieldnames)
+        values = {column: [] for column in columns}
+        for row in reader:
+            for column in columns:
+                values[column].append(row.get(column, ""))
+    return columns, values
 
 
 def as_list(value) -> list[str]:
@@ -47,6 +78,131 @@ def clean_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def is_missing(value: str) -> bool:
+    return value == "" or value.lower() in {"nan", "none", "null", "na", "<na>"}
+
+
+def parse_number(value: str) -> float | None:
+    try:
+        parsed = float(value)
+    except ValueError:
+        return None
+    if math.isnan(parsed):
+        return None
+    return parsed
+
+
+def format_number(value: float | None) -> str:
+    if value is None:
+        return ""
+    return f"{value:.6g}"
+
+
+def median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    sorted_values = sorted(values)
+    middle = len(sorted_values) // 2
+    if len(sorted_values) % 2:
+        return sorted_values[middle]
+    return (sorted_values[middle - 1] + sorted_values[middle]) / 2
+
+
+def is_tuple_like(value: str) -> bool:
+    stripped = value.strip()
+    if not stripped:
+        return False
+    if not (
+        (stripped.startswith("(") and stripped.endswith(")"))
+        or (stripped.startswith("[") and stripped.endswith("]"))
+    ):
+        return False
+    try:
+        parsed = ast.literal_eval(stripped)
+    except (SyntaxError, ValueError):
+        return False
+    return isinstance(parsed, (tuple, list))
+
+
+def normalize_bool_token(value: str) -> str | None:
+    lowered = value.strip().lower()
+    if lowered in {"true", "1", "1.0"}:
+        return "true"
+    if lowered in {"false", "0", "0.0"}:
+        return "false"
+    return None
+
+
+def parse_date(value: str) -> datetime | None:
+    stripped = value.strip()
+    for date_format in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(stripped, date_format)
+        except ValueError:
+            continue
+    return None
+
+
+def infer_data_type(non_missing_values: list[str], numeric_values: list[float]) -> str:
+    if not non_missing_values:
+        return "empty"
+    bool_tokens = [normalize_bool_token(value) for value in non_missing_values]
+    if all(token is not None for token in bool_tokens):
+        return "bool"
+    if len(numeric_values) == len(non_missing_values):
+        if all(value.is_integer() for value in numeric_values):
+            return "int"
+        return "float"
+    if all(parse_date(value) is not None for value in non_missing_values):
+        return "date"
+    if all(is_tuple_like(value) for value in non_missing_values):
+        return "tuple"
+    if numeric_values:
+        return "mixed"
+    return "string"
+
+
+def profile_values(values: list[str]) -> dict[str, str]:
+    total = len(values)
+    non_missing = [value for value in values if not is_missing(value)]
+    missing_count = total - len(non_missing)
+    missing_percent = (missing_count / total * 100) if total else 0
+    numeric_values = [
+        parsed
+        for value in non_missing
+        if (parsed := parse_number(value)) is not None
+    ]
+    data_type = infer_data_type(non_missing, numeric_values)
+
+    profile = {
+        "data_type": data_type,
+        "missing_percent": f"{missing_percent:.1f}",
+        "min": "",
+        "median": "",
+        "max": "",
+        "number_options": "",
+        "dominant_option": "",
+        "dominant_option_percent": "",
+        "top_3_options": "",
+    }
+    if data_type in {"int", "float"} and numeric_values:
+        profile["min"] = format_number(min(numeric_values))
+        profile["median"] = format_number(median(numeric_values))
+        profile["max"] = format_number(max(numeric_values))
+
+    counter = Counter(non_missing)
+    if counter and data_type in {"bool", "string", "tuple", "mixed"}:
+        dominant, count = counter.most_common(1)[0]
+        profile["number_options"] = str(len(counter))
+        profile["dominant_option"] = dominant
+        profile["dominant_option_percent"] = f"{(count / len(non_missing) * 100):.1f}"
+        profile["top_3_options"] = "; ".join(
+            f"{option}: {(option_count / len(non_missing) * 100):.1f}%"
+            for option, option_count in counter.most_common(3)
+        )
+    return profile
+
+
 def operation_sentence(stage_name: str, operation: dict) -> str:
     kind = str(operation.get("kind", "")).replace("_variables", "").replace("_", " ")
     how = clean_text(operation.get("how", ""))
@@ -58,6 +214,17 @@ def operation_sentence(stage_name: str, operation: dict) -> str:
     if how:
         return f"{prefix} from {source}: {how}."
     return f"{prefix} from {source}."
+
+
+def class_count_for_target(operation: dict, target: str) -> str:
+    n_classes = operation.get("n_classes")
+    if isinstance(n_classes, dict):
+        value = n_classes.get(target)
+    else:
+        value = n_classes
+    if value is None or value == "":
+        return ""
+    return str(value)
 
 
 def infer_description(column: str, stage_name: str | None) -> str:
@@ -112,11 +279,13 @@ def build_rows(
     filtered_dataset_path: Path = FILTERED_DATASET,
     detailed_log_path: Path = DETAILED_LOG,
 ) -> list[list[str]]:
-    full_columns = read_header(full_dataset_path)
+    full_columns, full_values = read_csv_columns(full_dataset_path)
     filtered_columns = set(read_header(filtered_dataset_path))
     log = json.loads(detailed_log_path.read_text(encoding="utf-8"))
 
     descriptions: dict[str, list[str]] = defaultdict(list)
+    variable_types: dict[str, str] = {}
+    class_counts: dict[str, str] = {}
     first_stage_by_column: dict[str, str] = {}
 
     for stage in log:
@@ -126,13 +295,18 @@ def build_rows(
         for column in stage.get("output_columns", []):
             first_stage_by_column.setdefault(column, stage_name)
 
-        for key in ("created_variables", "recoded_variables", "transformed_variables"):
+        for key in ("created_variables", "recoded_variables", "transformed_variables", "role_variables"):
             for operation in stage.get(key, []):
                 sentence = operation_sentence(stage_name, operation)
                 for target in as_list(operation.get("target")):
                     if "*" in target:
                         continue
                     descriptions[target].append(sentence)
+                    if operation.get("variable_type"):
+                        variable_types[target] = str(operation["variable_type"])
+                        class_count = class_count_for_target(operation, target)
+                        if class_count:
+                            class_counts[target] = class_count
 
     final_dropped: set[str] = set()
     for stage in log:
@@ -146,12 +320,39 @@ def build_rows(
             "Removed from the clinician/model-compatible filtered dataset by the final drop list in data/preprocess_columns_to_drop.txt."
         )
 
+    column_positions = {column: index for index, column in enumerate(full_columns)}
+    ordered_columns = sorted(
+        full_columns,
+        key=lambda column: (
+            variable_types.get(column, "feature") == "target",
+            column_positions[column],
+        ),
+    )
+
     rows = [HEADERS]
-    for column in full_columns:
+    for column in ordered_columns:
         desc_parts = descriptions.get(column) or [infer_description(column, first_stage_by_column.get(column))]
         description = " ".join(dict.fromkeys(clean_text(part) for part in desc_parts if clean_text(part)))
         dropped = "yes" if column not in filtered_columns else "no"
-        rows.append([column, description, dropped, ""])
+        variable_type = variable_types.get(column, "feature")
+        profile = profile_values(full_values[column])
+        rows.append([
+            column,
+            variable_type,
+            class_counts.get(column, ""),
+            profile["data_type"],
+            profile["missing_percent"],
+            profile["min"],
+            profile["median"],
+            profile["max"],
+            profile["number_options"],
+            profile["dominant_option"],
+            profile["dominant_option_percent"],
+            profile["top_3_options"],
+            description,
+            dropped,
+            "",
+        ])
     return rows
 
 
@@ -186,9 +387,18 @@ def sheet_xml(rows: list[list[str]]) -> str:
   <sheetFormatPr defaultRowHeight="15"/>
   <cols>
     <col min="1" max="1" width="38" customWidth="1"/>
-    <col min="2" max="2" width="110" customWidth="1"/>
-    <col min="3" max="3" width="16" customWidth="1"/>
-    <col min="4" max="4" width="45" customWidth="1"/>
+    <col min="2" max="2" width="14" customWidth="1"/>
+    <col min="3" max="3" width="18" customWidth="1"/>
+    <col min="4" max="4" width="14" customWidth="1"/>
+    <col min="5" max="5" width="12" customWidth="1"/>
+    <col min="6" max="8" width="14" customWidth="1"/>
+    <col min="9" max="9" width="18" customWidth="1"/>
+    <col min="10" max="10" width="35" customWidth="1"/>
+    <col min="11" max="11" width="18" customWidth="1"/>
+    <col min="12" max="12" width="70" customWidth="1"/>
+    <col min="13" max="13" width="110" customWidth="1"/>
+    <col min="14" max="14" width="16" customWidth="1"/>
+    <col min="15" max="15" width="45" customWidth="1"/>
   </cols>
   <sheetData>{''.join(row_xml)}</sheetData>
   <autoFilter ref="A1:{last_col}{last_row}"/>
