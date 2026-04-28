@@ -35,6 +35,8 @@ class VariableChange:
     source: str | list[str]
     target: str | list[str]
     how: str
+    variable_type: str = ""
+    n_classes: int | dict[str, int] | None = None
 
 
 @dataclass
@@ -53,6 +55,7 @@ class TableLog:
     recoded_variables: list[VariableChange] = field(default_factory=list)
     transformed_variables: list[VariableChange] = field(default_factory=list)
     dropped_variables: list[VariableChange] = field(default_factory=list)
+    role_variables: list[VariableChange] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     validation_checks: list[str] = field(default_factory=list)
@@ -81,9 +84,38 @@ def add_change(
     source: str | list[str],
     target: str | list[str],
     how: str,
+    variable_type: str = "",
+    n_classes: int | dict[str, int] | None = None,
 ) -> None:
-    change = VariableChange(kind=section, source=source, target=target, how=how)
+    change = VariableChange(
+        kind=section,
+        source=source,
+        target=target,
+        how=how,
+        variable_type=variable_type,
+        n_classes=n_classes,
+    )
     getattr(log, section).append(change)
+
+
+def add_role(
+    log: TableLog,
+    *,
+    source: str | list[str],
+    target: str | list[str],
+    how: str,
+    variable_type: str,
+    n_classes: int | dict[str, int] | None = None,
+) -> None:
+    add_change(
+        log,
+        "role_variables",
+        source=source,
+        target=target,
+        how=how,
+        variable_type=variable_type,
+        n_classes=n_classes,
+    )
 
 
 def finalize_log(
@@ -164,6 +196,7 @@ def export_logs(
             "recoded_variables": log_dict["recoded_variables"],
             "transformed_variables": log_dict["transformed_variables"],
             "dropped_variables": log_dict["dropped_variables"],
+            "role_variables": log_dict["role_variables"],
             "columns_dropped_count": columns_dropped_count,
             "columns_dropped": columns_dropped,
             "columns_lost_count": len(columns_lost),
@@ -171,6 +204,7 @@ def export_logs(
             "warnings": log_dict["warnings"],
             "notes": log_dict["notes"],
             "validation_checks": log_dict["validation_checks"],
+            "metadata": log_dict["metadata"],
         }
         summary_records.append(summary)
         detailed_records.append(detail)
@@ -479,6 +513,19 @@ def phenotype_values_tuple(values: Iterable[Any]) -> tuple[Any, ...]:
             )
     deduplicated = sorted(set(normalized_values), key=str)
     return tuple(deduplicated) if deduplicated else ("NEGATIVE",)
+
+
+def variable_class_count(series: pd.Series) -> int:
+    values = series.dropna()
+    if values.empty:
+        return 0
+    if values.map(lambda value: isinstance(value, (list, tuple))).any():
+        labels: set[str] = set()
+        for value in values:
+            value_labels = [str(item) for item in as_tuple(value) if str(item)]
+            labels.update(value_labels or ["NEGATIVE"])
+        return len(labels)
+    return int(values.nunique(dropna=True))
 
 
 def combine_phenotype_tuple_columns(row: pd.Series, columns: list[str]) -> tuple[Any, ...]:
@@ -1016,6 +1063,15 @@ def preprocess_tbl_sepsis(
         output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
+    if "sepsis" in df.columns:
+        add_role(
+            log,
+            source="sepsis",
+            target="sepsis",
+            how="retain source binary sepsis label as prediction target",
+            variable_type="target",
+            n_classes=variable_class_count(df["sepsis"]),
+        )
 
     df["lactato_serico"] = np.where(df["lactato_serico"] == "<= 2 millimole per liter", 0, 1)
     add_change(
@@ -1991,6 +2047,8 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source=list(dominant_organism_columns),
         target="resultado_hemo",
         how="scalar dominant organism after clinician co-infection correction; NEGATIVE if no positive non-NEGATIVE organism column exists",
+        variable_type="target",
+        n_classes=variable_class_count(result_df["resultado_hemo"]),
     )
     add_change(
         log,
@@ -2002,6 +2060,8 @@ def preprocess_tbl_hemocultivo_de_urgencias(
             "co-infection resolution applied; NEGATIVE if no positive original "
             "microorganism exists"
         ),
+        variable_type="target",
+        n_classes=variable_class_count(result_df["resultado_hemo_mo"]),
     )
     add_change(
         log,
@@ -2009,6 +2069,8 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source="microorganismo_pre_correccion_clinica",
         target="resultado_hemo_multilabel",
         how="pre-clinician-correction tuple of all positive grouped organisms; NEGATIVE tuple if no positive organism exists",
+        variable_type="target",
+        n_classes=variable_class_count(result_df["resultado_hemo_multilabel"]),
     )
     add_change(
         log,
@@ -2865,6 +2927,8 @@ def build_targets(
             "For this grouped target, NEGATIVE can therefore mean no detected organism or a "
             "detected non-target bacterium/fungus/virus."
         ),
+        variable_type="target",
+        n_classes=variable_class_count(result["resultado_hemo_grouped"]),
     )
 
     result["infected_yes_no"] = np.where(
@@ -2878,6 +2942,8 @@ def build_targets(
         source="resultado_hemo",
         target="infected_yes_no",
         how="POSITIVE if resultado_hemo is not NEGATIVE, else NEGATIVE",
+        variable_type="target",
+        n_classes=variable_class_count(result["infected_yes_no"]),
     )
 
     result["bmr_etiologia"] = np.where(
@@ -2890,7 +2956,9 @@ def build_targets(
         "recoded_variables",
         source="bmr_etiologia",
         target="bmr_etiologia",
-        how="match notebook target encoding: 1.0 becomes BMR resistente, all other values become NEGATIVE",
+        how="1.0 becomes BMR resistente, all other values become NEGATIVE",
+        variable_type="target",
+        n_classes=variable_class_count(result["bmr_etiologia"]),
     )
 
     antibiotic_name_family_map = {
@@ -2953,6 +3021,8 @@ def build_targets(
         source="fenotipo_resistencia",
         target="fenotipo_resistencia_individual",
         how="decode phenotype resistance codes to individual resistance phenotype labels before family grouping",
+        variable_type="target",
+        n_classes=variable_class_count(result["fenotipo_resistencia_individual"]),
     )
 
     result["fenotipo_resistencia"] = result["fenotipo_resistencia"].apply(
@@ -2964,6 +3034,8 @@ def build_targets(
         source="fenotipo_resistencia",
         target="fenotipo_resistencia",
         how="decode phenotype resistance codes to drug names, map drugs to antimicrobial families, deduplicate, and keep an empty list when no mapped phenotype remains",
+        variable_type="target",
+        n_classes=variable_class_count(result["fenotipo_resistencia"]),
     )
 
     result["resistente_cefalosporina"] = result["fenotipo_resistencia"].apply(
@@ -2987,9 +3059,14 @@ def build_targets(
         target=["resistente_cefalosporina", "resistente_cefalosporina_multi"],
         how=(
             "derive cephalosporin resistance targets from mapped phenotype families: "
-            "binary target is resistant if any family contains 'Cefalosporina'; "
+            "binary target is resistant if any family contains 'Cefalosporina' else NEGATIVE; "
             "multi target distinguishes cephalosporin resistance, other resistance, and NEGATIVE"
         ),
+        variable_type="target",
+        n_classes={
+            "resistente_cefalosporina": variable_class_count(result["resistente_cefalosporina"]),
+            "resistente_cefalosporina_multi": variable_class_count(result["resistente_cefalosporina_multi"]),
+        },
     )
 
     result["sample_weight"] = 1
