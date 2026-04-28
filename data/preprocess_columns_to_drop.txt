@@ -1,6 +1,13 @@
 # Columns or glob patterns to drop from the filtered preprocessing output.
 # The full output CSV keeps these columns.
 
+# Administrative/date/location variables not used in clinician-facing modelling output.
+fecha_ingreso_urgencias
+fecha_nacimiento
+codigo_postal
+dag
+center
+
 # Detailed comorbidity dummies collapsed into canceres_si_no and hepatopatias_si_no.
 tipo_cancer_*
 tipo_hepatopatia_*

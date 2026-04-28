@@ -1891,6 +1891,11 @@ def preprocess_tbl_hemocultivo_de_urgencias(
 
     result_df = result_df.merge(pre_correction_result, on=merge_keys, how="left")
     result_df = result_df.merge(raw_microorganism_result, on=merge_keys, how="left")
+    resultado_hemo_mo_override_mask = result_df["person_id"].isin(coinfection_map)
+    result_df.loc[resultado_hemo_mo_override_mask, "resultado_hemo_mo"] = result_df.loc[
+        resultado_hemo_mo_override_mask,
+        "person_id",
+    ].map(coinfection_map)
 
     dominant_organism_columns = {
         organism_column_rename[column]: column
@@ -1950,7 +1955,11 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         "created_variables",
         source="microorganismo_original",
         target="resultado_hemo_mo",
-        how="scalar original microorganism name before clinical grouping; NEGATIVE if no positive original microorganism exists",
+        how=(
+            "scalar original microorganism name with clinician-reviewed "
+            "co-infection resolution applied; NEGATIVE if no positive original "
+            "microorganism exists"
+        ),
     )
     add_change(
         log,
@@ -2996,11 +3005,14 @@ def build_filtered_dataset_log(
     drop_columns_path: Path,
     config: dict[str, Any],
 ) -> TableLog:
+    filtered_merge_keys = [
+        key for key in ["person_id", "fecha_ingreso_urgencias"] if key in filtered_df.columns
+    ]
     log = finalize_log(
         table_name="filtered_dataset",
         input_df=full_df,
         output_df=filtered_df,
-        merge_keys=["person_id", "fecha_ingreso_urgencias"],
+        merge_keys=filtered_merge_keys,
     )
     attach_run_metadata(log, config)
     add_change(
@@ -3022,7 +3034,7 @@ def build_filtered_dataset_log(
     log.validation_checks.append(f"filtered_columns_dropped:{len(dropped_columns)}")
     return validate_result(
         PreprocessResult(df=filtered_df, log=log),
-        required_columns=["person_id", "fecha_ingreso_urgencias"],
+        required_columns=["person_id"],
     ).log
 
 
