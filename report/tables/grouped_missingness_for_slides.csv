@@ -1,5 +1,5 @@
 group,variables,0%,>0-10%,10-40%,40-80%,80-100%,max_missing_percent
-Patient / demographics,11,11,0,0,0,0,0.0
+Patient / demographics,6,6,0,0,0,0,0.0
 Comorbidities / Charlson,21,19,0,1,1,0,75.5
 Healthcare exposure / devices,17,16,0,0,0,1,100.0
 Sepsis / organ dysfunction,16,6,5,5,0,0,19.6
@@ -7,8 +7,8 @@ Vital signs,15,7,6,0,2,0,42.2
 Symptoms,32,0,32,0,0,0,0.5
 Previous infections,16,16,0,0,0,0,0.0
 Previous antibiotic summary,6,5,0,0,1,0,64.6
-Previous antibiotic family counts,22,22,0,0,0,0,0.0
-Previous antibiotic family binaries,22,22,0,0,0,0,0.0
+Previous antibiotic family counts,21,21,0,0,0,0,0.0
+Previous antibiotic family binaries,21,21,0,0,0,0,0.0
 Previous colonization,13,13,0,0,0,0,0.0
 Culture / organism totals,12,12,0,0,0,0,0.0
 Targets / outcomes,10,10,0,0,0,0,0.0

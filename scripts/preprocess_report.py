@@ -15,7 +15,7 @@ DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
 DEFAULT_SQLITE_PATH = Path("db_mepram_sepsis_vf.sqlite3")
-DEFAULT_OUTPUT_DIR = Path("preprocess_report")
+DEFAULT_OUTPUT_DIR = Path("report")
 
 COLORS = {
     "input": "#0072B2",
@@ -794,17 +794,72 @@ def predictive_target_summary(filtered_df: pd.DataFrame) -> tuple[pd.DataFrame, 
 
 
 def normalize_list_target(value: object) -> str:
-    if isinstance(value, list):
-        labels = value
-    else:
-        try:
-            labels = ast.literal_eval(str(value))
-        except (SyntaxError, ValueError):
-            labels = []
-    labels = [str(label) for label in labels if str(label)]
+    labels = parse_list_target(value)
     if not labels:
         return "NEGATIVE"
     return " + ".join(labels)
+
+
+def parse_list_target(value: object) -> list[str]:
+    if isinstance(value, list):
+        labels = value
+    elif pd.isna(value):
+        labels = []
+    else:
+        try:
+            parsed = ast.literal_eval(str(value))
+            labels = parsed if isinstance(parsed, list) else [parsed]
+        except (SyntaxError, ValueError):
+            labels = []
+    labels = [str(label) for label in labels if str(label)]
+    return labels
+
+
+def multilabel_balance_records(
+    *,
+    domain: str,
+    target_version: str,
+    target_column: str,
+    values: pd.Series,
+    notes: str,
+) -> tuple[dict[str, object], list[dict[str, object]]]:
+    labels_by_row = values.map(parse_list_target)
+    sample_count = int(labels_by_row.shape[0])
+    exploded = labels_by_row.map(lambda labels: labels if labels else ["NEGATIVE"]).explode()
+    counts = exploded.value_counts(dropna=False)
+    classes = int(counts.shape[0])
+    majority_class = str(counts.index[0]) if classes else ""
+    majority_count = int(counts.iloc[0]) if classes else 0
+    majority_percent = round((majority_count / sample_count) * 100, 1) if sample_count else 0
+    top_classes = "; ".join(
+        f"{label}: {int(count):,}" for label, count in counts.head(4).items()
+    )
+    summary = {
+        "domain": domain,
+        "target_version": target_version,
+        "target_column": target_column,
+        "samples": sample_count,
+        "classes": classes,
+        "majority_class": majority_class,
+        "majority_class_count": majority_count,
+        "majority_class_percent": majority_percent,
+        "top_classes": top_classes,
+        "notes": notes,
+    }
+    records = [
+        {
+            "domain": domain,
+            "target_version": target_version,
+            "target_column": target_column,
+            "class": str(label),
+            "samples": int(count),
+            "percent": round((int(count) / sample_count) * 100, 1)
+            if sample_count
+            else 0,
+        }
+        for label, count in counts.items()
+    ]
+    return summary, records
 
 
 def series_balance_records(
@@ -964,47 +1019,6 @@ def target_evolution_summary(
         ),
     ]
 
-    if "fenotipo_resistencia_individual" in filtered_df.columns:
-        target_series.append(
-            (
-                "Resistance",
-                "Individual phenotype combinations",
-                "fenotipo_resistencia_individual",
-                filtered_df["fenotipo_resistencia_individual"].map(normalize_list_target),
-                "Individual resistance phenotype labels before antibiotic-family grouping.",
-            )
-        )
-    else:
-        raw_phenotype = raw_phenotype_target_from_sqlite(filtered_df, sqlite_path)
-        if raw_phenotype is not None:
-            target_series.append(
-                (
-                    "Resistance",
-                    "Individual phenotype combinations",
-                    "raw_fenotipo_resistencia",
-                    raw_phenotype,
-                    "Derived from SQLite hemoculture phenotype codes and decoded with tbl_codes2names.",
-                )
-            )
-    target_series.extend(
-        [
-            (
-                "Resistance",
-                "Antibiotic family combinations",
-                "fenotipo_resistencia",
-                filtered_df["fenotipo_resistencia"].map(normalize_list_target),
-                "Pipeline target after mapping raw resistance phenotypes to antibiotic families.",
-            ),
-            (
-                "Resistance",
-                "Cephalosporin yes/no",
-                "resistente_cefalosporina",
-                filtered_df["resistente_cefalosporina"],
-                "Final binary target: any cephalosporin 3a/4a resistance versus negative.",
-            ),
-        ]
-    )
-
     for domain, version, column, series, notes in target_series:
         summary, records = series_balance_records(
             domain=domain,
@@ -1015,6 +1029,55 @@ def target_evolution_summary(
         )
         summaries.append(summary)
         class_records.extend(records)
+
+    if "fenotipo_resistencia_individual" in filtered_df.columns:
+        summary, records = multilabel_balance_records(
+            domain="Resistance",
+            target_version="Individual phenotype labels",
+            target_column="fenotipo_resistencia_individual",
+            values=filtered_df["fenotipo_resistencia_individual"],
+            notes=(
+                "Individual resistance phenotype labels before antibiotic-family "
+                "grouping; multilabel rows are counted once for each phenotype present."
+            ),
+        )
+        summaries.append(summary)
+        class_records.extend(records)
+    else:
+        raw_phenotype = raw_phenotype_target_from_sqlite(filtered_df, sqlite_path)
+        if raw_phenotype is not None:
+            summary, records = series_balance_records(
+                domain="Resistance",
+                target_version="Individual phenotype combinations",
+                target_column="raw_fenotipo_resistencia",
+                values=raw_phenotype,
+                notes="Derived from SQLite hemoculture phenotype codes and decoded with tbl_codes2names.",
+            )
+            summaries.append(summary)
+            class_records.extend(records)
+
+    summary, records = multilabel_balance_records(
+        domain="Resistance",
+        target_version="Antibiotic family labels",
+        target_column="fenotipo_resistencia",
+        values=filtered_df["fenotipo_resistencia"],
+        notes=(
+            "Pipeline target after mapping raw resistance phenotypes to antibiotic "
+            "families; multilabel rows are counted once for each family present."
+        ),
+    )
+    summaries.append(summary)
+    class_records.extend(records)
+
+    summary, records = series_balance_records(
+        domain="Resistance",
+        target_version="Cephalosporin yes/no",
+        target_column="resistente_cefalosporina",
+        values=filtered_df["resistente_cefalosporina"],
+        notes="Final binary target: any cephalosporin 3a/4a resistance versus negative.",
+    )
+    summaries.append(summary)
+    class_records.extend(records)
 
     return pd.DataFrame.from_records(summaries), pd.DataFrame.from_records(class_records)
 
@@ -1058,6 +1121,61 @@ def class_count_records(
                 else 0,
             }
         )
+    rows.append(
+        {
+            "section": section,
+            "target_column": target_column,
+            "class": "Total",
+            "rows": sample_count,
+            "percent": 100.0 if sample_count else 0,
+        }
+    )
+    return rows
+
+
+def multilabel_class_count_records(
+    *,
+    section: str,
+    target_column: str,
+    values: pd.Series,
+) -> list[dict[str, object]]:
+    labels_by_row = values.dropna().map(parse_list_target)
+    sample_count = int(labels_by_row.shape[0])
+    exploded = labels_by_row.map(lambda labels: labels if labels else ["NEGATIVE"]).explode()
+    counts = exploded.value_counts(dropna=False)
+
+    rows = [
+        {
+            "section": section,
+            "target_column": target_column,
+            "class": str(label),
+            "rows": int(count),
+            "percent": round((int(count) / sample_count) * 100, 1)
+            if sample_count
+            else 0,
+        }
+        for label, count in counts.items()
+    ]
+    rows.append(
+        {
+            "section": section,
+            "target_column": target_column,
+            "class": "Total label assignments",
+            "rows": int(counts.sum()),
+            "percent": round((int(counts.sum()) / sample_count) * 100, 1)
+            if sample_count
+            else 0,
+        }
+    )
+    rows.append(
+        {
+            "section": section,
+            "target_column": target_column,
+            "class": "Total patients",
+            "rows": sample_count,
+            "percent": 100.0 if sample_count else 0,
+        }
+    )
     return rows
 
 
@@ -1069,6 +1187,7 @@ def prediction_detail_tables(
     required_columns = {
         "sepsis",
         "resultado_hemo_mo",
+        "resultado_hemo",
         "fenotipo_resistencia_individual",
         "fenotipo_resistencia",
         "resistente_cefalosporina",
@@ -1103,20 +1222,30 @@ def prediction_detail_tables(
             "top_n": 50,
         },
         {
-            "section": "Resistance - individual phenotypes",
-            "description": "Individual resistance phenotype combinations before antibiotic-family grouping.",
-            "target_column": "fenotipo_resistencia_individual",
-            "values": filtered_df["fenotipo_resistencia_individual"].map(normalize_list_target),
+            "section": "Etiology - clinical grouping",
+            "description": "Clinician-configured microorganism grouping used by the etiology model.",
+            "target_column": "resultado_hemo",
+            "values": filtered_df["resultado_hemo"],
             "class_labels": None,
             "top_n": None,
         },
         {
-            "section": "Resistance - antibiotic families",
-            "description": "Resistance phenotypes grouped into antibiotic-family combinations.",
-            "target_column": "fenotipo_resistencia",
-            "values": filtered_df["fenotipo_resistencia"].map(normalize_list_target),
+            "section": "Resistance - individual phenotypes",
+            "description": "Individual resistance phenotype labels before antibiotic-family grouping; multilabel rows are counted once for each phenotype present.",
+            "target_column": "fenotipo_resistencia_individual",
+            "values": filtered_df["fenotipo_resistencia_individual"],
             "class_labels": None,
             "top_n": None,
+            "count_mode": "multilabel",
+        },
+        {
+            "section": "Resistance - antibiotic families",
+            "description": "Resistance phenotypes grouped into antibiotic-family labels; multilabel rows are counted once for each family present.",
+            "target_column": "fenotipo_resistencia",
+            "values": filtered_df["fenotipo_resistencia"],
+            "class_labels": None,
+            "top_n": None,
+            "count_mode": "multilabel",
         },
         {
             "section": "Resistance - cephalosporins",
@@ -1135,6 +1264,15 @@ def prediction_detail_tables(
     class_records = []
     for spec in specs:
         values = spec["values"].dropna()
+        if spec.get("count_mode") == "multilabel":
+            labels = values.map(parse_list_target)
+            class_count = int(
+                labels.map(lambda row_labels: row_labels if row_labels else ["NEGATIVE"])
+                .explode()
+                .nunique(dropna=True)
+            )
+        else:
+            class_count = int(values.nunique(dropna=True))
         summary_records.append(
             {
                 "section": spec["section"],
@@ -1142,18 +1280,27 @@ def prediction_detail_tables(
                 "target_column": spec["target_column"],
                 "rows": row_count,
                 "columns": column_count,
-                "classes": int(values.nunique(dropna=True)),
+                "classes": class_count,
             }
         )
-        class_records.extend(
-            class_count_records(
-                section=spec["section"],
-                target_column=spec["target_column"],
-                values=values,
-                class_labels=spec["class_labels"],
-                top_n=spec["top_n"],
+        if spec.get("count_mode") == "multilabel":
+            class_records.extend(
+                multilabel_class_count_records(
+                    section=spec["section"],
+                    target_column=spec["target_column"],
+                    values=values,
+                )
             )
-        )
+        else:
+            class_records.extend(
+                class_count_records(
+                    section=spec["section"],
+                    target_column=spec["target_column"],
+                    values=values,
+                    class_labels=spec["class_labels"],
+                    top_n=spec["top_n"],
+                )
+            )
 
     return pd.DataFrame.from_records(summary_records), pd.DataFrame.from_records(class_records)
 
@@ -1220,6 +1367,9 @@ def write_markdown_report(
     prediction_detail_class_counts: pd.DataFrame | None,
     chart_paths: dict[str, Path],
 ) -> None:
+    def report_link(path: Path) -> str:
+        return path.relative_to(output_path.parent).as_posix()
+
     filtered_row = summary.loc[summary["table_name"] == "filtered_dataset"]
     final_row = summary.loc[summary["table_name"] == "target_building"]
     full_shape = (
@@ -1271,17 +1421,17 @@ def write_markdown_report(
             "",
             "## Figures",
             "",
-            f"![Rows before and after preprocessing stage]({chart_paths['rows'].name})",
+            f"![Rows before and after preprocessing stage]({report_link(chart_paths['rows'])})",
             "",
-            f"![Columns before and after preprocessing stage]({chart_paths['columns'].name})",
+            f"![Columns before and after preprocessing stage]({report_link(chart_paths['columns'])})",
             "",
-            f"![Preprocessing variables by stage]({chart_paths['changes'].name})",
+            f"![Preprocessing variables by stage]({report_link(chart_paths['changes'])})",
             "",
-            f"![Missingness in filtered variables]({chart_paths['missingness'].name})",
+            f"![Missingness in filtered variables]({report_link(chart_paths['missingness'])})",
             "",
-            f"![Grouped missingness for slides]({chart_paths['grouped_missingness'].name})",
+            f"![Grouped missingness for slides]({report_link(chart_paths['grouped_missingness'])})",
             "",
-            f"![Variable distribution by group]({chart_paths['variable_distribution'].name})",
+            f"![Variable distribution by group]({report_link(chart_paths['variable_distribution'])})",
             "",
             "## Most Feature-Creating Stages",
             "",
@@ -1423,6 +1573,10 @@ def build_report(
     output_dir: Path,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
+    graphs_dir = output_dir / "graphs"
+    tables_dir = output_dir / "tables"
+    graphs_dir.mkdir(parents=True, exist_ok=True)
+    tables_dir.mkdir(parents=True, exist_ok=True)
     summary = pd.read_csv(summary_log_path)
     detailed_logs = json.loads(detailed_log_path.read_text(encoding="utf-8"))
     change_counts = summarize_change_counts(detailed_logs)
@@ -1434,13 +1588,13 @@ def build_report(
         else None
     )
 
-    rows_chart = output_dir / "rows_by_stage.png"
-    columns_chart = output_dir / "columns_by_stage.png"
-    changes_chart = output_dir / "logged_operations_by_stage.png"
-    missingness_chart = output_dir / "filtered_missingness.png"
-    grouped_missingness_chart = output_dir / "filtered_missingness_grouped_for_slides.png"
+    rows_chart = graphs_dir / "rows_by_stage.png"
+    columns_chart = graphs_dir / "columns_by_stage.png"
+    changes_chart = graphs_dir / "logged_operations_by_stage.png"
+    missingness_chart = graphs_dir / "filtered_missingness.png"
+    grouped_missingness_chart = graphs_dir / "filtered_missingness_grouped_for_slides.png"
     variable_distribution_chart = (
-        output_dir / "variable_distribution_filtered_vs_unfiltered.png"
+        graphs_dir / "variable_distribution_filtered_vs_unfiltered.png"
     )
 
     write_before_after_chart_png(
@@ -1469,7 +1623,7 @@ def build_report(
             output_path=grouped_missingness_chart,
         )
         grouped_missingness.to_csv(
-            output_dir / "grouped_missingness_for_slides.csv",
+            tables_dir / "grouped_missingness_for_slides.csv",
             index=False,
         )
     if full_df is not None and filtered_df is not None:
@@ -1483,7 +1637,7 @@ def build_report(
             output_path=variable_distribution_chart,
         )
         variable_distribution.to_csv(
-            output_dir / "variable_distribution_filtered_vs_unfiltered.csv",
+            tables_dir / "variable_distribution_filtered_vs_unfiltered.csv",
             index=False,
         )
     target_summary = None
@@ -1494,33 +1648,33 @@ def build_report(
     prediction_detail_class_counts = None
     if filtered_df is not None:
         target_summary, target_class_counts = predictive_target_summary(filtered_df)
-        target_summary.to_csv(output_dir / "predictive_targets_summary.csv", index=False)
+        target_summary.to_csv(tables_dir / "predictive_targets_summary.csv", index=False)
         target_class_counts.to_csv(
-            output_dir / "predictive_targets_class_counts.csv",
+            tables_dir / "predictive_targets_class_counts.csv",
             index=False,
         )
         evolution_summary, evolution_class_counts = target_evolution_summary(
             filtered_df,
             sqlite_path=sqlite_path,
         )
-        evolution_summary.to_csv(output_dir / "target_evolution_summary.csv", index=False)
+        evolution_summary.to_csv(tables_dir / "target_evolution_summary.csv", index=False)
         evolution_class_counts.to_csv(
-            output_dir / "target_evolution_class_counts.csv",
+            tables_dir / "target_evolution_class_counts.csv",
             index=False,
         )
         prediction_detail_summary, prediction_detail_class_counts = (
             prediction_detail_tables(filtered_df)
         )
         prediction_detail_summary.to_csv(
-            output_dir / "prediction_detail_summary.csv",
+            tables_dir / "prediction_detail_summary.csv",
             index=False,
         )
         prediction_detail_class_counts.to_csv(
-            output_dir / "prediction_detail_class_counts.csv",
+            tables_dir / "prediction_detail_class_counts.csv",
             index=False,
         )
 
-    change_counts.to_csv(output_dir / "change_counts_by_stage.csv", index=False)
+    change_counts.to_csv(tables_dir / "change_counts_by_stage.csv", index=False)
     write_markdown_report(
         output_path=output_dir / "preprocessing_report.md",
         summary=summary,

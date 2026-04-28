@@ -1,8 +1,8 @@
 group,unfiltered_variables,filtered_variables,removed_by_filter
-Demographics,11,11,0
+Demographics,11,6,5
 Comorbidities,107,21,86
 Signs / sepsis,75,63,12
 Infection history,83,43,40
-Antibiotics,50,50,0
+Antibiotics,48,48,0
 Cultures,68,5,63
 Derived variables,53,22,31

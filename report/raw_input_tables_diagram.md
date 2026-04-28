@@ -75,18 +75,18 @@ the filtered `preprocess_test_filtered.csv` dataset. The classification uses
 the final CSV headers, the preprocessing audit log, and the source SQLite table
 schemas.
 
-![Variable distribution by group](variable_distribution_filtered_vs_unfiltered.png)
+![Variable distribution by group](graphs/variable_distribution_filtered_vs_unfiltered.png)
 
 | Variable type | Unfiltered variables | Filtered variables | Removed by filter |
 |---|---:|---:|---:|
-| Demographics | 11 | 11 | 0 |
+| Demographics | 11 | 6 | 5 |
 | Comorbidities | 107 | 21 | 86 |
 | Signs / sepsis | 75 | 63 | 12 |
 | Infection history | 83 | 43 | 40 |
-| Antibiotics | 50 | 50 | 0 |
+| Antibiotics | 48 | 48 | 0 |
 | Cultures | 68 | 5 | 63 |
 | Derived variables | 53 | 22 | 31 |
-| **Total** | **447** | **215** | **232** |
+| **Total** | **445** | **208** | **237** |
 
 Mapping used:
 `Demographics` includes `tbl_paciente` and `tbl_personid2center` identifiers
@@ -101,8 +101,8 @@ healthcare/device exposure, previous infections, and previous colonizations;
 
 The sepsis target was checked between the source SQLite table
 `db_mepram_sepsis_vf.sqlite3::tbl_sepsis` and the filtered preprocessing output
-`preprocess_test_filtered.csv`, using `person_id` + `fecha_ingreso_urgencias`
-as the row key.
+`preprocess_test_filtered.csv`, using `person_id` as the row key after
+administrative admission-date fields are removed from the filtered output.
 
 | Sepsis label | Encoded value | SQLite cases | Filtered table cases | Difference |
 |---|---:|---:|---:|---:|
@@ -111,5 +111,3 @@ as the row key.
 | **Total** |  | **3,913** | **3,913** | **0** |
 
 All 3,913 keyed rows matched exactly between SQLite and the filtered table.
-The case-level audit table is available at
-`preprocess_report/sepsis_cases_positive_negative.csv`.

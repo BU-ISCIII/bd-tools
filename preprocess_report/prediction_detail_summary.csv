@@ -1,6 +1,0 @@
-section,description,target_column,rows,columns,classes
-Sepsis,Binary sepsis prediction target.,sepsis,3913,215,2
-Etiology - microorganisms,Original microorganism target before clinical grouping; shown as top 50 classes plus Other.,resultado_hemo_mo,3913,215,110
-Resistance - individual phenotypes,Individual resistance phenotype combinations before antibiotic-family grouping.,fenotipo_resistencia_individual,3913,215,75
-Resistance - antibiotic families,Resistance phenotypes grouped into antibiotic-family combinations.,fenotipo_resistencia,3913,215,24
-Resistance - cephalosporins,Final binary cephalosporin resistance target.,resistente_cefalosporina,3913,215,2
