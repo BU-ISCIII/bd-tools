@@ -723,19 +723,16 @@ def preprocess_tbl_paciente(
         how="patient-level flag built from any previous infection with bmr_infec_previa > 0",
     )
 
-    notebook_false_fill_columns = ["mujer_gestante", "center", "dag"]
-    existing_false_fill_columns = [
-        column for column in notebook_false_fill_columns if column in df.columns
-    ]
-    if existing_false_fill_columns:
-        df[existing_false_fill_columns] = df[existing_false_fill_columns].fillna(False)
-        add_change(
-            log,
-            "recoded_variables",
-            source=existing_false_fill_columns,
-            target=existing_false_fill_columns,
-            how="match notebook patient preprocessing: fill missing values with False after joining center and previous-infection data",
-        )
+    false_fill_columns = ["mujer_gestante", "center", "dag"]
+    
+    df[false_fill_columns] = df[false_fill_columns].fillna(False)
+    add_change(
+        log,
+        "recoded_variables",
+        source=false_fill_columns,
+        target=false_fill_columns,
+        how="fill missing values with False after joining center and previous-infection data",
+    )
 
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
@@ -798,7 +795,7 @@ def preprocess_tbl_comorbilidad(
         "created_variables",
         source=hepatopathy_source_columns,
         target="hepatopatias_si_no",
-        how="match notebook final aggregation: 1 if raw hepatopatia or any tipo_hepatopatia_* dummy column is positive, else 0",
+        how="1 if raw hepatopatia or any tipo_hepatopatia_* dummy column is positive, else 0",
     )
     add_change(
         log,
@@ -824,7 +821,7 @@ def preprocess_tbl_factores_riesgo_bmr(
         output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
-    log.notes.append("Pass-through table in current notebook. Add table-local feature engineering here if needed.")
+    log.notes.append("Pass-through table. Add table-local feature engineering here if needed.")
     result = PreprocessResult(df=source, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
@@ -1646,7 +1643,7 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             source="antimicrobiano_previo_familia",
             target=family_count_columns,
             how=(
-                "match notebook behavior: count in-window prior antibiotic records per configured family "
+                "count in-window prior antibiotic records per configured family "
                 "into antib_previo_*_counts columns; these are record counts, not summed treatment days, and "
                 "missing family exposure is filled with 0"
             ),
@@ -2268,7 +2265,7 @@ def preprocess_tbl_colonizaciones_previas(
         "created_variables",
         source=colonization_binary_columns,
         target="colonizacion_total_grouped",
-        how="sum explicit colonization organism binary columns; moved from notebook post-merge synthetic features into table-local preprocessing",
+        how="sum explicit colonization organism binary columns",
     )
     add_change(
         log,
@@ -2287,7 +2284,7 @@ def preprocess_tbl_colonizaciones_previas(
             "feno_resist_colo",
         ],
         target=colonization_binary_columns + ["colonizacion_total_grouped"],
-        how="replace raw colonization rows with grouped organism binary features; notebook did not preserve colonization BMR or phenotype detail",
+        how="replace raw colonization rows with grouped organism binary features",
     )
 
     master_admissions = tables["tbl_paciente"][merge_keys].drop_duplicates()
@@ -2359,7 +2356,7 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         "transformed_variables",
         source="tipo_cultivo",
         target="tipo_cultivo",
-        how="fill missing culture type with 0 before duplicate removal, matching notebook behavior",
+        how="fill missing culture type with 0 before duplicate removal",
     )
 
     columns_before_dropna = len(df)
@@ -2399,7 +2396,7 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         source=["tipo_cultivo", "otro_cult_microorganismo"],
         target=other_culture_columns,
         how=(
-            "match notebook other-culture counting: drop duplicate patient/admission/culture-type/organism "
+            "drop duplicate patient/admission/culture-type/organism "
             "rows before pivoting organism counts"
         ),
     )
@@ -2498,7 +2495,7 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
             "fenotipo_resistencia_otros",
         ],
         target=other_culture_columns,
-        how="replace raw other-culture rows with grouped organism count columns; notebook did not preserve culture type, BMR, or phenotype detail",
+        how="replace raw other-culture rows with grouped organism count columns",
     )
 
     log.output_rows = len(result_df)
@@ -3075,7 +3072,7 @@ def build_targets(
         "created_variables",
         source="row",
         target="sample_weight",
-        how="set uniform sample weight to 1, matching final notebook output",
+        how="set uniform sample weight to 1",
     )
     log.output_rows = len(result)
     log.output_columns = result.columns.tolist()
