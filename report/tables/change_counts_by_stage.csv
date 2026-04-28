@@ -1,5 +1,5 @@
 table_name,created,recoded,transformed,dropped,warnings,notes
-_pipeline_run,0,0,0,0,0,4
+_pipeline_run,0,0,0,0,0,9
 tbl_paciente,2,3,0,0,0,0
 tbl_comorbilidad,2,0,88,2,0,0
 tbl_factores_riesgo_bmr,0,0,0,0,0,1
