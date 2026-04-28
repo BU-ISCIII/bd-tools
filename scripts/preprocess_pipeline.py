@@ -6,6 +6,7 @@ import fnmatch
 import importlib.util
 import json
 import sqlite3
+import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -143,6 +144,11 @@ def export_logs(
             "validation_count": len(log.validation_checks),
             "config_name": log.metadata.get("config_name", ""),
             "config_version": log.metadata.get("config_version", ""),
+            "git_head_commit": log.metadata.get("git_head_commit", ""),
+            "preprocess_script_commit": log.metadata.get("preprocess_script_commit", ""),
+            "preprocess_script_blob": log.metadata.get("preprocess_script_blob", ""),
+            "preprocess_code_dirty": log.metadata.get("preprocess_code_dirty", ""),
+            "run_label": log.metadata.get("run_label", ""),
         }
         log_dict = asdict(log)
         detail = {
@@ -367,6 +373,42 @@ def attach_run_metadata(log: TableLog, config: dict[str, Any]) -> None:
     log.metadata["config_name"] = config.get("CONFIG_NAME", "")
     log.metadata["config_version"] = config.get("CONFIG_VERSION", "")
     log.metadata["config_path"] = config.get("CONFIG_PATH", "")
+    log.metadata["git_head_commit"] = config.get("GIT_HEAD_COMMIT", "")
+    log.metadata["preprocess_script_commit"] = config.get("PREPROCESS_SCRIPT_COMMIT", "")
+    log.metadata["preprocess_script_blob"] = config.get("PREPROCESS_SCRIPT_BLOB", "")
+    log.metadata["preprocess_code_dirty"] = config.get("PREPROCESS_CODE_DIRTY", "")
+    log.metadata["run_label"] = config.get("RUN_LABEL", "")
+
+
+def git_output(args: list[str]) -> str:
+    try:
+        completed = subprocess.run(
+            ["git", *args],
+            cwd=PROJECT_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return ""
+    return completed.stdout.strip()
+
+
+def preprocessing_git_metadata() -> dict[str, str]:
+    tracked_inputs = [
+        "scripts/preprocess_pipeline.py",
+        "scripts/preprocess_config.py",
+        "data/preprocess_columns_to_drop.txt",
+    ]
+    dirty_status = git_output(["status", "--porcelain", "--", *tracked_inputs])
+    return {
+        "GIT_HEAD_COMMIT": git_output(["rev-parse", "HEAD"]),
+        "PREPROCESS_SCRIPT_COMMIT": git_output(
+            ["log", "-1", "--format=%H", "--", "scripts/preprocess_pipeline.py"]
+        ),
+        "PREPROCESS_SCRIPT_BLOB": git_output(["hash-object", "scripts/preprocess_pipeline.py"]),
+        "PREPROCESS_CODE_DIRTY": "yes" if dirty_status else "no",
+    }
 
 
 def drop_columns_with_log(
@@ -2989,6 +3031,11 @@ def build_run_log(
             f"output_file_path={output_file_path}",
             f"drop_columns_path={drop_columns_path}",
             f"config_file_path={config['CONFIG_PATH']}",
+            f"git_head_commit={config.get('GIT_HEAD_COMMIT', '')}",
+            f"preprocess_script_commit={config.get('PREPROCESS_SCRIPT_COMMIT', '')}",
+            f"preprocess_script_blob={config.get('PREPROCESS_SCRIPT_BLOB', '')}",
+            f"preprocess_code_dirty={config.get('PREPROCESS_CODE_DIRTY', '')}",
+            f"run_label={config.get('RUN_LABEL', '')}",
         ]
     )
     log.metadata["config_values"] = config
@@ -3043,10 +3090,13 @@ def run_pipeline(
     output_file_path: Path = DEFAULT_OUTPUT_PATH,
     config_file_path: Path = DEFAULT_CONFIG_PATH,
     drop_columns_path: Path = DEFAULT_DROP_COLUMNS_PATH,
+    run_label: str = "",
 ) -> PipelineArtifacts:
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
     tables = load_tables(input_file_path)
     config = load_config_module(config_file_path)
+    config.update(preprocessing_git_metadata())
+    config["RUN_LABEL"] = run_label
     maps = build_reference_maps(tables, config)
 
     results: dict[str, PreprocessResult] = {}
@@ -3141,6 +3191,11 @@ def parse_args() -> argparse.Namespace:
             f"from the filtered output CSV. Default: {DEFAULT_DROP_COLUMNS_PATH}"
         ),
     )
+    parser.add_argument(
+        "--run-label",
+        default="",
+        help="Optional human-readable run label written into preprocessing logs.",
+    )
     return parser.parse_args()
 
 
@@ -3151,6 +3206,7 @@ def main() -> None:
         output_file_path=args.output_path,
         config_file_path=args.config_path,
         drop_columns_path=args.drop_columns_path,
+        run_label=args.run_label,
     )
 
 
