@@ -9,6 +9,8 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 
+from build_clinician_variable_dictionary import build_variable_dictionary
+
 
 DEFAULT_SUMMARY_LOG_PATH = Path("preprocess_test_log_summary.csv")
 DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
@@ -1571,6 +1573,7 @@ def build_report(
     filtered_dataset_path: Path | None,
     sqlite_path: Path | None,
     output_dir: Path,
+    build_dictionary: bool = True,
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     graphs_dir = output_dir / "graphs"
@@ -1697,6 +1700,13 @@ def build_report(
             "variable_distribution": variable_distribution_chart,
         },
     )
+    if build_dictionary and full_dataset_path and filtered_dataset_path:
+        build_variable_dictionary(
+            full_dataset_path=full_dataset_path,
+            filtered_dataset_path=filtered_dataset_path,
+            detailed_log_path=detailed_log_path,
+            output_path=tables_dir / "clinician_variable_dictionary.xlsx",
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1709,6 +1719,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--filtered-dataset-path", type=Path, default=DEFAULT_FILTERED_DATASET_PATH)
     parser.add_argument("--sqlite-path", type=Path, default=DEFAULT_SQLITE_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--skip-variable-dictionary",
+        action="store_true",
+        help="Do not generate tables/clinician_variable_dictionary.xlsx.",
+    )
     return parser.parse_args()
 
 
@@ -1721,6 +1736,7 @@ def main() -> None:
         filtered_dataset_path=args.filtered_dataset_path,
         sqlite_path=args.sqlite_path,
         output_dir=args.output_dir,
+        build_dictionary=not args.skip_variable_dictionary,
     )
 
 

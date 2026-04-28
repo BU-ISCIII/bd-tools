@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import re
@@ -105,10 +106,15 @@ def infer_description(column: str, stage_name: str | None) -> str:
     return "Variable present in the full preprocessed dataset; no variable-level transformation was recorded in the preprocessing log."
 
 
-def build_rows() -> list[list[str]]:
-    full_columns = read_header(FULL_DATASET)
-    filtered_columns = set(read_header(FILTERED_DATASET))
-    log = json.loads(DETAILED_LOG.read_text(encoding="utf-8"))
+def build_rows(
+    *,
+    full_dataset_path: Path = FULL_DATASET,
+    filtered_dataset_path: Path = FILTERED_DATASET,
+    detailed_log_path: Path = DETAILED_LOG,
+) -> list[list[str]]:
+    full_columns = read_header(full_dataset_path)
+    filtered_columns = set(read_header(filtered_dataset_path))
+    log = json.loads(detailed_log_path.read_text(encoding="utf-8"))
 
     descriptions: dict[str, list[str]] = defaultdict(list)
     first_stage_by_column: dict[str, str] = {}
@@ -238,13 +244,45 @@ def write_xlsx(rows: list[list[str]], output_path: Path) -> None:
 </Properties>""")
 
 
-def main() -> None:
-    rows = build_rows()
-    write_xlsx(rows, OUTPUT_XLSX)
+def build_variable_dictionary(
+    *,
+    full_dataset_path: Path = FULL_DATASET,
+    filtered_dataset_path: Path = FILTERED_DATASET,
+    detailed_log_path: Path = DETAILED_LOG,
+    output_path: Path = OUTPUT_XLSX,
+) -> tuple[int, int, int]:
+    rows = build_rows(
+        full_dataset_path=full_dataset_path,
+        filtered_dataset_path=filtered_dataset_path,
+        detailed_log_path=detailed_log_path,
+    )
+    write_xlsx(rows, output_path)
     kept = sum(1 for row in rows[1:] if row[2] == "no")
     dropped = sum(1 for row in rows[1:] if row[2] == "yes")
-    print(f"Wrote {OUTPUT_XLSX}")
-    print(f"Variables: {len(rows) - 1}; kept: {kept}; dropped: {dropped}")
+    return len(rows) - 1, kept, dropped
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build clinician-facing Excel data dictionary from preprocessing outputs."
+    )
+    parser.add_argument("--full-dataset-path", type=Path, default=FULL_DATASET)
+    parser.add_argument("--filtered-dataset-path", type=Path, default=FILTERED_DATASET)
+    parser.add_argument("--detailed-log-path", type=Path, default=DETAILED_LOG)
+    parser.add_argument("--output-path", type=Path, default=OUTPUT_XLSX)
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    total, kept, dropped = build_variable_dictionary(
+        full_dataset_path=args.full_dataset_path,
+        filtered_dataset_path=args.filtered_dataset_path,
+        detailed_log_path=args.detailed_log_path,
+        output_path=args.output_path,
+    )
+    print(f"Wrote {args.output_path}")
+    print(f"Variables: {total}; kept: {kept}; dropped: {dropped}")
 
 
 if __name__ == "__main__":
