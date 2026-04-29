@@ -1,7 +1,7 @@
 table_name,created,recoded,transformed,dropped,warnings,notes
 _pipeline_run,0,0,0,0,0,9
 tbl_paciente,2,3,0,0,0,0
-tbl_comorbilidad,2,0,88,2,0,0
+tbl_comorbilidad,2,0,86,2,0,0
 tbl_factores_riesgo_bmr,0,0,0,0,0,1
 tbl_sintomas,32,1,0,2,0,0
 tbl_signos,5,5,5,0,0,0
