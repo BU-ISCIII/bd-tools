@@ -70,21 +70,6 @@ N_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
 JOB_ID = os.environ.get("SLURM_JOB_ID", 1)
 TODAY = datetime.today().strftime("%Y%m%d%H%M%S")
 
-FOCUS_MAP = {
-    1: "pulmonar",
-    2: "intraabdominal",
-    3: "biliar",
-    4: "urinario",
-    5: "cardiovascular",
-    6: "piel",
-    7: "sistema nervioso central",
-    8: "cateter venoso",
-    9: "vías altas respiratorias",
-    10: "osteoarticular",
-    11: "genital",
-    12: "desconocido",
-}
-
 # All potential target columns – none of these should appear as features
 TARGET_REMOVE = [
     "sepsis",
@@ -93,6 +78,7 @@ TARGET_REMOVE = [
     "resultado_hemo_grouped",
     "resultado_hemo_multilabel",
     "all_cult_org",
+    "dominant_all_cult_org",
     "infected_yes_no",
     "bmr_etiologia",
     "fenotipo_resistencia",
@@ -148,10 +134,9 @@ def safe_drop_columns(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
 
 
 def load_processed_dataframe(csv_path: Path, cols_to_delete: List[str]) -> pd.DataFrame:
-    """Load dataset and apply focus filter. No target-based row filtering here."""
+    """Load preprocessed dataset and apply focus filter. No target-based row filtering here."""
     df = pd.read_csv(csv_path)
     if "foco" in df.columns:
-        df["foco"] = df["foco"].map(FOCUS_MAP).fillna(df["foco"])
         df = df[~df["foco"].isin(FOCUS_TO_EXCLUDE)]
     df = safe_drop_columns(df, cols_to_delete)
     return df
@@ -913,6 +898,14 @@ def run_training(args: argparse.Namespace) -> None:
 
     exclude_cols = all_targets.copy()
     feature_cols = [c for c in working_df.columns if c not in exclude_cols]
+    foco_dummy_cols = [
+        c for c in feature_cols
+        if c.startswith("foco_") and c.endswith("_binary")
+    ]
+    if "foco" in feature_cols and foco_dummy_cols:
+        # Preprocessing already provides foco one-hot columns. Keep the
+        # categorical source column only for row filtering/review.
+        feature_cols.remove("foco")
 
     # Drop high-NA feature columns
     dropped_na = [
