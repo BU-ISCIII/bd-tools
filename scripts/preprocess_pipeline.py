@@ -533,6 +533,23 @@ def combine_phenotype_tuple_columns(row: pd.Series, columns: list[str]) -> tuple
     return phenotype_values_tuple(row[column] for column in columns if column in row.index)
 
 
+def iqr_outlier_info(series: pd.Series, iqr_multiplier: float) -> dict[str, Any]:
+    q1 = series.quantile(0.25)
+    q3 = series.quantile(0.75)
+    iqr = q3 - q1
+    lower = q1 - iqr_multiplier * iqr
+    upper = q3 + iqr_multiplier * iqr
+    outliers_mask = (series < lower) | (series > upper)
+    return {
+        "q1": q1,
+        "q3": q3,
+        "iqr": iqr,
+        "lower": lower,
+        "upper": upper,
+        "outliers_mask": outliers_mask,
+    }
+
+
 def clean_outliers_iqr(
     df: pd.DataFrame,
     variables: list[str],
@@ -542,13 +559,8 @@ def clean_outliers_iqr(
 ) -> pd.DataFrame:
     cleaned = df.copy()
     for variable in variables:
-        q1 = cleaned[variable].quantile(0.25)
-        q3 = cleaned[variable].quantile(0.75)
-        iqr = q3 - q1
-        lower = q1 - iqr_multiplier * iqr
-        upper = q3 + iqr_multiplier * iqr
-        mask = cleaned[variable].between(lower, upper) | cleaned[variable].isna()
-        cleaned.loc[~mask, variable] = replace_with
+        outlier_info = iqr_outlier_info(cleaned[variable], iqr_multiplier)
+        cleaned.loc[outlier_info["outliers_mask"], variable] = replace_with
     return cleaned
 
 
@@ -564,12 +576,8 @@ def clean_outliers_iqr_and_recode_quartiles(
         if variable not in cleaned.columns:
             continue
 
-        q1 = cleaned[variable].quantile(0.25)
-        q3 = cleaned[variable].quantile(0.75)
-        iqr = q3 - q1
-        lower = q1 - iqr_multiplier * iqr
-        upper = q3 + iqr_multiplier * iqr
-        outliers_mask = (cleaned[variable] < lower) | (cleaned[variable] > upper)
+        outlier_info = iqr_outlier_info(cleaned[variable], iqr_multiplier)
+        outliers_mask = outlier_info["outliers_mask"]
         outliers_count = int(outliers_mask.sum())
         cleaned.loc[outliers_mask, variable] = np.nan
 
@@ -590,11 +598,11 @@ def clean_outliers_iqr_and_recode_quartiles(
 
         recode_info[variable] = {
             "new_column": new_column,
-            "q1": float(q1) if pd.notna(q1) else None,
-            "q3": float(q3) if pd.notna(q3) else None,
-            "iqr": float(iqr) if pd.notna(iqr) else None,
-            "lower_limit": float(lower) if pd.notna(lower) else None,
-            "upper_limit": float(upper) if pd.notna(upper) else None,
+            "q1": float(outlier_info["q1"]) if pd.notna(outlier_info["q1"]) else None,
+            "q3": float(outlier_info["q3"]) if pd.notna(outlier_info["q3"]) else None,
+            "iqr": float(outlier_info["iqr"]) if pd.notna(outlier_info["iqr"]) else None,
+            "lower_limit": float(outlier_info["lower"]) if pd.notna(outlier_info["lower"]) else None,
+            "upper_limit": float(outlier_info["upper"]) if pd.notna(outlier_info["upper"]) else None,
             "outliers_replaced": outliers_count,
             "quartile_bins": bins,
         }
