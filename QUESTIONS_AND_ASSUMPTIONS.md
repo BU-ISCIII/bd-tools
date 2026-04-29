@@ -2,7 +2,77 @@
 
 This note records current preprocessing assumptions in the rewritten pipeline so they can be reviewed with clinicians before they become fixed behavior.
 
+## Table of Contents
+
+- [Current Assumptions](#current-assumptions)
+  - [Missing values: when NA becomes 0 and when it remains unknown](#missing-values-when-na-becomes-0-and-when-it-remains-unknown)
+  - [Microorganism target grouping](#microorganism-target-grouping)
+  - [Symptoms (`tbl_sintomas`)](#symptoms-tbl_sintomas)
+  - [Missing values in modelling](#missing-values-in-modelling)
+  - [Prior antibiotics (`tbl_tratamiento_antibiotico_previo`)](#prior-antibiotics-tbl_tratamiento_antibiotico_previo)
+  - [Previous Infection Detail (`tbl_infecciones_previas`)](#previous-infection-detail-tbl_infecciones_previas)
+  - [Previous Colonisation Detail (`tbl_colonizaciones_previas`)](#previous-colonisation-detail-tbl_colonizaciones_previas)
+- [Other Emergency Culture Detail (`tbl_otros_cultivos_en_urgencias`)](#open-question-other-emergency-culture-detail-tbl_otros_cultivos_en_urgencias)
+- [Hemoculture Detail (`tbl_hemocultivo_de_urgencias`)](#open-question-hemoculture-detail-tbl_hemocultivo_de_urgencias)
+- [Additional REDCap infection-history question](#additional-redcap-infection-history-question)
+
 ## Current Assumptions
+
+### Missing values: when NA becomes 0 and when it remains unknown
+
+General rule to validate with clinicians:
+
+- Missing source rows are only converted to `0` when the table represents an exposure/event list and absence of a row is clinically interpreted as no recorded event.
+- Missing values remain `NaN` when absence may mean unknown, not measured, or not captured.
+- Some aggregation steps create explicit `0` values after completing the output to all master patient/admissions. These `0` values mean "no event observed in that source table after applying preprocessing filters", not necessarily "clinically impossible".
+
+Current table-level behavior to review:
+
+| Table / feature family | Current behavior for missing or absent information | Clinical question |
+| --- | --- | --- |
+| `tbl_sintomas` | Missing symptom rows are kept as unknown/`NaN`; symptom columns are not globally filled with `0`. | Does no symptom row mean absent symptom or unknown symptom capture? |
+| `tbl_signos` | Missing measured signs remain `NaN`; derived flags preserve original values when the numeric measurement is missing. | Should missing vital signs be treated as unknown rather than normal? |
+| `tbl_sepsis` | Missing numeric sepsis fields remain `NaN`; quartile recodes are missing when the source value is missing or removed as outlier. | Are missing sepsis measurements clinically unknown, or can any be interpreted as normal/negative? |
+| `tbl_infecciones_previas` | Patient/admissions with no aggregated previous-infection row are completed with `0` for exposure/count columns and `NEGATIVE` for organism-specific phenotype tuples. | Does no previous-infection record mean no known previous infection, or incomplete previous-infection history? |
+| `tbl_colonizaciones_previas` | Patient/admissions with no aggregated colonisation row are completed with `0` for exposure/count columns and `NEGATIVE` for phenotype tuples. | Does no colonisation record mean no known colonisation, or unknown screening/history? |
+| `tbl_tratamiento_antibiotico_previo` | Missing or non-positive `dias_trat_antimicrobiano` rows are removed before antibiotic features are built; absent patient/admissions are later filled with `0` for exposure/count columns. | Does missing/zero duration mean no valid prior antibiotic exposure, or exposure with missing duration? |
+| `tbl_hemocultivo_de_urgencias` | Negative/missing microorganism codes become `NEGATIVE`; BMR/phenotype information is aggregated only when culture organisms are present. | Should `NEGATIVE` mean no growth, no target organism, or missing/unknown culture result in any cases? |
+| `tbl_otros_cultivos_en_urgencias` | Missing culture type is filled with `0` before duplicate removal; missing/unmapped organisms become `NEGATIVE`; counts are pivoted by grouped organism. | Should missing culture type be a true category, unknown, or excluded? |
+| Final filtered dataset | Columns listed in `data/preprocess_columns_to_drop.txt` are dropped; missing feature values are generally left for model-side imputation. | Which missing values should be resolved in preprocessing before modelling? |
+
+Decision needed:
+
+- Confirm, for each source table, whether absence of a row means `0`/negative or unknown.
+- Confirm whether any current `0` fills should instead become explicit `NaN` or an `unknown` category.
+- Confirm whether this table should be expanded into the clinician Excel as a per-variable note.
+
+### Microorganism target grouping
+
+Current grouped microorganism labels and proposed target-group interpretation:
+
+| Raw group | Pipeline label | Proposed grouped target interpretation |
+| --- | --- | --- |
+| `NOEB` | `_Other bacteria` | `NEGATIVE` |
+| `VIRUS` | `_Virus` | `NEGATIVE` |
+| `FUNGUS` | `_Fungi` | `NEGATIVE` |
+| `OEB` | `_Enterobacteria` | `Bacilo Gram -` |
+| `ECOLI` | `Escherichia coli` | `Bacilo Gram -` |
+| `SA` | `Staphylococcus aureus` | `Coco Gram +` |
+| `PSA` | `Pseudomonas aeruginosa` | `Bacilo Gram -` |
+| `KP` | `Klebsiella pneumoniae` | `Bacilo Gram -` |
+| `SP` | `Streptococcus pneumoniae` | `Coco Gram +` |
+| `EC` | `Enterococcus` | `NEGATIVE` |
+
+Clinical point to confirm:
+
+- `Enterococcus` should not be included inside `Coco Gram +` for the model target grouping if the intended target is focused on the current resistant-pathogen categories.
+- `_Other bacteria`, `_Virus`, `_Fungi`, and `Enterococcus` would collapse to `NEGATIVE` for the grouped target, even though they may represent real organisms clinically.
+
+Questions for clinicians:
+
+- Is collapsing `Enterococcus` to `NEGATIVE` correct for `resultado_hemo_grouped`?
+- Should `_Other bacteria` always become `NEGATIVE`, or should some subtypes be reviewed manually?
+- Should viruses and fungi remain excluded from bacterial Gram-group targets?
 
 ### Symptoms (`tbl_sintomas`)
 
@@ -57,6 +127,36 @@ Question for clinicians:
 - Does missing or zero `dias_trat_antimicrobiano` reliably mean no prior antibiotic exposure?
 - Or can it mean prior antibiotic exposure was present but duration was not recorded?
 - If duration is missing but `antimicrobiano_previo` or `fecha_administracion_antib` is present, should that row still contribute to prior-antibiotic features?
+
+#### Antibiotic exposure counts: raw events vs distinct families
+
+The current pipeline keeps both concepts when possible:
+
+- `antib_previo_total_veces`: raw count of previous antibiotic treatment records/events inside the configured window.
+- `antib_previo_total_familias`: count of distinct antibiotic families with at least one exposure.
+
+Example:
+
+| Antibiotic family | Raw family count |
+| --- | ---: |
+| Carbapenemas | 3 |
+| Glicopéptidos | 2 |
+| Lincosamidas | 2 |
+| Quinolonas | 1 |
+
+Two valid summaries are possible:
+
+- Raw counts: `antib_previo_total_veces = 8`
+  - Interpretation: "How many previous antibiotic treatment records/events did the patient have?"
+  - This gives more weight to repeated exposure in the same family.
+- Distinct families: `antib_previo_total_familias = 4`
+  - Interpretation: "How many antibiotic families was the patient exposed to?"
+  - This gives more weight to breadth/diversity of exposure.
+
+Question for clinicians:
+
+- Should models use raw exposure intensity, distinct family breadth, or both?
+- If both are retained, should one be preferred for clinical interpretation?
 
 ### Previous Infection Detail (`tbl_infecciones_previas`)
 
@@ -338,6 +438,31 @@ Observed organism-phenotype pair counts by group:
 - `Enterococcus`: `3` phenotype codes
 - `Streptococcus pneumoniae`: `1` phenotype code
 
+Possible ways to handle other emergency cultures:
+
+1. Keep only the current grouped organism count features
+   - Current behavior: `otros_cult_<organism>_count`.
+   - Lower dimensionality and simpler interpretation.
+   - Loses BMR/phenotype and culture-source detail.
+2. Add organism-specific BMR features
+   - Example: `otros_cult_bmr_Escherichia_coli_binary`.
+   - Preserves whether a grouped organism carried BMR status.
+   - Adds around `10` or `11` columns depending on whether `NEGATIVE` is included.
+3. Add global phenotype features
+   - Example: one column per resistance phenotype, regardless of organism.
+   - Preserves resistance signal with moderate column growth.
+   - Loses organism-phenotype linkage.
+4. Add organism-specific phenotype features
+   - Example: `otros_cult_Escherichia_coli_resistente_cefotaxima_binary`.
+   - Preserves organism-phenotype linkage.
+   - Adds more sparse columns.
+5. Keep `tipo_cultivo`
+   - Allows separation by source, such as urine, respiratory, wound, catheter, or other culture source.
+   - Clinicians should decide whether source type has enough reliability and clinical value.
+6. Use `fecha_otros_cultivos`
+   - Can validate timing relative to emergency admission.
+   - Could support time-window features if cultures are not all strictly from the emergency episode.
+
 Questions for clinicians:
 
 - Should `bmr_etiologia_otros` be preserved, especially because it is mostly populated for non-negative organisms?
@@ -448,6 +573,15 @@ Questions for clinicians:
 - Should resistance phenotype be kept as global multi-hot labels, organism-specific labels, or target-specific labels only?
 - Should `resultado_hemo_multilabel` be used for QA only, or should it remain available to downstream modelling?
 
+## Additional REDCap infection-history question
 
+The REDCap previous-infection information includes variables such as:
 
-- Infección previa en redcap tiene cultivo si/no e infección completa/incompleta/nosesabe
+- culture yes/no
+- infection complete / incomplete / unknown (`no se sabe`)
+
+Question for clinicians:
+
+- Should these REDCap fields modify how `tbl_infecciones_previas` is interpreted?
+- If previous infection is marked incomplete or unknown, should the corresponding microorganism/BMR/phenotype features be kept, marked as unknown, or excluded?
+- Should `cultivo si/no` be used as a quality flag for previous-infection organism features?
