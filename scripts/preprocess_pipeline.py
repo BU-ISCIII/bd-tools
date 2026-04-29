@@ -2718,6 +2718,8 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
             "dominant urgent-culture organism: if any organism has combined count >= 2 choose the max; "
             "if exactly one organism has count == 1 choose it; otherwise NEGATIVE"
         ),
+        variable_type="target",
+        n_classes=variable_class_count(result["dominant_all_cult_org"]),
     )
 
     all_culture_bmr_columns: list[str] = []
