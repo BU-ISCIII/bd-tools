@@ -456,6 +456,7 @@ def drop_columns_with_log(
     existing_columns = [col for col in columns if col in df.columns]
     if not existing_columns:
         return df
+    result = df.drop(columns=existing_columns)
     add_change(
         log,
         "dropped_variables",
@@ -464,7 +465,7 @@ def drop_columns_with_log(
         how=reason,
     )
     log.columns_dropped_count += len(existing_columns)
-    return df.drop(columns=existing_columns)
+    return result
 
 
 def feature_name(value: Any) -> str:
@@ -747,6 +748,13 @@ def preprocess_tbl_comorbilidad(
     config: dict[str, Any],
 ) -> PreprocessResult:
     source = tables["tbl_comorbilidad"].copy()
+    log = finalize_log(
+        table_name="tbl_comorbilidad",
+        input_df=source,
+        output_df=source,
+        merge_keys=["person_id", "fecha_ingreso_urgencias"],
+    )
+
     df = pd.get_dummies(source, columns=["tipo_cancer", "tipo_hepatopatia"])
     cancer_dummy_columns = [
         column for column in df.columns if column.startswith("tipo_cancer_")
@@ -757,45 +765,13 @@ def preprocess_tbl_comorbilidad(
     hepatopathy_source_columns = (
         ["hepatopatia"] if "hepatopatia" in df.columns else []
     ) + hepatopathy_dummy_columns
-    df["canceres_si_no"] = (
-        df[cancer_dummy_columns].sum(axis=1).gt(0).astype(int)
-        if cancer_dummy_columns
-        else 0
-    )
-    df["hepatopatias_si_no"] = (
-        pd.to_numeric(df[hepatopathy_source_columns].sum(axis=1), errors="coerce")
-        .gt(0)
-        .astype(int)
-        if hepatopathy_source_columns
-        else 0
-    )
-    log = finalize_log(
-        table_name="tbl_comorbilidad",
-        input_df=source,
-        output_df=df,
-        merge_keys=["person_id", "fecha_ingreso_urgencias"],
-    )
-
+    comorbidity_transformed_columns = hepatopathy_source_columns + cancer_dummy_columns
     add_change(
         log,
         "transformed_variables",
         source=["tipo_cancer", "tipo_hepatopatia"],
-        target=[col for col in df.columns if "cancer" in col or "hepatopatia" in col],
+        target=comorbidity_transformed_columns,
         how="one-hot encode categorical comorbidity variables",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=cancer_dummy_columns,
-        target="canceres_si_no",
-        how="collapsed cancer dummy columns to binary flag: 1 if any tipo_cancer_* column is positive, else 0",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=hepatopathy_source_columns,
-        target="hepatopatias_si_no",
-        how="1 if raw hepatopatia or any tipo_hepatopatia_* dummy column is positive, else 0",
     )
     add_change(
         log,
@@ -804,6 +780,36 @@ def preprocess_tbl_comorbilidad(
         target=["tipo_cancer_*", "tipo_hepatopatia_*"],
         how="original categoricals replaced by one-hot encoded columns",
     )
+
+    df["canceres_si_no"] = (
+        df[cancer_dummy_columns].sum(axis=1).gt(0).astype(int)
+        if cancer_dummy_columns
+        else 0
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=cancer_dummy_columns,
+        target="canceres_si_no",
+        how="collapsed cancer dummy columns to binary flag: 1 if any tipo_cancer_* column is positive, else 0",
+    )
+
+    df["hepatopatias_si_no"] = (
+        pd.to_numeric(df[hepatopathy_source_columns].sum(axis=1), errors="coerce")
+        .gt(0)
+        .astype(int)
+        if hepatopathy_source_columns
+        else 0
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=hepatopathy_source_columns,
+        target="hepatopatias_si_no",
+        how="1 if raw hepatopatia or any tipo_hepatopatia_* dummy column is positive, else 0",
+    )
+    log.output_rows = len(df)
+    log.output_columns = df.columns.tolist()
     result = PreprocessResult(df=df, log=log)
     attach_run_metadata(result.log, config)
     return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
@@ -1206,6 +1212,16 @@ def preprocess_tbl_infecciones_previas(
     for organism in organisms:
         pivoted[f"infprev_{feature_name(organism)}_binary"] = np.where(pivoted[organism] >= 1, 1, 0)
         pivoted = pivoted.drop(columns=organism)
+    infprev_binary_columns = [
+        col for col in pivoted.columns if col.startswith("infprev_") and col.endswith("_binary")
+    ]
+    add_change(
+        log,
+        "created_variables",
+        source="grupo_microorganismo",
+        target=infprev_binary_columns,
+        how="pivot grouped organisms and binarize per patient/admission",
+    )
 
     detail_rows = df[df["grupo_microorganismo"].notna()].copy()
     detail_rows["bmr_infec_previa_numeric"] = pd.to_numeric(
@@ -1238,6 +1254,13 @@ def preprocess_tbl_infecciones_previas(
             bmr_pivot,
             on=["person_id", "fecha_ingreso_urgencias"],
             how="left",
+        )
+        add_change(
+            log,
+            "created_variables",
+            source=["grupo_microorganismo", "bmr_infec_previa"],
+            target=infprev_bmr_columns,
+            how="create organism-specific previous-infection BMR binary flags using max bmr_infec_previa per patient/admission/organism",
         )
 
         phenotype_by_organism = (
@@ -1276,6 +1299,13 @@ def preprocess_tbl_infecciones_previas(
             on=["person_id", "fecha_ingreso_urgencias"],
             how="left",
         )
+        add_change(
+            log,
+            "created_variables",
+            source=["grupo_microorganismo", "feno_resist_infec_prev"],
+            target=infprev_phenotype_columns,
+            how="create organism-specific previous-infection phenotype tuples using non-zero deduplicated feno_resist_infec_prev codes",
+        )
     for column in infprev_bmr_columns:
         pivoted[column] = pivoted[column].fillna(0).astype(int)
     for column in infprev_phenotype_columns:
@@ -1300,6 +1330,13 @@ def preprocess_tbl_infecciones_previas(
             else 0
         )
         infection_broad_group_columns.append(target_column)
+    add_change(
+        log,
+        "created_variables",
+        source="infprev_*_binary",
+        target=infection_broad_group_columns,
+        how="sum previous-infection organism binaries into broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP",
+    )
 
     visits = df[["person_id", "fecha_ingreso_urgencias", "fecha_infeccion"]].copy()
     visits["fecha_infeccion"] = pd.to_datetime(visits["fecha_infeccion"], errors="coerce")
@@ -1312,6 +1349,13 @@ def preprocess_tbl_infecciones_previas(
 
     result = pivoted.merge(num_visitas, on="person_id", how="left")
     result = result.merge(ultima[["person_id", "tiempo_ultima"]], on="person_id", how="left")
+    add_change(
+        log,
+        "created_variables",
+        source="fecha_infeccion",
+        target=["num_inf_previas", "tiempo_ultima"],
+        how="derive previous infection count and days since last infection",
+    )
     master_admissions = tables["tbl_paciente"][["person_id", "fecha_ingreso_urgencias"]].drop_duplicates()
     result = master_admissions.merge(
         result,
@@ -1333,41 +1377,6 @@ def preprocess_tbl_infecciones_previas(
         result[column] = result[column].apply(
             lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
         )
-    add_change(
-        log,
-        "created_variables",
-        source="grupo_microorganismo",
-        target=[col for col in result.columns if col.startswith("infprev_") and col.endswith("_binary")],
-        how="pivot grouped organisms and binarize per patient/admission",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["grupo_microorganismo", "bmr_infec_previa"],
-        target=infprev_bmr_columns,
-        how="create organism-specific previous-infection BMR binary flags using max bmr_infec_previa per patient/admission/organism",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["grupo_microorganismo", "feno_resist_infec_prev"],
-        target=infprev_phenotype_columns,
-        how="create organism-specific previous-infection phenotype tuples using non-zero deduplicated feno_resist_infec_prev codes",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source="infprev_*_binary",
-        target=infection_broad_group_columns,
-        how="sum previous-infection organism binaries into broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source="fecha_infeccion",
-        target=["num_inf_previas", "tiempo_ultima"],
-        how="derive previous infection count and days since last infection",
-    )
     add_change(
         log,
         "transformed_variables",
@@ -1925,6 +1934,13 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         organism_pivot[column] = np.where(organism_pivot[column] >= 1, 1, 0)
     organism_pivot = organism_pivot.rename(columns=organism_column_rename)
     hemo_organism_columns = list(organism_column_rename.values())
+    add_change(
+        log,
+        "created_variables",
+        source="microorganismo",
+        target=hemo_organism_columns,
+        how="pivot grouped hemoculture organisms to binary columns per patient/admission",
+    )
 
     result_df = base.merge(organism_pivot, on=merge_keys, how="left")
 
@@ -1949,6 +1965,13 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         hemo_bmr_columns.append(target_column)
         bmr_pivot = bmr_pivot.drop(columns=organism)
     result_df = result_df.merge(bmr_pivot, on=merge_keys, how="left")
+    add_change(
+        log,
+        "created_variables",
+        source=["microorganismo", "bmr_etiologia"],
+        target=hemo_bmr_columns,
+        how="create organism-specific hemoculture BMR binary flags using max bmr_etiologia per patient/admission/organism",
+    )
 
     phenotype_by_organism = (
         grouped.groupby(merge_keys + ["microorganismo"], dropna=False)["fenotipo_resistencia"]
@@ -1977,6 +2000,13 @@ def preprocess_tbl_hemocultivo_de_urgencias(
             lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
         )
     result_df = result_df.merge(phenotype_pivot, on=merge_keys, how="left")
+    add_change(
+        log,
+        "created_variables",
+        source=["microorganismo", "fenotipo_resistencia"],
+        target=hemo_phenotype_columns,
+        how="create organism-specific hemoculture phenotype tuples using non-zero deduplicated fenotipo_resistencia codes",
+    )
     for column in hemo_bmr_columns:
         result_df[column] = result_df[column].fillna(0).astype(int)
     for column in hemo_phenotype_columns:
@@ -1985,12 +2015,34 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         )
 
     result_df = result_df.merge(pre_correction_result, on=merge_keys, how="left")
+    add_change(
+        log,
+        "created_variables",
+        source="microorganismo_pre_correccion_clinica",
+        target="resultado_hemo_multilabel",
+        how="pre-clinician-correction tuple of all positive grouped organisms; NEGATIVE tuple if no positive organism exists",
+        variable_type="target",
+        n_classes=variable_class_count(result_df["resultado_hemo_multilabel"]),
+    )
     result_df = result_df.merge(raw_microorganism_result, on=merge_keys, how="left")
     resultado_hemo_mo_override_mask = result_df["person_id"].isin(coinfection_map)
     result_df.loc[resultado_hemo_mo_override_mask, "resultado_hemo_mo"] = result_df.loc[
         resultado_hemo_mo_override_mask,
         "person_id",
     ].map(coinfection_map)
+    add_change(
+        log,
+        "created_variables",
+        source="microorganismo_original",
+        target="resultado_hemo_mo",
+        how=(
+            "scalar original microorganism name with clinician-reviewed "
+            "co-infection resolution applied; NEGATIVE if no positive original "
+            "microorganism exists"
+        ),
+        variable_type="target",
+        n_classes=variable_class_count(result_df["resultado_hemo_mo"]),
+    )
 
     dominant_organism_columns = {
         organism_column_rename[column]: column
@@ -2020,54 +2072,11 @@ def preprocess_tbl_hemocultivo_de_urgencias(
     add_change(
         log,
         "created_variables",
-        source="microorganismo",
-        target=hemo_organism_columns,
-        how="pivot grouped hemoculture organisms to binary columns per patient/admission",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["microorganismo", "bmr_etiologia"],
-        target=hemo_bmr_columns,
-        how="create organism-specific hemoculture BMR binary flags using max bmr_etiologia per patient/admission/organism",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["microorganismo", "fenotipo_resistencia"],
-        target=hemo_phenotype_columns,
-        how="create organism-specific hemoculture phenotype tuples using non-zero deduplicated fenotipo_resistencia codes",
-    )
-    add_change(
-        log,
-        "created_variables",
         source=list(dominant_organism_columns),
         target="resultado_hemo",
         how="scalar dominant organism after clinician co-infection correction; NEGATIVE if no positive non-NEGATIVE organism column exists",
         variable_type="target",
         n_classes=variable_class_count(result_df["resultado_hemo"]),
-    )
-    add_change(
-        log,
-        "created_variables",
-        source="microorganismo_original",
-        target="resultado_hemo_mo",
-        how=(
-            "scalar original microorganism name with clinician-reviewed "
-            "co-infection resolution applied; NEGATIVE if no positive original "
-            "microorganism exists"
-        ),
-        variable_type="target",
-        n_classes=variable_class_count(result_df["resultado_hemo_mo"]),
-    )
-    add_change(
-        log,
-        "created_variables",
-        source="microorganismo_pre_correccion_clinica",
-        target="resultado_hemo_multilabel",
-        how="pre-clinician-correction tuple of all positive grouped organisms; NEGATIVE tuple if no positive organism exists",
-        variable_type="target",
-        n_classes=variable_class_count(result_df["resultado_hemo_multilabel"]),
     )
     add_change(
         log,
@@ -2152,6 +2161,13 @@ def preprocess_tbl_colonizaciones_previas(
         pivoted[binary_column] = np.where(pivoted[organism] >= 1, 1, 0)
         colonization_binary_columns.append(binary_column)
         pivoted = pivoted.drop(columns=organism)
+    add_change(
+        log,
+        "created_variables",
+        source="microorganism_colonizador_grupo",
+        target=colonization_binary_columns,
+        how="pivot grouped colonizing organisms to binary columns per patient/admission",
+    )
 
     detail_rows = df[df["microorganism_colonizador_grupo"].notna()].copy()
     detail_rows["bmr_colonizador_numeric"] = pd.to_numeric(
@@ -2179,6 +2195,13 @@ def preprocess_tbl_colonizaciones_previas(
             colonization_bmr_columns.append(target_column)
             bmr_pivot = bmr_pivot.drop(columns=organism)
         pivoted = pivoted.merge(bmr_pivot, on=merge_keys, how="left")
+        add_change(
+            log,
+            "created_variables",
+            source=["microorganism_colonizador_grupo", "bmr_colonizador"],
+            target=colonization_bmr_columns,
+            how="create organism-specific colonization BMR binary flags using max bmr_colonizador per patient/admission/organism",
+        )
 
         phenotype_by_organism = (
             detail_rows.groupby(
@@ -2210,6 +2233,13 @@ def preprocess_tbl_colonizaciones_previas(
                 lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
             )
         pivoted = pivoted.merge(phenotype_pivot, on=merge_keys, how="left")
+        add_change(
+            log,
+            "created_variables",
+            source=["microorganism_colonizador_grupo", "feno_resist_colo"],
+            target=colonization_phenotype_columns,
+            how="create organism-specific colonization phenotype tuples using non-zero deduplicated feno_resist_colo codes",
+        )
     for column in colonization_bmr_columns:
         pivoted[column] = pivoted[column].fillna(0).astype(int)
     for column in colonization_phenotype_columns:
@@ -2221,6 +2251,13 @@ def preprocess_tbl_colonizaciones_previas(
         pivoted[colonization_binary_columns].sum(axis=1).astype(int)
         if colonization_binary_columns
         else 0
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=colonization_binary_columns,
+        target="colonizacion_total_grouped",
+        how="sum explicit colonization organism binary columns",
     )
     colonization_broad_group_columns: list[str] = []
     for broad_group in sorted(set(config["MICROORGANISM_BROAD_GROUP_MAP"].values())):
@@ -2239,34 +2276,6 @@ def preprocess_tbl_colonizaciones_previas(
             else 0
         )
         colonization_broad_group_columns.append(target_column)
-    add_change(
-        log,
-        "created_variables",
-        source="microorganism_colonizador_grupo",
-        target=colonization_binary_columns,
-        how="pivot grouped colonizing organisms to binary columns per patient/admission",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["microorganism_colonizador_grupo", "bmr_colonizador"],
-        target=colonization_bmr_columns,
-        how="create organism-specific colonization BMR binary flags using max bmr_colonizador per patient/admission/organism",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["microorganism_colonizador_grupo", "feno_resist_colo"],
-        target=colonization_phenotype_columns,
-        how="create organism-specific colonization phenotype tuples using non-zero deduplicated feno_resist_colo codes",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=colonization_binary_columns,
-        target="colonizacion_total_grouped",
-        how="sum explicit colonization organism binary columns",
-    )
     add_change(
         log,
         "created_variables",
@@ -2400,6 +2409,13 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
             "rows before pivoting organism counts"
         ),
     )
+    add_change(
+        log,
+        "created_variables",
+        source="otro_cult_microorganismo",
+        target=other_culture_columns,
+        how="pivot grouped other emergency culture organisms to count columns per patient/admission",
+    )
 
     df["bmr_etiologia_otros_numeric"] = pd.to_numeric(
         df["bmr_etiologia_otros"], errors="coerce"
@@ -2425,6 +2441,13 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         other_culture_bmr_columns.append(target_column)
         bmr_pivot = bmr_pivot.drop(columns=organism)
     result_df = result_df.merge(bmr_pivot, on=merge_keys, how="left")
+    add_change(
+        log,
+        "created_variables",
+        source=["otro_cult_microorganismo", "bmr_etiologia_otros"],
+        target=other_culture_bmr_columns,
+        how="create organism-specific other-culture BMR binary flags using max bmr_etiologia_otros per patient/admission/organism",
+    )
 
     phenotype_by_organism = (
         df.groupby(merge_keys + ["otro_cult_microorganismo"], dropna=False)[
@@ -2455,27 +2478,6 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
             lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
         )
     result_df = result_df.merge(phenotype_pivot, on=merge_keys, how="left")
-    for column in other_culture_bmr_columns:
-        result_df[column] = result_df[column].fillna(0).astype(int)
-    for column in other_culture_phenotype_columns:
-        result_df[column] = result_df[column].apply(
-            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
-        )
-
-    add_change(
-        log,
-        "created_variables",
-        source="otro_cult_microorganismo",
-        target=other_culture_columns,
-        how="pivot grouped other emergency culture organisms to count columns per patient/admission",
-    )
-    add_change(
-        log,
-        "created_variables",
-        source=["otro_cult_microorganismo", "bmr_etiologia_otros"],
-        target=other_culture_bmr_columns,
-        how="create organism-specific other-culture BMR binary flags using max bmr_etiologia_otros per patient/admission/organism",
-    )
     add_change(
         log,
         "created_variables",
@@ -2483,6 +2485,13 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         target=other_culture_phenotype_columns,
         how="create organism-specific other-culture phenotype tuples using non-zero deduplicated fenotipo_resistencia_otros codes",
     )
+    for column in other_culture_bmr_columns:
+        result_df[column] = result_df[column].fillna(0).astype(int)
+    for column in other_culture_phenotype_columns:
+        result_df[column] = result_df[column].apply(
+            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+        )
+
     add_change(
         log,
         "dropped_variables",
