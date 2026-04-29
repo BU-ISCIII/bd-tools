@@ -143,9 +143,23 @@ def parse_date(value: str) -> datetime | None:
     return None
 
 
-def infer_data_type(non_missing_values: list[str], numeric_values: list[float]) -> str:
+def has_count_semantics(column: str) -> bool:
+    return (
+        column.endswith("_count")
+        or column.endswith("_counts")
+        or column.endswith("_total")
+        or column.endswith("_total_grouped")
+        or column in {"antib_previo_total_veces", "antib_previo_total_familias"}
+    )
+
+
+def infer_data_type(column: str, non_missing_values: list[str], numeric_values: list[float]) -> str:
     if not non_missing_values:
         return "empty"
+    if has_count_semantics(column) and len(numeric_values) == len(non_missing_values):
+        if all(value.is_integer() for value in numeric_values):
+            return "int"
+        return "float"
     bool_tokens = [normalize_bool_token(value) for value in non_missing_values]
     if all(token is not None for token in bool_tokens):
         return "bool"
@@ -162,7 +176,7 @@ def infer_data_type(non_missing_values: list[str], numeric_values: list[float]) 
     return "string"
 
 
-def profile_values(values: list[str]) -> dict[str, str]:
+def profile_values(column: str, values: list[str]) -> dict[str, str]:
     total = len(values)
     non_missing = [value for value in values if not is_missing(value)]
     missing_count = total - len(non_missing)
@@ -172,7 +186,7 @@ def profile_values(values: list[str]) -> dict[str, str]:
         for value in non_missing
         if (parsed := parse_number(value)) is not None
     ]
-    data_type = infer_data_type(non_missing, numeric_values)
+    data_type = infer_data_type(column, non_missing, numeric_values)
 
     profile = {
         "data_type": data_type,
@@ -335,7 +349,7 @@ def build_rows(
         description = " ".join(dict.fromkeys(clean_text(part) for part in desc_parts if clean_text(part)))
         dropped = "yes" if column not in filtered_columns else "no"
         variable_type = variable_types.get(column, "feature")
-        profile = profile_values(full_values[column])
+        profile = profile_values(column, full_values[column])
         rows.append([
             column,
             variable_type,
