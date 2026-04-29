@@ -168,6 +168,7 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 .~lock.preprocess_test.csv#
+.~lock.*#
 .codex
 csv_comparison_report/differences_after_name_normalization.csv
 csv_comparison_report/columns_in_repo_not_in_source_after_name_normalization.csv
