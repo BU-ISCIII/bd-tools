@@ -1,25 +1,46 @@
 # Columns or glob patterns to drop from the filtered preprocessing output.
 # The full output CSV keeps these columns.
 
-# Administrative/date/location variables not used in clinician-facing modelling output.
+## Known leakage columns.
+# These encode culture/organism/resistance information that should not be
+# available as predictors for outcome modelling. Target columns are intentionally
+# not listed here; modelling scripts keep the selected target as y and remove
+# other target-like columns from X.
+
+# All-culture source/detail columns retained in the full dataset.
+all_cult_*_count
+all_cult_*_binary
+all_cult_bmr_*_binary
+all_cult_fenotipo_*_tuple
+
+# Source culture indicators retained in the full dataset.
+hemo_*_binary
+otros_cult_*
+
+# Foco/table, administrative, date, location, and ID variables
+person_id
 fecha_ingreso_urgencias
 fecha_nacimiento
 codigo_postal
 dag
 center
+ultima_fecha
+
+## Clinically determined removals.
+qsofa
+vasopresores
+hipotension
+shock_septico
+mujer_gestante
+hepatopatia
+
+## Technical/test determined removals.
 
 # Detailed comorbidity dummies collapsed into canceres_si_no and hepatopatias_si_no.
 tipo_cancer_*
 tipo_hepatopatia_*
 
-# Source culture indicators retained in the full dataset.
-# Filtered output keeps dominant_all_cult_org, matching the notebook final table
-# where combined culture counts are used only to derive all_cult_org.
-hemo_*_binary
-otros_cult_*
-all_cult_*_count
-
-# Experimental organism-specific BMR/phenotype detail retained only in the full output.
+# Experimental organism-specific BMR/phenotype
 infprev_bmr_*_binary
 infprev_fenotipo_*_tuple
 hemo_bmr_*_binary
@@ -28,11 +49,3 @@ colo_bmr_*_binary
 colo_fenotipo_*_tuple
 otros_cult_bmr_*_binary
 otros_cult_fenotipo_*_tuple
-all_cult_bmr_*_binary
-all_cult_fenotipo_*_tuple
-
-## foco_ dummy variables that are generated in model.
-foco_*_binary
-
-## Remove not needed hepatopatia variable
-hepatopatia
