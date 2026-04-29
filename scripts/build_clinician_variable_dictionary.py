@@ -241,6 +241,22 @@ def class_count_for_target(operation: dict, target: str) -> str:
     return str(value)
 
 
+def format_class_count_display(
+    *,
+    class_count: str,
+    variable_type: str,
+    profile: dict[str, str],
+) -> str:
+    if not class_count:
+        return ""
+    if variable_type == "target" and profile["data_type"] == "tuple":
+        option_count = profile["number_options"]
+        if option_count:
+            return f"{class_count} exploded labels; {option_count} row-level combinations"
+        return f"{class_count} exploded labels"
+    return class_count
+
+
 def infer_description(column: str, stage_name: str | None) -> str:
     if column == "person_id":
         return "Patient identifier retained to link all preprocessed tables."
@@ -350,10 +366,15 @@ def build_rows(
         dropped = "yes" if column not in filtered_columns else "no"
         variable_type = variable_types.get(column, "feature")
         profile = profile_values(column, full_values[column])
+        class_count = format_class_count_display(
+            class_count=class_counts.get(column, ""),
+            variable_type=variable_type,
+            profile=profile,
+        )
         rows.append([
             column,
             variable_type,
-            class_counts.get(column, ""),
+            class_count,
             profile["data_type"],
             profile["missing_percent"],
             profile["min"],
