@@ -4,12 +4,17 @@ import argparse
 import ast
 import json
 import sqlite3
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from build_clinician_variable_dictionary import build_variable_dictionary
+from build_clinician_variable_dictionary import (
+    DOMAIN_BY_STAGE,
+    build_variable_dictionary,
+    infer_source_domain,
+)
 
 
 DEFAULT_SUMMARY_LOG_PATH = Path("preprocess_test_log_summary.csv")
@@ -27,15 +32,7 @@ COLORS = {
     "transformed": "#CC79A7",
     "dropped": "#D55E00",
 }
-VARIABLE_GROUP_LABELS = [
-    "Demographics",
-    "Comorbidities",
-    "Signs / sepsis",
-    "Infection history",
-    "Antibiotics",
-    "Cultures",
-    "Derived variables",
-]
+VARIABLE_GROUP_LABELS = list(dict.fromkeys(DOMAIN_BY_STAGE.values()))
 
 CHART_FONT_SIZES = {
     "title": 18,
@@ -192,227 +189,32 @@ def write_missingness_chart_png(
     plt.close(fig)
 
 
-def grouped_slide_missingness(df: pd.DataFrame) -> pd.DataFrame:
+def first_stage_by_column(
+    columns: list[str],
+    detailed_logs: list[dict[str, object]],
+) -> dict[str, str]:
+    available_columns = set(columns)
+    first_stage: dict[str, str] = {}
+    for stage in detailed_logs:
+        stage_name = str(stage.get("table_name", ""))
+        if stage_name in {"_pipeline_run", "merged_dataset", "filtered_dataset"}:
+            continue
+        for column in stage.get("output_columns", []):
+            column = str(column)
+            if column in available_columns:
+                first_stage.setdefault(column, stage_name)
+    return first_stage
+
+
+def grouped_slide_missingness(
+    df: pd.DataFrame,
+    detailed_logs: list[dict[str, object]],
+) -> pd.DataFrame:
     missing_percent = df.isna().mean().mul(100)
-    all_columns = set(df.columns)
-
-    def existing(columns: list[str]) -> list[str]:
-        return [column for column in columns if column in all_columns]
-
-    groups = [
-        (
-            "Patient / demographics",
-            existing(
-                [
-                    "person_id",
-                    "fecha_ingreso_urgencias",
-                    "fecha_nacimiento",
-                    "edad",
-                    "sexo",
-                    "codigo_postal",
-                    "mujer_gestante",
-                    "mayor_65",
-                    "paciente_residencia",
-                    "center",
-                    "dag",
-                ]
-            ),
-        ),
-        (
-            "Comorbidities / Charlson",
-            existing(
-                [
-                    "infarto",
-                    "insuficiencia_cardiaca",
-                    "evp",
-                    "e_cerebrovascular",
-                    "demencia",
-                    "e_pulmonar_cronica",
-                    "ulcera_peptica",
-                    "colagenopatia",
-                    "hemiplejia",
-                    "erc",
-                    "neoplasia",
-                    "linfoma",
-                    "leucemia",
-                    "sida",
-                    "diabetes",
-                    "indice_de_charlson",
-                    "inmunosupresion",
-                    "causa_inmunosupresion",
-                    "situacion_funcional_basal",
-                    "canceres_si_no",
-                    "hepatopatias_si_no",
-                ]
-            ),
-        ),
-        (
-            "Healthcare exposure / devices",
-            existing(
-                [
-                    "hospit_ano_previo",
-                    "hospit_mes_previo",
-                    "hospit_ano_previo_uci",
-                    "cirugia_previa_sin_implant",
-                    "cirugia_previa_con_implant",
-                    "asistencia_sanitaria_prev",
-                    "hemodialisis_permanente",
-                    "dialisis_peritoneal",
-                    "cateter_venoso",
-                    "sonda_urinaria",
-                    "sonda_nasogastrica",
-                    "derivacion_ventriculoper",
-                    "valvula_prot_cardiaca",
-                    "portador_otros_disposit",
-                    "residencia_dialisis",
-                    "carga_dispositivos",
-                    "total_inmunoriesgo_cat",
-                ]
-            ),
-        ),
-        (
-            "Sepsis / organ dysfunction",
-            existing(
-                [
-                    "foco",
-                    "sepsis",
-                    "shock_septico",
-                    "sofa",
-                    "respiracion",
-                    "snc_glasgow",
-                    "cardiovascular",
-                    "bilirrubina",
-                    "plaquetas",
-                    "creatinina",
-                    "lactato_serico",
-                    "vasopresores",
-                    "proteina_c_reactiva",
-                    "qsofa",
-                    "estado_mental_alterado",
-                    "proteina_c_reactiva_recoded",
-                ]
-            ),
-        ),
-        (
-            "Vital signs",
-            [
-                column
-                for column in df.columns
-                if column
-                in {
-                    "temperatura",
-                    "hipotermia_hipertermia",
-                    "frec_cardiaca",
-                    "taquicardia",
-                    "frec_respiratoria",
-                    "taquipnea",
-                    "tension_arterial",
-                    "hipotension",
-                    "saturacion_o2",
-                    "hipoxemia",
-                    "temperatura_recoded",
-                    "frec_respiratoria_recoded",
-                    "frec_cardiaca_recoded",
-                    "tension_arterial_recoded",
-                    "saturacion_o2_recoded",
-                }
-            ],
-        ),
-        (
-            "Symptoms",
-            [column for column in df.columns if column.startswith("sintoma_")],
-        ),
-        (
-            "Previous infections",
-            [
-                column
-                for column in df.columns
-                if column.startswith("infprev_")
-                or column
-                in {
-                    "inf_previa_sino",
-                    "bmr_infec_previa",
-                    "Inf_Bacilo_gram-",
-                    "Inf_Coco_gram+",
-                    "num_inf_previas",
-                    "tiempo_ultima",
-                }
-            ],
-        ),
-        (
-            "Previous antibiotic summary",
-            existing(
-                [
-                    "antib_previo_si_no",
-                    "prev_betalactamase_inhib",
-                    "antib_previo_total_veces",
-                    "ultimo_antib",
-                    "dias_ultimo_antib",
-                    "antib_previo_total_familias",
-                ]
-            ),
-        ),
-        (
-            "Previous antibiotic family counts",
-            [
-                column
-                for column in df.columns
-                if column.startswith("antib_previo_") and column.endswith("_counts")
-            ],
-        ),
-        (
-            "Previous antibiotic family binaries",
-            [
-                column
-                for column in df.columns
-                if column.startswith("antib_previo_") and column.endswith("_binary")
-            ],
-        ),
-        (
-            "Previous colonization",
-            [
-                column
-                for column in df.columns
-                if column.startswith("colo_")
-                or column
-                in {
-                    "Colo_Bacilo_gram-",
-                    "Colo_Coco_gram+",
-                    "colonizacion_total_grouped",
-                }
-            ],
-        ),
-        (
-            "Culture / organism totals",
-            [
-                column
-                for column in df.columns
-                if column.endswith("_total")
-                or column
-                in {
-                    "dominant_all_cult_org",
-                    "densidad_inf",
-                }
-            ],
-        ),
-        (
-            "Targets / outcomes",
-            existing(
-                [
-                    "bmr_etiologia",
-                    "fenotipo_resistencia",
-                    "resultado_hemo_multilabel",
-                    "resultado_hemo",
-                    "recurrencia_precoz",
-                    "resultado_hemo_grouped",
-                    "infected_yes_no",
-                    "resistente_cefalosporina",
-                    "resistente_cefalosporina_multi",
-                    "sample_weight",
-                ]
-            ),
-        ),
-    ]
+    first_stage = first_stage_by_column(df.columns.tolist(), detailed_logs)
+    groups: dict[str, list[str]] = defaultdict(list)
+    for column in df.columns:
+        groups[infer_source_domain(first_stage.get(column))].append(column)
 
     bands = [
         ("0%", lambda values: values == 0),
@@ -422,12 +224,17 @@ def grouped_slide_missingness(df: pd.DataFrame) -> pd.DataFrame:
         ("80-100%", lambda values: values > 80),
     ]
     rows = []
-    assigned_columns: set[str] = set()
-    for label, columns in groups:
-        columns = [column for column in columns if column not in assigned_columns]
+    ordered_groups = [
+        group for group in VARIABLE_GROUP_LABELS
+        if groups.get(group)
+    ]
+    ordered_groups.extend(
+        sorted(group for group in groups if group not in set(ordered_groups))
+    )
+    for label in ordered_groups:
+        columns = groups[label]
         if not columns:
             continue
-        assigned_columns.update(columns)
         group_missing = missing_percent[columns]
         row = {"group": label, "variables": len(columns)}
         for band_label, mask_fn in bands:
@@ -443,9 +250,10 @@ def grouped_slide_missingness(df: pd.DataFrame) -> pd.DataFrame:
 def write_grouped_missingness_chart_png(
     df: pd.DataFrame,
     *,
+    detailed_logs: list[dict[str, object]],
     output_path: Path,
 ) -> pd.DataFrame:
-    plot_df = grouped_slide_missingness(df)
+    plot_df = grouped_slide_missingness(df, detailed_logs)
     band_columns = ["0%", ">0-10%", "10-40%", "40-80%", "80-100%"]
     band_colors = {
         "0%": "#009E73",
@@ -493,130 +301,36 @@ def write_grouped_missingness_chart_png(
     return plot_df
 
 
-def targets_from_changes(changes: list[dict[str, object]]) -> list[str]:
-    targets: list[str] = []
-    for change in changes:
-        value = change.get("target", [])
-        values = value if isinstance(value, list) else [value]
-        targets.extend(str(item) for item in values if item)
-    return targets
-
-
-def columns_from_stage(
-    detailed_logs_by_table: dict[str, dict[str, object]],
-    table_name: str,
-    available_columns: set[str],
-    *,
-    exclude_keys: bool = True,
-) -> list[str]:
-    columns = detailed_logs_by_table[table_name]["output_columns"]
-    key_columns = {"person_id", "fecha_ingreso_urgencias"} if exclude_keys else set()
-    return [
-        str(column)
-        for column in columns
-        if column in available_columns and column not in key_columns
-    ]
-
-
 def variable_distribution_by_group(
     columns: list[str],
     detailed_logs: list[dict[str, object]],
 ) -> pd.DataFrame:
     available_columns = set(columns)
-    detailed_logs_by_table = {str(log["table_name"]): log for log in detailed_logs}
+    first_stage_by_column: dict[str, str] = {}
+    for stage in detailed_logs:
+        stage_name = str(stage.get("table_name", ""))
+        if stage_name in {"_pipeline_run", "merged_dataset", "filtered_dataset"}:
+            continue
+        for column in stage.get("output_columns", []):
+            column = str(column)
+            if column in available_columns:
+                first_stage_by_column.setdefault(column, stage_name)
 
-    groups = {
-        "Demographics": [
-            column
-            for column in detailed_logs_by_table["tbl_paciente"]["output_columns"]
-            if column in available_columns
-            and column not in {"inf_previa_sino", "bmr_infec_previa"}
-        ],
-        "Comorbidities": columns_from_stage(
-            detailed_logs_by_table,
-            "tbl_comorbilidad",
-            available_columns,
-        ),
-        "Signs / sepsis": (
-            columns_from_stage(detailed_logs_by_table, "tbl_signos", available_columns)
-            + columns_from_stage(detailed_logs_by_table, "tbl_sepsis", available_columns)
-            + columns_from_stage(detailed_logs_by_table, "tbl_sintomas", available_columns)
-        ),
-        "Infection history": (
-            [
-                column
-                for column in ["inf_previa_sino", "bmr_infec_previa"]
-                if column in available_columns
-            ]
-            + columns_from_stage(
-                detailed_logs_by_table,
-                "tbl_factores_riesgo_bmr",
-                available_columns,
-            )
-            + columns_from_stage(
-                detailed_logs_by_table,
-                "tbl_infecciones_previas",
-                available_columns,
-            )
-            + columns_from_stage(
-                detailed_logs_by_table,
-                "tbl_colonizaciones_previas",
-                available_columns,
-            )
-        ),
-        "Antibiotics": columns_from_stage(
-            detailed_logs_by_table,
-            "tbl_tratamiento_antibiotico_previo",
-            available_columns,
-        ),
-        "Cultures": (
-            columns_from_stage(
-                detailed_logs_by_table,
-                "tbl_hemocultivo_de_urgencias",
-                available_columns,
-            )
-            + columns_from_stage(
-                detailed_logs_by_table,
-                "tbl_otros_cultivos_en_urgencias",
-                available_columns,
-            )
-        ),
-        "Derived variables": (
-            [
-                column
-                for column in targets_from_changes(
-                    detailed_logs_by_table["cross_table_features"].get(
-                        "created_variables", []
-                    )
-                )
-                if column in available_columns
-            ]
-            + [
-                column
-                for column in targets_from_changes(
-                    detailed_logs_by_table["target_building"].get("created_variables", [])
-                )
-                if column in available_columns
-            ]
-        ),
-    }
+    counts = Counter(
+        infer_source_domain(first_stage_by_column.get(column))
+        for column in columns
+    )
 
-    assigned_columns: set[str] = set()
     records = []
-    for group in VARIABLE_GROUP_LABELS:
-        group_columns = []
-        for column in groups[group]:
-            if column not in assigned_columns:
-                group_columns.append(column)
-                assigned_columns.add(column)
-        records.append({"group": group, "variables": len(group_columns)})
-
-    unassigned_columns = [column for column in columns if column not in assigned_columns]
-    if unassigned_columns:
-        raise ValueError(
-            "Unclassified variables in distribution: "
-            + ", ".join(unassigned_columns[:20])
-        )
+    ordered_groups = [
+        group for group in VARIABLE_GROUP_LABELS
+        if counts.get(group, 0) > 0
+    ]
+    ordered_groups.extend(
+        sorted(group for group in counts if group not in set(ordered_groups))
+    )
+    for group in ordered_groups:
+        records.append({"group": group, "variables": int(counts[group])})
 
     return pd.DataFrame.from_records(records)
 
@@ -637,6 +351,7 @@ def variable_distribution_filtered_vs_unfiltered(
         on="group",
         how="left",
     )
+    result["filtered_variables"] = result["filtered_variables"].fillna(0).astype(int)
     result["removed_by_filter"] = (
         result["unfiltered_variables"] - result["filtered_variables"]
     )
@@ -1623,6 +1338,7 @@ def build_report(
         write_missingness_chart_png(filtered_df, output_path=missingness_chart)
         grouped_missingness = write_grouped_missingness_chart_png(
             filtered_df,
+            detailed_logs=detailed_logs,
             output_path=grouped_missingness_chart,
         )
         grouped_missingness.to_csv(
