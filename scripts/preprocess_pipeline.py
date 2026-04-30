@@ -19,7 +19,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT_DIR.parent
 DEFAULT_DB_PATH = ROOT_DIR / "database" / "db_mepram_sepsis.sqlite3"
 DEFAULT_OUTPUT_PATH = ROOT_DIR / "outputs" / "preprocessed_output.csv"
-DEFAULT_CONFIG_PATH = ROOT_DIR / "preprocess_config.py"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "preprocess_config.py"
 DEFAULT_DROP_COLUMNS_PATH = PROJECT_ROOT / "data" / "preprocess_columns_to_drop.txt"
 
 
@@ -431,7 +431,7 @@ def git_output(args: list[str]) -> str:
 def preprocessing_git_metadata() -> dict[str, str]:
     tracked_inputs = [
         "scripts/preprocess_pipeline.py",
-        "scripts/preprocess_config.py",
+        "config/preprocess_config.py",
         "data/preprocess_columns_to_drop.txt",
     ]
     dirty_status = git_output(["status", "--porcelain", "--", *tracked_inputs])

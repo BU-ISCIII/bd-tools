@@ -41,6 +41,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import optuna
 import pandas as pd
+import yaml
 from catboost import CatBoostClassifier
 from imblearn.over_sampling import SMOTE, RandomOverSampler
 from lightgbm import LGBMClassifier
@@ -69,6 +70,8 @@ import shap
 N_CPUS = int(os.environ.get("SLURM_CPUS_PER_TASK", 1))
 JOB_ID = os.environ.get("SLURM_JOB_ID", 1)
 TODAY = datetime.today().strftime("%Y%m%d%H%M%S")
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_MODEL_FILTERS_PATH = PROJECT_ROOT / "config" / "model_filters.yml"
 
 # All potential target columns – none of these should appear as features
 TARGET_REMOVE = [
@@ -108,17 +111,6 @@ DELETE_COLUMNS = [
     "mujer_gestante",
 ]
 
-FOCUS_TO_EXCLUDE = {
-    "piel",
-    "osteoarticular",
-    "biliar",
-    "genital",
-    "sistema nervioso central",
-    "cateter venoso",
-    "vías altas respiratorias",
-    "cardiovascular",
-}
-
 # ---------------------------------------------------------------------------
 # Data preparation helpers
 # ---------------------------------------------------------------------------
@@ -133,13 +125,72 @@ def safe_drop_columns(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     return df
 
 
-def load_processed_dataframe(csv_path: Path, cols_to_delete: List[str]) -> pd.DataFrame:
-    """Load preprocessed dataset and apply focus filter. No target-based row filtering here."""
+def load_model_filters(config_path: Optional[Path]) -> List[Dict]:
+    if config_path is None:
+        return []
+    if not config_path.exists():
+        raise FileNotFoundError(f"Model filters config not found: {config_path}")
+    with config_path.open("r", encoding="utf-8") as fh:
+        config = yaml.safe_load(fh) or {}
+    filters = config.get("cohort_filters", [])
+    if not isinstance(filters, list):
+        raise ValueError(f"'cohort_filters' must be a list in {config_path}")
+    return filters
+
+
+def apply_model_filters(df: pd.DataFrame, filters: List[Dict]) -> Tuple[pd.DataFrame, List[Dict]]:
+    """Apply row-level cohort filters defined in config/model_filters.yml."""
+    filtered = df
+    applied: List[Dict] = []
+    for spec in filters:
+        name = spec.get("name", "unnamed_filter")
+        column = spec.get("column")
+        if not column:
+            raise ValueError(f"Model filter '{name}' is missing required key 'column'.")
+        if column not in filtered.columns:
+            print(f"Warning: model filter '{name}' skipped; column '{column}' not found.")
+            applied.append({"name": name, "column": column, "status": "skipped_missing_column"})
+            continue
+
+        before = len(filtered)
+        mask = pd.Series(True, index=filtered.index)
+        if spec.get("require_notna", False):
+            mask &= filtered[column].notna()
+        if "include_values" in spec:
+            mask &= filtered[column].isin(spec["include_values"])
+        if "exclude_values" in spec:
+            mask &= ~filtered[column].isin(spec["exclude_values"])
+        if "min_value" in spec:
+            mask &= pd.to_numeric(filtered[column], errors="coerce") >= spec["min_value"]
+        if "max_value" in spec:
+            mask &= pd.to_numeric(filtered[column], errors="coerce") <= spec["max_value"]
+
+        filtered = filtered.loc[mask].copy()
+        removed = before - len(filtered)
+        print(f"Model filter '{name}' removed {removed} rows.")
+        applied.append({
+            "name": name,
+            "column": column,
+            "status": "applied",
+            "rows_before": before,
+            "rows_after": len(filtered),
+            "rows_removed": removed,
+            "criteria": {k: v for k, v in spec.items() if k not in {"name", "column"}},
+        })
+    return filtered, applied
+
+
+def load_processed_dataframe(
+    csv_path: Path,
+    cols_to_delete: List[str],
+    filter_config_path: Optional[Path],
+) -> Tuple[pd.DataFrame, List[Dict]]:
+    """Load preprocessed dataset and apply configured row filters."""
     df = pd.read_csv(csv_path)
-    if "foco" in df.columns:
-        df = df[~df["foco"].isin(FOCUS_TO_EXCLUDE)]
+    model_filters = load_model_filters(filter_config_path)
+    df, applied_filters = apply_model_filters(df, model_filters)
     df = safe_drop_columns(df, cols_to_delete)
-    return df
+    return df, applied_filters
 
 
 def impute_missing_values(loaded_df: pd.DataFrame, exclude_cols: set) -> pd.DataFrame:
@@ -882,7 +933,11 @@ def run_training(args: argparse.Namespace) -> None:
     cols_to_delete = list(DELETE_COLUMNS)
     cols_to_delete.extend([x for x in TARGET_REMOVE if x not in all_targets])
 
-    df = load_processed_dataframe(args.database_file, cols_to_delete)
+    df, applied_model_filters = load_processed_dataframe(
+        args.database_file,
+        cols_to_delete,
+        args.model_filters,
+    )
 
     missing = [c for c in all_targets if c not in df.columns]
     if missing:
@@ -973,7 +1028,10 @@ def run_training(args: argparse.Namespace) -> None:
     output_dir = Path(str(args.output_dir) + "_" + TODAY + "_" + JOB_ID)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    all_summaries: Dict = {"args": {str(k): str(v) for k,v in args.__dict__.items()}}
+    all_summaries: Dict = {
+        "args": {str(k): str(v) for k, v in args.__dict__.items()},
+        "model_filters": applied_model_filters,
+    }
 
     # ==================================================================
     # LEVEL 1 – sepsis
@@ -1507,6 +1565,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-impute", dest="impute_missing", action="store_false",
         help="Disable missing-value imputation (default: enabled).",
+    )
+    parser.add_argument(
+        "--model-filters",
+        type=Path,
+        default=DEFAULT_MODEL_FILTERS_PATH,
+        help=(
+            "YAML file with row-level modelling cohort filters "
+            f"(default: {DEFAULT_MODEL_FILTERS_PATH})."
+        ),
     )
     parser.set_defaults(impute_missing=True)
     return parser

@@ -11,7 +11,7 @@ The preprocessing entry point is:
 ./.venv/bin/python scripts/preprocess_pipeline.py \
   --input-path db_mepram_sepsis_vf.sqlite3 \
   --output-path preprocess_test.csv \
-  --config-path scripts/preprocess_config.py \
+  --config-path config/preprocess_config.py \
   --drop-columns-path data/preprocess_columns_to_drop.txt \
   --run-label current_report_layout
 ```
@@ -49,7 +49,7 @@ mkdir -p "${RUN_DIR}"
 ./.venv/bin/python scripts/preprocess_pipeline.py \
   --input-path db_mepram_sepsis_vf.sqlite3 \
   --output-path "${RUN_DIR}/${RUN_ID}_full.csv" \
-  --config-path scripts/preprocess_config.py \
+  --config-path config/preprocess_config.py \
   --drop-columns-path data/preprocess_columns_to_drop.txt \
   --run-label "${RUN_LABEL}"
 ```
@@ -152,7 +152,8 @@ and graphs without rebuilding the Excel workbook.
 
 | File | Purpose |
 |---|---|
-| `scripts/preprocess_config.py` | Versioned clinical/domain configuration: recoding thresholds, organism groups, antimicrobial families, phenotype mappings. |
+| `config/preprocess_config.py` | Versioned clinical/domain configuration: recoding thresholds, organism groups, antimicrobial families, phenotype mappings. |
+| `config/model_filters.yml` | Row-level cohort filters used by HPC modelling scripts. |
 | `data/preprocess_columns_to_drop.txt` | Explicit column names and glob patterns removed from the filtered output. The full output keeps these columns. |
 | `QUESTIONS_AND_ASSUMPTIONS.md` | Clinical assumptions and questions that need review before locking behavior. |
 
@@ -168,7 +169,7 @@ The summary and detailed logs include:
 | `git_head_commit` | Repository `HEAD` commit at run time. |
 | `preprocess_script_commit` | Last committed Git revision that touched `scripts/preprocess_pipeline.py`. |
 | `preprocess_script_blob` | Git object hash of the current `scripts/preprocess_pipeline.py` file contents. This changes even for uncommitted edits. |
-| `preprocess_code_dirty` | `yes` if preprocessing-relevant files had uncommitted changes when the run started. Checked files are `scripts/preprocess_pipeline.py`, `scripts/preprocess_config.py`, and `data/preprocess_columns_to_drop.txt`. |
+| `preprocess_code_dirty` | `yes` if preprocessing-relevant files had uncommitted changes when the run started. Checked files are `scripts/preprocess_pipeline.py`, `config/preprocess_config.py`, and `data/preprocess_columns_to_drop.txt`. |
 | `run_label` | Short human-readable run description passed with `--run-label`. |
 
 Check these fields in the summary log:
@@ -180,7 +181,7 @@ git rev-parse HEAD
 git rev-parse --short HEAD
 git log -1 --format=%H -- scripts/preprocess_pipeline.py
 git hash-object scripts/preprocess_pipeline.py
-git status --short -- scripts/preprocess_pipeline.py scripts/preprocess_config.py data/preprocess_columns_to_drop.txt
+git status --short -- scripts/preprocess_pipeline.py config/preprocess_config.py data/preprocess_columns_to_drop.txt
 ```
 
 For a fully reproducible run, commit preprocessing-code changes before running.

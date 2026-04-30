@@ -1,0 +1,16 @@
+# Row-level filters used by HPC modelling scripts.
+# These filters define modelling cohorts; they do not change preprocessing
+# outputs or target selection.
+
+cohort_filters:
+  - name: exclude_low_priority_foci
+    column: foco
+    exclude_values:
+      - piel
+      - osteoarticular
+      - biliar
+      - genital
+      - sistema nervioso central
+      - cateter venoso
+      - vías altas respiratorias
+      - cardiovascular
