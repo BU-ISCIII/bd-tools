@@ -1,6 +1,6 @@
-# Preprocessing Assumptions for Clinical Review
+# Preprocessing Assumptions
 
-This note records current preprocessing assumptions in the rewritten pipeline so they can be reviewed with clinicians before they become fixed behavior.
+This note records preprocessing assumptions in the rewritten pipeline. Items marked as settled reflect clinician-reviewed decisions.
 
 ## Table of Contents
 
@@ -20,31 +20,25 @@ This note records current preprocessing assumptions in the rewritten pipeline so
 
 ### Missing values: when NA becomes 0 and when it remains unknown
 
-General rule to validate with clinicians:
+Clinician-reviewed rule:
 
 - Missing source rows are only converted to `0` when the table represents an exposure/event list and absence of a row is clinically interpreted as no recorded event.
 - Missing values remain `NaN` when absence may mean unknown, not measured, or not captured.
 - Some aggregation steps create explicit `0` values after completing the output to all master patient/admissions. These `0` values mean "no event observed in that source table after applying preprocessing filters", not necessarily "clinically impossible".
 
-Current table-level behavior to review:
+Settled table-level behavior:
 
-| Table / feature family | Current behavior for missing or absent information | Clinical question |
-| --- | --- | --- |
-| `tbl_sintomas` | Missing symptom rows are kept as unknown/`NaN`; symptom columns are not globally filled with `0`. | Does no symptom row mean absent symptom or unknown symptom capture? |
-| `tbl_signos` | Missing measured signs remain `NaN`; derived flags preserve original values when the numeric measurement is missing. | Should missing vital signs be treated as unknown rather than normal? |
-| `tbl_sepsis` | Missing numeric sepsis fields remain `NaN`; quartile recodes are missing when the source value is missing or removed as outlier. | Are missing sepsis measurements clinically unknown, or can any be interpreted as normal/negative? |
-| `tbl_infecciones_previas` | Patient/admissions with no aggregated previous-infection row are completed with `0` for exposure/count columns and `NEGATIVE` for organism-specific phenotype tuples. | Does no previous-infection record mean no known previous infection, or incomplete previous-infection history? |
-| `tbl_colonizaciones_previas` | Patient/admissions with no aggregated colonisation row are completed with `0` for exposure/count columns and `NEGATIVE` for phenotype tuples. | Does no colonisation record mean no known colonisation, or unknown screening/history? |
-| `tbl_tratamiento_antibiotico_previo` | Missing or non-positive `dias_trat_antimicrobiano` rows are removed before antibiotic features are built; absent patient/admissions are later filled with `0` for exposure/count columns. | Does missing/zero duration mean no valid prior antibiotic exposure, or exposure with missing duration? |
-| `tbl_hemocultivo_de_urgencias` | Negative/missing microorganism codes become `NEGATIVE`; BMR/phenotype information is aggregated only when culture organisms are present. | Should `NEGATIVE` mean no growth, no target organism, or missing/unknown culture result in any cases? |
-| `tbl_otros_cultivos_en_urgencias` | Missing culture type is filled with `0` before duplicate removal; missing/unmapped organisms become `NEGATIVE`; counts are pivoted by grouped organism. | Should missing culture type be a true category, unknown, or excluded? |
-| Final filtered dataset | Columns listed in `data/preprocess_columns_to_drop.txt` are dropped; missing feature values are generally left for model-side imputation. | Which missing values should be resolved in preprocessing before modelling? |
-
-Decision needed:
-
-- Confirm, for each source table, whether absence of a row means `0`/negative or unknown.
-- Confirm whether any current `0` fills should instead become explicit `NaN` or an `unknown` category.
-- Confirm whether this table should be expanded into the clinician Excel as a per-variable note.
+| Table / feature family | Clinician-reviewed behavior for missing or absent information |
+| --- | --- |
+| `tbl_sintomas` | Missing symptom rows are kept as unknown/`NaN`; symptom columns are not globally filled with `0`. |
+| `tbl_signos` | Missing measured signs remain `NaN`; derived flags preserve original values when the numeric measurement is missing. Missing vital signs are unknown, not normal. |
+| `tbl_sepsis` | Missing numeric sepsis fields remain `NaN`; quartile recodes are missing when the source value is missing or removed as outlier. Missing sepsis measurements are unknown, not normal/negative. |
+| `tbl_infecciones_previas` | Patient/admissions with no aggregated previous-infection row are completed with `0` for exposure/count columns and `NEGATIVE` for organism-specific phenotype tuples. Absence of a previous-infection row is interpreted as no recorded previous infection event. |
+| `tbl_colonizaciones_previas` | Patient/admissions with no aggregated colonisation row are completed with `0` for exposure/count columns and `NEGATIVE` for phenotype tuples. Absence of a colonisation row is interpreted as no recorded previous colonisation event. |
+| `tbl_tratamiento_antibiotico_previo` | Missing or non-positive `dias_trat_antimicrobiano` rows are removed before antibiotic features are built; absent patient/admissions are later filled with `0` for exposure/count columns. Absence after this filtering is interpreted as no valid recorded prior antibiotic exposure. |
+| `tbl_hemocultivo_de_urgencias` | Negative/missing microorganism codes become `NEGATIVE`; BMR/phenotype information is aggregated only when culture organisms are present. |
+| `tbl_otros_cultivos_en_urgencias` | Missing culture type is filled with `0` before duplicate removal; missing/unmapped organisms become `NEGATIVE`; counts are pivoted by grouped organism. |
+| Final filtered dataset | Columns listed in `data/preprocess_columns_to_drop.txt` are dropped; remaining missing feature values are generally left for model-side imputation. |
 
 ### Microorganism target grouping
 
@@ -76,22 +70,13 @@ Questions for clinicians:
 
 ### Symptoms (`tbl_sintomas`)
 
-- Rows missing from `tbl_sintomas` after the left merge are currently interpreted as **unknown / not recorded**, not as symptom absence.
+- Rows missing from `tbl_sintomas` after the left merge are interpreted as **unknown / not recorded**, not as symptom absence.
 - As a consequence, symptom-derived columns remain `NaN` for patient/admission rows that do not have a matching symptom record.
-- We are **not** filling these symptom columns with `0` by default.
+- We are **not** filling these symptom columns with `0`.
 
 Reason:
 - The original notebook merges `tbl_sintomas_complete` with a left join and does not globally fill symptom-derived columns with `0` after that merge.
-- A missing row in the symptom table may mean:
-  - no symptoms were present, or
-  - symptom information was not captured
-- Until clinicians confirm the intended interpretation, keeping these values as `NaN` is the safer choice.
-
-Questions for clinicians:
-- If a patient/admission has no row in `tbl_sintomas`, should that mean:
-  - symptom absent (`0`), or
-  - symptom unknown / not recorded (`NaN`)?
-- Is this interpretation the same for all symptom variables, or only for some of them?
+- Clinician review confirmed that a missing symptom row should remain unknown / not recorded (`NaN`) for all symptom-derived variables.
 
 ### Missing values in modelling
 
@@ -108,7 +93,7 @@ Practical implication:
 
 ### Prior antibiotics (`tbl_tratamiento_antibiotico_previo`)
 
-- Rows with `dias_trat_antimicrobiano <= 0` or missing are currently interpreted as **no previous antibiotic exposure recorded for that row**.
+- Rows with `dias_trat_antimicrobiano <= 0` or missing are interpreted as **no valid previous antibiotic exposure recorded for that row**.
 - The pipeline creates `antib_previo_si_no = 1` only when `dias_trat_antimicrobiano > 0`.
 - Rows with `antib_previo_si_no == 0` are then removed before building prior-antibiotic family features.
 
@@ -121,12 +106,7 @@ Reason:
 - The original notebook applies the same effective filter:
   `tbl_antib_prev = tbl_antib_prev[tbl_antib_prev["antib_previo_si_no"] == 1]`
 - This means only rows with a positive treatment duration contribute to `ultimo_antib`, `dias_ultimo_antib`, antibiotic-family binaries, and `antib_previo_total_veces`.
-
-Question for clinicians:
-
-- Does missing or zero `dias_trat_antimicrobiano` reliably mean no prior antibiotic exposure?
-- Or can it mean prior antibiotic exposure was present but duration was not recorded?
-- If duration is missing but `antimicrobiano_previo` or `fecha_administracion_antib` is present, should that row still contribute to prior-antibiotic features?
+- Clinician review confirmed this behavior: missing or zero treatment duration should not contribute to prior-antibiotic exposure features.
 
 #### Antibiotic exposure counts: raw events vs distinct families
 
