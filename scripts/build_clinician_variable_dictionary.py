@@ -22,6 +22,8 @@ OUTPUT_XLSX = ROOT / "report" / "tables" / "clinician_variable_dictionary.xlsx"
 
 HEADERS = [
     "variable name",
+    "source domain",
+    "source table/stage",
     "type",
     "number of classes",
     "data type",
@@ -37,6 +39,23 @@ HEADERS = [
     "dropped (yes/no)",
     "notes",
 ]
+
+
+DOMAIN_BY_STAGE = {
+    "tbl_paciente": "Patient/admission",
+    "tbl_comorbilidad": "Comorbidities",
+    "tbl_factores_riesgo_bmr": "BMR risk factors",
+    "tbl_sintomas": "Symptoms",
+    "tbl_signos": "Vital signs",
+    "tbl_sepsis": "Sepsis and infection focus",
+    "tbl_infecciones_previas": "Previous infections",
+    "tbl_tratamiento_antibiotico_previo": "Previous antibiotic treatment",
+    "tbl_hemocultivo_de_urgencias": "Emergency blood cultures",
+    "tbl_colonizaciones_previas": "Previous colonizations",
+    "tbl_otros_cultivos_en_urgencias": "Other emergency cultures",
+    "cross_table_features": "Cross-table culture features",
+    "target_building": "Predictive targets",
+}
 
 
 def read_header(path: Path) -> list[str]:
@@ -303,6 +322,12 @@ def infer_description(column: str, stage_name: str | None) -> str:
     return "Variable present in the full preprocessed dataset; no variable-level transformation was recorded in the preprocessing log."
 
 
+def infer_source_domain(stage_name: str | None) -> str:
+    if not stage_name:
+        return "Unmapped"
+    return DOMAIN_BY_STAGE.get(stage_name, stage_name.replace("_", " "))
+
+
 def build_rows(
     *,
     full_dataset_path: Path = FULL_DATASET,
@@ -373,6 +398,8 @@ def build_rows(
         )
         rows.append([
             column,
+            infer_source_domain(first_stage_by_column.get(column)),
+            first_stage_by_column.get(column, ""),
             variable_type,
             class_count,
             profile["data_type"],
@@ -422,18 +449,20 @@ def sheet_xml(rows: list[list[str]]) -> str:
   <sheetFormatPr defaultRowHeight="15"/>
   <cols>
     <col min="1" max="1" width="38" customWidth="1"/>
-    <col min="2" max="2" width="14" customWidth="1"/>
-    <col min="3" max="3" width="18" customWidth="1"/>
+    <col min="2" max="2" width="30" customWidth="1"/>
+    <col min="3" max="3" width="34" customWidth="1"/>
     <col min="4" max="4" width="14" customWidth="1"/>
-    <col min="5" max="5" width="12" customWidth="1"/>
-    <col min="6" max="8" width="14" customWidth="1"/>
-    <col min="9" max="9" width="18" customWidth="1"/>
-    <col min="10" max="10" width="35" customWidth="1"/>
+    <col min="5" max="5" width="18" customWidth="1"/>
+    <col min="6" max="6" width="14" customWidth="1"/>
+    <col min="7" max="7" width="12" customWidth="1"/>
+    <col min="8" max="10" width="14" customWidth="1"/>
     <col min="11" max="11" width="18" customWidth="1"/>
-    <col min="12" max="12" width="70" customWidth="1"/>
-    <col min="13" max="13" width="110" customWidth="1"/>
-    <col min="14" max="14" width="16" customWidth="1"/>
-    <col min="15" max="15" width="45" customWidth="1"/>
+    <col min="12" max="12" width="35" customWidth="1"/>
+    <col min="13" max="13" width="18" customWidth="1"/>
+    <col min="14" max="14" width="70" customWidth="1"/>
+    <col min="15" max="15" width="110" customWidth="1"/>
+    <col min="16" max="16" width="16" customWidth="1"/>
+    <col min="17" max="17" width="45" customWidth="1"/>
   </cols>
   <sheetData>{''.join(row_xml)}</sheetData>
   <autoFilter ref="A1:{last_col}{last_row}"/>
@@ -502,8 +531,9 @@ def build_variable_dictionary(
         detailed_log_path=detailed_log_path,
     )
     write_xlsx(rows, output_path)
-    kept = sum(1 for row in rows[1:] if row[2] == "no")
-    dropped = sum(1 for row in rows[1:] if row[2] == "yes")
+    dropped_col = HEADERS.index("dropped (yes/no)")
+    kept = sum(1 for row in rows[1:] if row[dropped_col] == "no")
+    dropped = sum(1 for row in rows[1:] if row[dropped_col] == "yes")
     return len(rows) - 1, kept, dropped
 
 
