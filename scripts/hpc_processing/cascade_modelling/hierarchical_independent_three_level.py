@@ -138,7 +138,9 @@ def load_model_filters(config_path: Optional[Path]) -> List[Dict]:
     return filters
 
 
-def apply_model_filters(df: pd.DataFrame, filters: List[Dict]) -> Tuple[pd.DataFrame, List[Dict]]:
+def apply_model_filters(
+    df: pd.DataFrame, filters: List[Dict]
+) -> Tuple[pd.DataFrame, List[Dict]]:
     """Apply row-level cohort filters defined in config/model_filters.yml."""
     filtered = df
     applied: List[Dict] = []
@@ -148,8 +150,12 @@ def apply_model_filters(df: pd.DataFrame, filters: List[Dict]) -> Tuple[pd.DataF
         if not column:
             raise ValueError(f"Model filter '{name}' is missing required key 'column'.")
         if column not in filtered.columns:
-            print(f"Warning: model filter '{name}' skipped; column '{column}' not found.")
-            applied.append({"name": name, "column": column, "status": "skipped_missing_column"})
+            print(
+                f"Warning: model filter '{name}' skipped; column '{column}' not found."
+            )
+            applied.append(
+                {"name": name, "column": column, "status": "skipped_missing_column"}
+            )
             continue
 
         before = len(filtered)
@@ -161,22 +167,30 @@ def apply_model_filters(df: pd.DataFrame, filters: List[Dict]) -> Tuple[pd.DataF
         if "exclude_values" in spec:
             mask &= ~filtered[column].isin(spec["exclude_values"])
         if "min_value" in spec:
-            mask &= pd.to_numeric(filtered[column], errors="coerce") >= spec["min_value"]
+            mask &= (
+                pd.to_numeric(filtered[column], errors="coerce") >= spec["min_value"]
+            )
         if "max_value" in spec:
-            mask &= pd.to_numeric(filtered[column], errors="coerce") <= spec["max_value"]
+            mask &= (
+                pd.to_numeric(filtered[column], errors="coerce") <= spec["max_value"]
+            )
 
         filtered = filtered.loc[mask].copy()
         removed = before - len(filtered)
         print(f"Model filter '{name}' removed {removed} rows.")
-        applied.append({
-            "name": name,
-            "column": column,
-            "status": "applied",
-            "rows_before": before,
-            "rows_after": len(filtered),
-            "rows_removed": removed,
-            "criteria": {k: v for k, v in spec.items() if k not in {"name", "column"}},
-        })
+        applied.append(
+            {
+                "name": name,
+                "column": column,
+                "status": "applied",
+                "rows_before": before,
+                "rows_after": len(filtered),
+                "rows_removed": removed,
+                "criteria": {
+                    k: v for k, v in spec.items() if k not in {"name", "column"}
+                },
+            }
+        )
     return filtered, applied
 
 
@@ -214,19 +228,20 @@ def impute_missing_values(loaded_df: pd.DataFrame, exclude_cols: set) -> pd.Data
     """
     df_copy = loaded_df.drop(columns=list(exclude_cols), errors="ignore").copy()
     numeric_cols = df_copy.select_dtypes(include=["int", "float"]).columns.tolist()
-    categorical_cols = df_copy.select_dtypes(include=["object", "category"]).columns.tolist()
+    categorical_cols = df_copy.select_dtypes(
+        include=["object", "category"]
+    ).columns.tolist()
 
-    binary_cols = [c for c in numeric_cols if set(df_copy[c].dropna().unique()) <= {0, 1}]
+    binary_cols = [
+        c for c in numeric_cols if set(df_copy[c].dropna().unique()) <= {0, 1}
+    ]
     # Ordinal clinical scores (low-cardinality) and continuous values both
     # benefit from multivariate KNN — route all non-binary numeric to KNN.
     knn_cols = [c for c in numeric_cols if c not in binary_cols]
 
     # Add missing-indicator flags for numerics with >10 % missingness.
     # These flags remain even after imputation so the model can learn from them.
-    high_missing = [
-        c for c in numeric_cols
-        if df_copy[c].isna().mean() > 0.10
-    ]
+    high_missing = [c for c in numeric_cols if df_copy[c].isna().mean() > 0.10]
     for col in high_missing:
         df_copy[f"{col}_missing"] = df_copy[col].isna().astype(int)
 
@@ -243,7 +258,9 @@ def impute_missing_values(loaded_df: pd.DataFrame, exclude_cols: set) -> pd.Data
                 df_copy[col] = df_copy[col].round().astype(int)
     if categorical_cols:
         imp = SimpleImputer(strategy="most_frequent")
-        df_copy[categorical_cols] = imp.fit_transform(df_copy[categorical_cols]).astype(str)
+        df_copy[categorical_cols] = imp.fit_transform(df_copy[categorical_cols]).astype(
+            str
+        )
     print("Imputed values and included marker columns for high_missings")
     for col in exclude_cols:
         if col in loaded_df.columns:
@@ -273,9 +290,13 @@ def _build_ranking_model(model_type: str, y: pd.Series, random_state: int) -> ob
 
     if model_type == "lgbm":
         params: Dict = {
-            "n_estimators": 200, "num_leaves": 31, "max_depth": 6,
-            "class_weight": "balanced", "n_jobs": N_CPUS,
-            "random_state": random_state, "verbosity": -1,
+            "n_estimators": 200,
+            "num_leaves": 31,
+            "max_depth": 6,
+            "class_weight": "balanced",
+            "n_jobs": N_CPUS,
+            "random_state": random_state,
+            "verbosity": -1,
         }
         if is_multi:
             params["objective"] = "multiclass"
@@ -287,29 +308,43 @@ def _build_ranking_model(model_type: str, y: pd.Series, random_state: int) -> ob
     elif model_type == "xgb":
         if is_multi:
             return XGBClassifier(
-                objective="multi:softprob", num_class=n_classes,
-                n_estimators=200, max_depth=6,
-                random_state=random_state, n_jobs=N_CPUS, verbosity=0,
+                objective="multi:softprob",
+                num_class=n_classes,
+                n_estimators=200,
+                max_depth=6,
+                random_state=random_state,
+                n_jobs=N_CPUS,
+                verbosity=0,
             )
         n_pos = float((y == 1).sum())
         spw = float(len(y) - n_pos) / max(n_pos, 1.0)
         return XGBClassifier(
-            objective="binary:logistic", n_estimators=200, max_depth=6,
+            objective="binary:logistic",
+            n_estimators=200,
+            max_depth=6,
             scale_pos_weight=spw,
-            random_state=random_state, n_jobs=N_CPUS, verbosity=0,
+            random_state=random_state,
+            n_jobs=N_CPUS,
+            verbosity=0,
         )
 
     elif model_type == "catb":
         return CatBoostClassifier(
-            iterations=200, depth=6,
-            auto_class_weights="Balanced", verbose=False, random_state=42, thread_count=N_CPUS
+            iterations=200,
+            depth=6,
+            auto_class_weights="Balanced",
+            verbose=False,
+            random_state=42,
+            thread_count=N_CPUS,
         )
 
     else:  # "rf" or anything else
         return RandomForestClassifier(
-            n_estimators=200, max_depth=10,
+            n_estimators=200,
+            max_depth=10,
             class_weight="balanced_subsample",
-            random_state=random_state, n_jobs=N_CPUS,
+            random_state=random_state,
+            n_jobs=N_CPUS,
         )
 
 
@@ -421,13 +456,16 @@ def build_multiclass_model(model_type: str, params: Dict, num_classes: int) -> o
         raise ValueError(f"Unsupported model type for multiclass: '{model_type}'.")
 
 
-def _fit_model(model, model_type: str, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None) -> None:
+def _fit_model(
+    model, model_type: str, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None
+) -> None:
     """Fit a model; CatBoost uses early-stopping with the validation fold."""
     sw = sample_weight
     if model_type == "catb" and X_va is not None:
         n_iter = getattr(model, "iterations", 500)
         model.fit(
-            X_tr, y_tr,
+            X_tr,
+            y_tr,
             eval_set=(X_va, y_va),
             early_stopping_rounds=max(20, int(0.05 * n_iter)),
             verbose=False,
@@ -453,7 +491,9 @@ def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
     return float(np.clip(thresholds[best_idx], 0.05, 0.95))
 
 
-def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_weight: float, random_state: int) -> Dict:
+def _binary_params_for_trial(
+    trial: optuna.Trial, model_type: str, scale_pos_weight: float, random_state: int
+) -> Dict:
     if model_type == "rf":
         return {
             "n_estimators": trial.suggest_int("n_estimators", 100, 1000),
@@ -461,7 +501,9 @@ def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_wei
             "max_depth": trial.suggest_int("max_depth", 3, 30),
             "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
             "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
-            "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+            "max_features": trial.suggest_categorical(
+                "max_features", ["sqrt", "log2", None]
+            ),
             "bootstrap": trial.suggest_categorical("bootstrap", [True, False]),
             "class_weight": "balanced",
             "n_jobs": N_CPUS,
@@ -475,7 +517,9 @@ def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_wei
             "n_estimators": trial.suggest_int("n_estimators", 300, 3000),
             "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
             "max_depth": trial.suggest_int("max_depth", 3, 12),
-            "min_child_weight": trial.suggest_float("min_child_weight", 1e-3, 10.0, log=True),
+            "min_child_weight": trial.suggest_float(
+                "min_child_weight", 1e-3, 10.0, log=True
+            ),
             "gamma": trial.suggest_float("gamma", 0.0, 5.0),
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
@@ -541,11 +585,17 @@ def optimise_binary_model(
     weight_series = (
         sample_weight.reindex(X.index)
         if isinstance(sample_weight, pd.Series)
-        else (pd.Series(sample_weight, index=X.index) if sample_weight is not None else None)
+        else (
+            pd.Series(sample_weight, index=X.index)
+            if sample_weight is not None
+            else None
+        )
     )
     if weight_series is not None:
         pos_mask = y == 1
-        spw = float(weight_series[~pos_mask].sum()) / float(weight_series[pos_mask].sum() or 1)
+        spw = float(weight_series[~pos_mask].sum()) / float(
+            weight_series[pos_mask].sum() or 1
+        )
     else:
         n_pos = float((y == 1).sum())
         spw = float(len(y) - n_pos) / (n_pos or 1)
@@ -558,7 +608,11 @@ def optimise_binary_model(
         for tr_idx, va_idx in skf.split(X, y):
             X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
             y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
-            w_tr = weight_series.iloc[tr_idx].to_numpy() if weight_series is not None else None
+            w_tr = (
+                weight_series.iloc[tr_idx].to_numpy()
+                if weight_series is not None
+                else None
+            )
             model = build_binary_model(model_type, params.copy())
             _fit_model(model, model_type, X_tr, y_tr, X_va, y_va, sample_weight=w_tr)
             proba = model.predict_proba(X_va)[:, 1]
@@ -576,7 +630,9 @@ def optimise_binary_model(
     for tr_idx, va_idx in skf.split(X, y):
         X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
         y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
-        w_tr = weight_series.iloc[tr_idx].to_numpy() if weight_series is not None else None
+        w_tr = (
+            weight_series.iloc[tr_idx].to_numpy() if weight_series is not None else None
+        )
         m = build_binary_model(model_type, best.copy())
         _fit_model(m, model_type, X_tr, y_tr, sample_weight=w_tr)
         oof_proba_parts.append(m.predict_proba(X_va)[:, 1])
@@ -599,7 +655,9 @@ def _multiclass_params_for_trial(
             "n_estimators": trial.suggest_int("n_estimators", 300, 2000),
             "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
             "max_depth": trial.suggest_int("max_depth", 3, 12),
-            "min_child_weight": trial.suggest_float("min_child_weight", 1e-3, 10.0, log=True),
+            "min_child_weight": trial.suggest_float(
+                "min_child_weight", 1e-3, 10.0, log=True
+            ),
             "subsample": trial.suggest_float("subsample", 0.6, 1.0),
             "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
             "reg_alpha": trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
@@ -633,7 +691,9 @@ def _multiclass_params_for_trial(
             "max_depth": trial.suggest_int("max_depth", 3, 20),
             "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
             "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
-            "max_features": trial.suggest_categorical("max_features", ["sqrt", "log2", None]),
+            "max_features": trial.suggest_categorical(
+                "max_features", ["sqrt", "log2", None]
+            ),
             "class_weight": "balanced",
             "n_jobs": N_CPUS,
             "random_state": random_state,
@@ -662,16 +722,26 @@ def optimise_multiclass_model(
     weight_series = (
         sample_weight.reindex(X.index)
         if isinstance(sample_weight, pd.Series)
-        else (pd.Series(sample_weight, index=X.index) if sample_weight is not None else None)
+        else (
+            pd.Series(sample_weight, index=X.index)
+            if sample_weight is not None
+            else None
+        )
     )
 
     def objective(trial: optuna.Trial) -> float:
-        params = _multiclass_params_for_trial(trial, model_type, num_classes, random_state)
+        params = _multiclass_params_for_trial(
+            trial, model_type, num_classes, random_state
+        )
         scores = []
         for tr_idx, va_idx in skf.split(X, y):
             X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
             y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
-            w_tr = weight_series.iloc[tr_idx].to_numpy() if weight_series is not None else None
+            w_tr = (
+                weight_series.iloc[tr_idx].to_numpy()
+                if weight_series is not None
+                else None
+            )
             model = build_multiclass_model(model_type, params.copy(), num_classes)
             if w_tr is not None:
                 model.fit(X_tr, y_tr, sample_weight=w_tr)
@@ -750,15 +820,15 @@ def generate_oof_probas_multiclass(
 
 
 def shap_rfecv(
-        model: BaseEstimator,
-        X: pd.DataFrame,
-        y: np.ndarray | pd.Series,
-        cv: int = 5,
-        min_features: int = 5,
-        max_features: int = 50,
-        scoring: str = "roc_auc",
-        random_state: int = 42,
-    ) -> Tuple[List[str], Dict[str, Tuple[float, List[str]]]]:
+    model: BaseEstimator,
+    X: pd.DataFrame,
+    y: np.ndarray | pd.Series,
+    cv: int = 5,
+    min_features: int = 5,
+    max_features: int = 50,
+    scoring: str = "roc_auc",
+    random_state: int = 42,
+) -> Tuple[List[str], Dict[str, Tuple[float, List[str]]]]:
     """
     SHAP-based Recursive Feature Elimination with Cross Validation.
 
@@ -789,7 +859,9 @@ def shap_rfecv(
             try:
                 if is_multiclass:
                     proba = est.predict_proba(X_va)
-                    score = roc_auc_score(y_va, proba, multi_class="ovr", average="macro")
+                    score = roc_auc_score(
+                        y_va, proba, multi_class="ovr", average="macro"
+                    )
                 else:
                     proba = est.predict_proba(X_va)[:, 1]
                     score = roc_auc_score(y_va, proba)
@@ -836,13 +908,16 @@ def shap_rfecv(
 
     # Return the feature set whose CV score was highest (true RFECV selection),
     # constrained to at most max_features.  Keys are strings; cast before comparing.
-    best_n = max(history, key=lambda k: history[k][0] if int(k) <= max_features else 0.0)
+    best_n = max(
+        history, key=lambda k: history[k][0] if int(k) <= max_features else 0.0
+    )
     best_score, best_features = history[best_n]
     print(
         f"Best CV score: {best_score:.4f} at {best_n} features → "
         f"Selected {len(best_features)} features."
     )
     return best_features, history
+
 
 # ---------------------------------------------------------------------------
 # Main training orchestration
@@ -929,7 +1004,12 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 1. Load & preprocess
     # ------------------------------------------------------------------
-    all_targets = {args.sepsis_target, args.hemo_target, args.cef_target, args.weight_column}
+    all_targets = {
+        args.sepsis_target,
+        args.hemo_target,
+        args.cef_target,
+        args.weight_column,
+    }
     cols_to_delete = list(DELETE_COLUMNS)
     cols_to_delete.extend([x for x in TARGET_REMOVE if x not in all_targets])
 
@@ -954,8 +1034,7 @@ def run_training(args: argparse.Namespace) -> None:
     exclude_cols = all_targets.copy()
     feature_cols = [c for c in working_df.columns if c not in exclude_cols]
     foco_dummy_cols = [
-        c for c in feature_cols
-        if c.startswith("foco_") and c.endswith("_binary")
+        c for c in feature_cols if c.startswith("foco_") and c.endswith("_binary")
     ]
     if "foco" in feature_cols and foco_dummy_cols:
         # Preprocessing already provides foco one-hot columns. Keep the
@@ -964,7 +1043,9 @@ def run_training(args: argparse.Namespace) -> None:
 
     # Drop high-NA feature columns
     dropped_na = [
-        col for col in feature_cols if working_df[col].isna().mean() > args.na_perc_limit
+        col
+        for col in feature_cols
+        if working_df[col].isna().mean() > args.na_perc_limit
     ]
     if dropped_na:
         print(f"Dropping {len(dropped_na)} high-NA columns.")
@@ -996,13 +1077,22 @@ def run_training(args: argparse.Namespace) -> None:
     w = working_df.loc[feature_df.index, args.weight_column]
 
     (
-        X_train, X_test,
-        y_sep_train, y_sep_test,
-        y_hemo_train, y_hemo_test,
-        y_cef_train, y_cef_test,
-        w_train, w_test,
+        X_train,
+        X_test,
+        y_sep_train,
+        y_sep_test,
+        y_hemo_train,
+        y_hemo_test,
+        y_cef_train,
+        y_cef_test,
+        w_train,
+        w_test,
     ) = train_test_split(
-        feature_df, y_sepsis, y_hemo, y_cef, w,
+        feature_df,
+        y_sepsis,
+        y_hemo,
+        y_cef,
+        w,
         test_size=args.test_size,
         random_state=args.random_state,
         stratify=y_sepsis,
@@ -1017,10 +1107,11 @@ def run_training(args: argparse.Namespace) -> None:
         kept_cols = remove_correlated_features(X_train, threshold=args.max_corr)
         n_removed = len(X_train.columns) - len(kept_cols)
         if n_removed:
-            print(f"  Dropped {n_removed} redundant features → {len(kept_cols)} remain.")
+            print(
+                f"  Dropped {n_removed} redundant features → {len(kept_cols)} remain."
+            )
         X_train = X_train[kept_cols]
         X_test = X_test[kept_cols]
-
 
     # ------------------------------------------------------------------
     # 3. Output directory
@@ -1057,29 +1148,43 @@ def run_training(args: argparse.Namespace) -> None:
     sw_l1 = compute_balanced_sample_weight(y_sep_train_enc, w_train)
 
     print("  Selecting Level 1 features by SHAP importance …")
-    rank_model_l1 = _build_ranking_model(args.model_type, y_sep_train_enc, args.random_state)
+    rank_model_l1 = _build_ranking_model(
+        args.model_type, y_sep_train_enc, args.random_state
+    )
     selected_features, l1_rfecv_history = shap_rfecv(
-        rank_model_l1, X_train, y_sep_train_enc, min_features=2, max_features=args.max_features
+        rank_model_l1,
+        X_train,
+        y_sep_train_enc,
+        min_features=2,
+        max_features=args.max_features,
     )
     l1_features = cap_features(
-        selected_features, X_train, y_sep_train_enc,
-        args.max_features, args.random_state, args.model_type, rank_model=rank_model_l1
+        selected_features,
+        X_train,
+        y_sep_train_enc,
+        args.max_features,
+        args.random_state,
+        args.model_type,
+        rank_model=rank_model_l1,
     )
     print(f"  SHAP selection kept {len(l1_features)} features.")
 
     scaler_l1 = MinMaxScaler()
     X_l1_train = pd.DataFrame(
         scaler_l1.fit_transform(X_train[l1_features]),
-        columns=l1_features, index=X_train.index,
+        columns=l1_features,
+        index=X_train.index,
     )
     X_l1_test = pd.DataFrame(
         scaler_l1.transform(X_test[l1_features]),
-        columns=l1_features, index=X_test.index,
+        columns=l1_features,
+        index=X_test.index,
     )
 
     print("  Optimising Level 1 model …")
     l1_params, l1_threshold, l1_study = optimise_binary_model(
-        X_l1_train, y_sep_train_enc,
+        X_l1_train,
+        y_sep_train_enc,
         n_splits=args.cv_splits,
         n_trials=args.binary_trials,
         random_state=args.random_state,
@@ -1097,7 +1202,8 @@ def run_training(args: argparse.Namespace) -> None:
     l1_test_pred = (l1_test_proba >= l1_threshold).astype(int)
 
     l1_report = classification_report(
-        y_sep_test_enc, l1_test_pred,
+        y_sep_test_enc,
+        l1_test_pred,
         target_names=[str(c) for c in le_sep.classes_],
         zero_division=0,
     )
@@ -1106,19 +1212,28 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"  Level 1 – Macro F1: {l1_f1:.3f}  |  ROC-AUC: {l1_auc:.3f}")
 
     (l1_dir / "report.txt").write_text(l1_report)
-    (l1_dir / "summary.json").write_text(json.dumps({
-        "params": l1_params, "threshold": l1_threshold,
-        "macro_f1": l1_f1, "roc_auc": l1_auc,
-        "classes": le_sep.classes_.tolist(),
-        "shaprfecv_features": selected_features,
-        "features": l1_features,
-    }, indent=2))
+    (l1_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "params": l1_params,
+                "threshold": l1_threshold,
+                "macro_f1": l1_f1,
+                "roc_auc": l1_auc,
+                "classes": le_sep.classes_.tolist(),
+                "shaprfecv_features": selected_features,
+                "features": l1_features,
+            },
+            indent=2,
+        )
+    )
     l1_study.trials_dataframe().to_csv(l1_dir / "optuna_trials.csv", index=False)
-    pd.DataFrame({
-        "true": y_sep_test_enc.values,
-        "pred": l1_test_pred,
-        "proba": l1_test_proba,
-    }).to_csv(l1_dir / "predictions.csv", index=False)
+    pd.DataFrame(
+        {
+            "true": y_sep_test_enc.values,
+            "pred": l1_test_pred,
+            "proba": l1_test_proba,
+        }
+    ).to_csv(l1_dir / "predictions.csv", index=False)
 
     confusion_matrix(y_sep_test_enc, l1_test_pred, labels=[0, 1])
     all_summaries["level1_sepsis"] = {"macro_f1": l1_f1, "roc_auc": l1_auc}
@@ -1157,18 +1272,24 @@ def run_training(args: argparse.Namespace) -> None:
         le_hemo.transform(y2_test_raw), index=y2_test_raw.index, name="hemo_enc"
     )
     num_hemo_classes = len(le_hemo.classes_)
-    l2_is_binary = (num_hemo_classes == 2)
+    l2_is_binary = num_hemo_classes == 2
     l2_type_label = "binary" if l2_is_binary else "multiclass"
-    print(f"  Hemo classes ({num_hemo_classes}): {le_hemo.classes_.tolist()} [{l2_type_label}]")
+    print(
+        f"  Hemo classes ({num_hemo_classes}): {le_hemo.classes_.tolist()} [{l2_type_label}]"
+    )
 
     # CatBoost not supported for multiclass; for binary it is fine
-    _l2_model_type = args.model_type if (l2_is_binary or args.model_type != "catb") else "lgbm"
+    _l2_model_type = (
+        args.model_type if (l2_is_binary or args.model_type != "catb") else "lgbm"
+    )
 
     # When binary L2 and NEGATIVE is one of the two classes: remove NEGATIVE rows so
     # the model focuses on positive-culture subtype classification only.  This aligns
     # with L3 which is already scoped to positive blood cultures (hemo != NEGATIVE).
     if l2_is_binary and "NEGATIVE" in le_hemo.classes_:
-        print("  Binary L2: removing NEGATIVE samples – classifying positive subtypes only …")
+        print(
+            "  Binary L2: removing NEGATIVE samples – classifying positive subtypes only …"
+        )
         l2_train_mask = l2_train_mask & (y_hemo_train != "NEGATIVE")
         l2_test_mask = l2_test_mask & (y_hemo_test != "NEGATIVE")
         y2_train_raw = y_hemo_train.loc[l2_train_mask]
@@ -1195,32 +1316,48 @@ def run_training(args: argparse.Namespace) -> None:
     X2_test_base = X_test.loc[l2_test_mask].copy()
 
     print("  Selecting Level 2 features by SHAP importance …")
-    rank_model_l2 = _build_ranking_model(args.model_type, y2_train_enc, args.random_state)
+    rank_model_l2 = _build_ranking_model(
+        args.model_type, y2_train_enc, args.random_state
+    )
     l2_shap_feats, l2_rfecv_history = shap_rfecv(
-        rank_model_l2, X2_train_base, y2_train_enc, min_features=2, max_features=args.max_features
+        rank_model_l2,
+        X2_train_base,
+        y2_train_enc,
+        min_features=2,
+        max_features=args.max_features,
     )
     l2_features = cap_features(
-        l2_shap_feats, X2_train_base, y2_train_enc,
-        args.max_features, args.random_state, _l2_model_type, rank_model=rank_model_l2
+        l2_shap_feats,
+        X2_train_base,
+        y2_train_enc,
+        args.max_features,
+        args.random_state,
+        _l2_model_type,
+        rank_model=rank_model_l2,
     )
     print(f"  SHAP selection kept {len(l2_features)} features.")
 
     scaler_l2 = MinMaxScaler()
     X2_train_scaled = pd.DataFrame(
         scaler_l2.fit_transform(X2_train_base[l2_features]),
-        columns=l2_features, index=X2_train_base.index,
+        columns=l2_features,
+        index=X2_train_base.index,
     )
     X2_test_scaled = pd.DataFrame(
         scaler_l2.transform(X2_test_base[l2_features]),
-        columns=l2_features, index=X2_test_base.index,
+        columns=l2_features,
+        index=X2_test_base.index,
     )
 
-    sw_l2 = compute_balanced_sample_weight(y2_train_enc, w_train.reindex(y2_train_enc.index))
+    sw_l2 = compute_balanced_sample_weight(
+        y2_train_enc, w_train.reindex(y2_train_enc.index)
+    )
 
     if l2_is_binary:
         print("  Optimising Level 2 binary model …")
         l2_params, l2_threshold, l2_study = optimise_binary_model(
-            X2_train_scaled, y2_train_enc,
+            X2_train_scaled,
+            y2_train_enc,
             n_splits=args.cv_splits,
             n_trials=args.binary_trials,
             random_state=args.random_state,
@@ -1239,10 +1376,12 @@ def run_training(args: argparse.Namespace) -> None:
         l2_f1 = f1_score(y2_test_enc, l2_test_pred, average="macro", zero_division=0)
         l2_auc: Optional[float] = (
             float(roc_auc_score(y2_test_enc, l2_test_proba))
-            if y2_test_enc.nunique() > 1 else None
+            if y2_test_enc.nunique() > 1
+            else None
         )
         l2_report = classification_report(
-            y2_test_enc, l2_test_pred,
+            y2_test_enc,
+            l2_test_pred,
             target_names=[str(c) for c in le_hemo.classes_],
             zero_division=0,
         )
@@ -1252,31 +1391,44 @@ def run_training(args: argparse.Namespace) -> None:
         )
 
         (l2_dir / "report.txt").write_text(l2_report)
-        (l2_dir / "summary.json").write_text(json.dumps({
-            "params": l2_params, "threshold": l2_threshold,
-            "macro_f1": l2_f1, "roc_auc": l2_auc,
-            "hemo_classes": le_hemo.classes_.tolist(),
-            "shaprfecv_features": l2_shap_feats,
-            "features": l2_features, "is_binary": True,
-        }, indent=2))
+        (l2_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "params": l2_params,
+                    "threshold": l2_threshold,
+                    "macro_f1": l2_f1,
+                    "roc_auc": l2_auc,
+                    "hemo_classes": le_hemo.classes_.tolist(),
+                    "shaprfecv_features": l2_shap_feats,
+                    "features": l2_features,
+                    "is_binary": True,
+                },
+                indent=2,
+            )
+        )
         l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials.csv", index=False)
-        pd.DataFrame({
-            "true": y2_test_enc.values,
-            "pred": l2_test_pred,
-            "proba": l2_test_proba,
-        }).to_csv(l2_dir / "predictions.csv", index=False)
+        pd.DataFrame(
+            {
+                "true": y2_test_enc.values,
+                "pred": l2_test_pred,
+                "proba": l2_test_proba,
+            }
+        ).to_csv(l2_dir / "predictions.csv", index=False)
 
         all_summaries["level2_hemo"] = {
-            "macro_f1": l2_f1, "roc_auc": l2_auc,
+            "macro_f1": l2_f1,
+            "roc_auc": l2_auc,
             "hemo_classes": le_hemo.classes_.tolist(),
-            "is_binary": True, "threshold": l2_threshold,
+            "is_binary": True,
+            "threshold": l2_threshold,
         }
 
     else:
         l2_threshold = None
         print("  Optimising Level 2 multiclass model …")
         l2_params, l2_study = optimise_multiclass_model(
-            X2_train_scaled, y2_train_enc,
+            X2_train_scaled,
+            y2_train_enc,
             n_splits=args.cv_splits,
             n_trials=args.binary_trials,
             random_state=args.random_state,
@@ -1286,14 +1438,19 @@ def run_training(args: argparse.Namespace) -> None:
         )
 
         # Final Level 2 model, calibrated
-        l2_base = build_multiclass_model(_l2_model_type, l2_params.copy(), num_hemo_classes)
+        l2_base = build_multiclass_model(
+            _l2_model_type, l2_params.copy(), num_hemo_classes
+        )
         l2_model = CalibratedClassifierCV(l2_base, cv=5, method="isotonic")
         l2_model.fit(X2_train_scaled, y2_train_enc)
-        l2_test_proba = l2_model.predict_proba(X2_test_scaled)  # [n_l2_test, num_hemo_classes]
+        l2_test_proba = l2_model.predict_proba(
+            X2_test_scaled
+        )  # [n_l2_test, num_hemo_classes]
         l2_test_pred = l2_model.predict(X2_test_scaled)
 
         l2_report = classification_report(
-            y2_test_enc, l2_test_pred,
+            y2_test_enc,
+            l2_test_pred,
             target_names=[str(c) for c in le_hemo.classes_],
             zero_division=0,
         )
@@ -1304,20 +1461,32 @@ def run_training(args: argparse.Namespace) -> None:
         print(f"  Level 2 – Macro F1: {l2_f1:.3f}")
 
         (l2_dir / "report.txt").write_text(l2_report)
-        (l2_dir / "summary.json").write_text(json.dumps({
-            "params": l2_params, "macro_f1": l2_f1,
-            "hemo_classes": le_hemo.classes_.tolist(),
-            "shaprfecv_features": l2_shap_feats,
-            "features": l2_features, "roc_auc": l2_auc, "is_binary": False,
-        }, indent=2))
+        (l2_dir / "summary.json").write_text(
+            json.dumps(
+                {
+                    "params": l2_params,
+                    "macro_f1": l2_f1,
+                    "hemo_classes": le_hemo.classes_.tolist(),
+                    "shaprfecv_features": l2_shap_feats,
+                    "features": l2_features,
+                    "roc_auc": l2_auc,
+                    "is_binary": False,
+                },
+                indent=2,
+            )
+        )
         l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials.csv", index=False)
-        pd.DataFrame(l2_test_proba, columns=[f"proba_{c}" for c in le_hemo.classes_]).assign(
-            true=y2_test_enc.values, pred=l2_test_pred
-        ).to_csv(l2_dir / "predictions.csv", index=False)
+        pd.DataFrame(
+            l2_test_proba, columns=[f"proba_{c}" for c in le_hemo.classes_]
+        ).assign(true=y2_test_enc.values, pred=l2_test_pred).to_csv(
+            l2_dir / "predictions.csv", index=False
+        )
 
         all_summaries["level2_hemo"] = {
-            "macro_f1": l2_f1, "roc_auc": l2_auc,
-            "hemo_classes": le_hemo.classes_.tolist(), "is_binary": False,
+            "macro_f1": l2_f1,
+            "roc_auc": l2_auc,
+            "hemo_classes": le_hemo.classes_.tolist(),
+            "is_binary": False,
         }
 
     # ==================================================================
@@ -1332,14 +1501,10 @@ def run_training(args: argparse.Namespace) -> None:
     # Filter: positive blood culture AND valid cef label
     # (positive blood culture = resultado_hemo_grouped != "NEGATIVE")
     cef_train_mask = (
-        y_cef_train.notna()
-        & y_hemo_train.notna()
-        & (y_hemo_train != "NEGATIVE")
+        y_cef_train.notna() & y_hemo_train.notna() & (y_hemo_train != "NEGATIVE")
     )
     cef_test_mask = (
-        y_cef_test.notna()
-        & y_hemo_test.notna()
-        & (y_hemo_test != "NEGATIVE")
+        y_cef_test.notna() & y_hemo_test.notna() & (y_hemo_test != "NEGATIVE")
     )
 
     if not cef_train_mask.any():
@@ -1367,7 +1532,9 @@ def run_training(args: argparse.Namespace) -> None:
     )
 
     print(f"  Cef classes: {le_cef.classes_.tolist()}")
-    print(f"  Level 3 train rows: {len(X3_train_base)}  |  test rows: {len(X3_test_base)}")
+    print(
+        f"  Level 3 train rows: {len(X3_train_base)}  |  test rows: {len(X3_test_base)}"
+    )
 
     # ------------------------------------------------------------------
     # L3 size guard
@@ -1378,7 +1545,9 @@ def run_training(args: argparse.Namespace) -> None:
     # Cap CV splits for L3 (used by Optuna, OOF generation, and calibration)
     l3_cv_splits = max(min(args.cv_splits, l3_minority_count), 2)
     if l3_cv_splits != args.cv_splits:
-        print(f"  Reducing cv_splits from {args.cv_splits} to {l3_cv_splits} for Level 3.")
+        print(
+            f"  Reducing cv_splits from {args.cv_splits} to {l3_cv_splits} for Level 3."
+        )
 
     if l3_small_dataset:
         print(
@@ -1389,31 +1558,47 @@ def run_training(args: argparse.Namespace) -> None:
             f"\n  {'!' * 60}\n"
         )
     print("  Selecting Level 3 features by SHAP importance …")
-    rank_model_l3 = _build_ranking_model(args.model_type, y3_train_enc, args.random_state)
+    rank_model_l3 = _build_ranking_model(
+        args.model_type, y3_train_enc, args.random_state
+    )
     l3_shap_feats, l3_rfecv_history = shap_rfecv(
-        rank_model_l3, X3_train_base, y3_train_enc, min_features=2, max_features=args.max_features
+        rank_model_l3,
+        X3_train_base,
+        y3_train_enc,
+        min_features=2,
+        max_features=args.max_features,
     )
     l3_features = cap_features(
-        l3_shap_feats, X3_train_base, y3_train_enc,
-        args.max_features, args.random_state, args.model_type, rank_model=rank_model_l3
+        l3_shap_feats,
+        X3_train_base,
+        y3_train_enc,
+        args.max_features,
+        args.random_state,
+        args.model_type,
+        rank_model=rank_model_l3,
     )
     print(f"  SHAP selection kept {len(l3_features)} features.")
 
     scaler_l3 = MinMaxScaler()
     X3_train_scaled = pd.DataFrame(
         scaler_l3.fit_transform(X3_train_base[l3_features]),
-        columns=l3_features, index=X3_train_base.index,
+        columns=l3_features,
+        index=X3_train_base.index,
     )
     X3_test_scaled = pd.DataFrame(
         scaler_l3.transform(X3_test_base[l3_features]),
-        columns=l3_features, index=X3_test_base.index,
+        columns=l3_features,
+        index=X3_test_base.index,
     )
 
-    sw_l3 = compute_balanced_sample_weight(y3_train_enc, w_train.reindex(y3_train_enc.index))
+    sw_l3 = compute_balanced_sample_weight(
+        y3_train_enc, w_train.reindex(y3_train_enc.index)
+    )
 
     print("  Optimising Level 3 model …")
     l3_params, l3_threshold, l3_study = optimise_binary_model(
-        X3_train_scaled, y3_train_enc,
+        X3_train_scaled,
+        y3_train_enc,
         n_splits=l3_cv_splits,
         n_trials=args.binary_trials,
         random_state=args.random_state,
@@ -1433,7 +1618,8 @@ def run_training(args: argparse.Namespace) -> None:
     l3_test_pred = (l3_test_proba >= l3_threshold).astype(int)
 
     l3_report = classification_report(
-        y3_test_enc, l3_test_pred,
+        y3_test_enc,
+        l3_test_pred,
         target_names=[str(c) for c in le_cef.classes_],
         zero_division=0,
     )
@@ -1448,19 +1634,28 @@ def run_training(args: argparse.Namespace) -> None:
     )
 
     (l3_dir / "report.txt").write_text(l3_report)
-    (l3_dir / "summary.json").write_text(json.dumps({
-        "params": l3_params, "threshold": l3_threshold,
-        "macro_f1": l3_f1, "roc_auc": l3_auc,
-        "classes": le_cef.classes_.tolist(),
-        "shaprfecv_features": l3_shap_feats,
-        "features": l3_features,
-    }, indent=2))
+    (l3_dir / "summary.json").write_text(
+        json.dumps(
+            {
+                "params": l3_params,
+                "threshold": l3_threshold,
+                "macro_f1": l3_f1,
+                "roc_auc": l3_auc,
+                "classes": le_cef.classes_.tolist(),
+                "shaprfecv_features": l3_shap_feats,
+                "features": l3_features,
+            },
+            indent=2,
+        )
+    )
     l3_study.trials_dataframe().to_csv(l3_dir / "optuna_trials.csv", index=False)
-    pd.DataFrame({
-        "true": y3_test_enc.values,
-        "pred": l3_test_pred,
-        "proba": l3_test_proba,
-    }).to_csv(l3_dir / "predictions.csv", index=False)
+    pd.DataFrame(
+        {
+            "true": y3_test_enc.values,
+            "pred": l3_test_pred,
+            "proba": l3_test_proba,
+        }
+    ).to_csv(l3_dir / "predictions.csv", index=False)
 
     all_summaries["level3_cefalosporina"] = {"macro_f1": l3_f1, "roc_auc": l3_auc}
     all_summaries["l1_rfecv_scores"] = l1_rfecv_history
@@ -1487,34 +1682,43 @@ def build_arg_parser() -> argparse.ArgumentParser:
     default_db = os.path.join(
         home, "mepram_data", "df_merged_full_multilabel_grouped.csv"
     )
-    default_out = os.path.join(home, "mepram_data", "outputs", "independent_three_level")
+    default_out = os.path.join(
+        home, "mepram_data", "outputs", "independent_three_level"
+    )
 
     parser = argparse.ArgumentParser(
-        description=(
-            "Three-level independent (no cascade): "
-            "sepsis → resultado_hemo_grouped → resistente_cefalosporina"
-        )
+        description=("Three-level independent (no cascade) ")
     )
     parser.add_argument("--database-file", "-db", type=Path, default=default_db)
     parser.add_argument("--output-dir", "-o", type=Path, default=default_out)
     parser.add_argument(
-        "--sepsis-target", type=str, default="sepsis",
+        "--sepsis-target",
+        type=str,
+        default="sepsis",
         help="Column name for the Level-1 binary target (default: sepsis).",
     )
     parser.add_argument(
-        "--hemo-target", type=str, default="resultado_hemo_grouped",
+        "--hemo-target",
+        type=str,
+        default="resultado_hemo_grouped",
         help="Column name for the Level-2 multiclass target (default: resultado_hemo_grouped).",
     )
     parser.add_argument(
-        "--cef-target", type=str, default="resistente_cefalosporina",
+        "--cef-target",
+        type=str,
+        default="resistente_cefalosporina",
         help="Column name for the Level-3 binary target (default: resistente_cefalosporina).",
     )
     parser.add_argument(
-        "--weight-column", type=str, default="sample_weight",
+        "--weight-column",
+        type=str,
+        default="sample_weight",
         help="Column containing per-sample weights (default: sample_weight).",
     )
     parser.add_argument(
-        "--model-type", type=str, choices=["xgb", "lgbm", "rf", "catb"],
+        "--model-type",
+        type=str,
+        choices=["xgb", "lgbm", "rf", "catb"],
         default="lgbm",
         help=(
             "Estimator used for all three levels. "
@@ -1523,28 +1727,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--binary-trials", "-btrials", type=int, default=500,
+        "--binary-trials",
+        "-btrials",
+        type=int,
+        default=500,
         help="Optuna trials per level (default: 500).",
     )
     parser.add_argument("--cv-splits", type=int, default=5)
     parser.add_argument(
-        "--test-size", "-tsize", type=float, default=0.35,
+        "--test-size",
+        "-tsize",
+        type=float,
+        default=0.35,
         help="Hold-out fraction (default: 0.35).",
     )
     parser.add_argument("--random-state", type=int, default=99)
     parser.add_argument(
-        "--na-perc-limit", "-na", type=float, default=0.20,
+        "--na-perc-limit",
+        "-na",
+        type=float,
+        default=0.20,
         help="Drop columns with more than this fraction of missing values.",
     )
     parser.add_argument(
-        "--max-features", type=int, default=None,
+        "--max-features",
+        type=int,
+        default=None,
         help=(
             "Maximum number of features to keep per level, ranked by mean |SHAP|. "
             "Default: None (keep all features selected by SHAP-RFECV)."
         ),
     )
     parser.add_argument(
-        "--l3-min-positive", type=int, default=30,
+        "--l3-min-positive",
+        type=int,
+        default=30,
         help=(
             "Minimum number of minority-class training samples for Level 3 "
             "before a warning is printed about unreliable results. "
@@ -1553,7 +1770,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--max-corr", type=float, default=0.90,
+        "--max-corr",
+        type=float,
+        default=0.90,
         help=(
             "Remove features whose absolute Spearman correlation with any "
             "previously-kept feature exceeds this threshold. "
@@ -1563,7 +1782,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--no-impute", dest="impute_missing", action="store_false",
+        "--no-impute",
+        dest="impute_missing",
+        action="store_false",
         help="Disable missing-value imputation (default: enabled).",
     )
     parser.add_argument(
