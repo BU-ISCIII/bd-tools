@@ -991,8 +991,8 @@ def remove_correlated_features(
 ) -> List[str]:
     """Return the subset of *X.columns* that survives a Spearman correlation filter.
 
-    All feature columns are numeric after ``pd.get_dummies``, so Spearman rank
-    correlation is a single valid measure for every column type:
+    All feature columns must be numeric after preprocessing, so Spearman rank
+    correlation is a single valid measure for every model feature type:
 
     * **Binary 0/1** (one-hot dummies, presence/absence flags):
       Spearman = phi coefficient for binary pairs, which equals Pearson.
@@ -1001,8 +1001,8 @@ def remove_correlated_features(
     * **Continuous** (raw vital signs, labs, counts):
       Spearman is valid and more robust to outliers than Pearson.
 
-    No Cramér's V is needed because string/categorical columns have already
-    been one-hot encoded before this function is called.
+    No Cramér's V is needed because string/categorical columns are rejected
+    before this function is called.
 
     Algorithm
     ---------
@@ -1177,7 +1177,11 @@ def validate_preprocessed_feature_columns(feature_df: pd.DataFrame) -> None:
     ]
     if non_numeric_cols:
         preview = ", ".join(non_numeric_cols[:20])
-        suffix = "" if len(non_numeric_cols) <= 20 else f", ... ({len(non_numeric_cols)} total)"
+        suffix = (
+            ""
+            if len(non_numeric_cols) <= 20
+            else f", ... ({len(non_numeric_cols)} total)"
+        )
         raise ValueError(
             "Non-numeric feature columns found in modelling input. "
             "Encode or drop these in the preprocessing pipeline before running "
@@ -1924,9 +1928,55 @@ def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print("SELECTED ARGS:", args)
 
-    working_df, feature_df, applied_model_filters = prepare_modelling_dataframe(args)
+    # 1. Define targets and target-like columns that must not be predictors.
+    all_targets, cols_to_delete = build_target_and_drop_sets(args)
+
+    # 2. Load the preprocessed modelling table and apply row-level cohort filters.
+    df, applied_model_filters = load_and_filter_modelling_dataframe(
+        args,
+        cols_to_delete,
+    )
+
+    # 3. Validate required modelling targets and sample weights.
+    validate_required_columns(df, all_targets)
+
+    # 4. Keep only rows with valid split label and positive sample weight.
+    working_df = filter_valid_training_rows(
+        df,
+        sepsis_target=args.sepsis_target,
+        weight_column=args.weight_column,
+    )
+
+    # 5. Identify candidate feature columns after target removal.
+    exclude_cols = all_targets.copy()
+    feature_cols = get_feature_columns(working_df, exclude_cols)
+
+    # 6. Drop features that exceed the missingness threshold.
+    working_df, feature_cols = drop_high_na_feature_columns(
+        working_df,
+        feature_cols,
+        args.na_perc_limit,
+    )
+
+    # 7. Fail fast if preprocessing left categorical/string features unresolved.
+    validate_preprocessed_feature_columns(working_df[feature_cols])
+
+    # 8. Impute remaining feature missingness, or drop incomplete rows if disabled.
+    working_df, feature_cols = handle_missing_feature_values(
+        working_df,
+        feature_cols,
+        exclude_cols,
+        args.impute_missing,
+    )
+
+    # 9. Build the final numeric feature matrix used by every model level.
+    feature_df = working_df[feature_cols]
+
+    # 10. Split once, then remove highly correlated features using training data only.
     split_data = split_modelling_data(args, working_df, feature_df)
     split_data = apply_correlation_filter(args, split_data)
+
+    # 11. Create the timestamped output directory and aggregate metadata.
     output_dir = create_output_dir(args)
 
     all_summaries: Dict = {
@@ -1934,6 +1984,7 @@ def run_training(args: argparse.Namespace) -> None:
         "model_filters": applied_model_filters,
     }
 
+    # 12. Train each hierarchy level independently and collect summaries.
     all_summaries["level1_sepsis"], all_summaries["l1_rfecv_scores"] = (
         train_level1_sepsis(output_dir=output_dir, args=args, split_data=split_data)
     )
