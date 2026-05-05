@@ -43,16 +43,14 @@ import optuna
 import pandas as pd
 import yaml
 from catboost import CatBoostClassifier
-from imblearn.over_sampling import SMOTE, RandomOverSampler
 from lightgbm import LGBMClassifier
+from pandas.api.types import is_bool_dtype, is_numeric_dtype
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import KNNImputer, SimpleImputer
 from sklearn.base import BaseEstimator
 from sklearn.metrics import (
     classification_report,
-    confusion_matrix,
     f1_score,
-    fbeta_score,
     roc_auc_score,
     roc_curve,
 )
@@ -147,9 +145,13 @@ def apply_model_filters(
     for spec in filters:
         name = spec.get("name", "unnamed_filter")
         column = spec.get("column")
-        if not column:
-            raise ValueError(f"Model filter '{name}' is missing required key 'column'.")
-        if column not in filtered.columns:
+        any_column_equals = spec.get("exclude_if_any_column_equals")
+        if not column and not any_column_equals:
+            raise ValueError(
+                f"Model filter '{name}' needs either 'column' or "
+                "'exclude_if_any_column_equals'."
+            )
+        if column and column not in filtered.columns:
             print(
                 f"Warning: model filter '{name}' skipped; column '{column}' not found."
             )
@@ -160,17 +162,31 @@ def apply_model_filters(
 
         before = len(filtered)
         mask = pd.Series(True, index=filtered.index)
-        if spec.get("require_notna", False):
+        if any_column_equals:
+            matched = pd.Series(False, index=filtered.index)
+            missing_filter_columns = []
+            for match_column, match_value in any_column_equals.items():
+                if match_column not in filtered.columns:
+                    missing_filter_columns.append(match_column)
+                    continue
+                matched |= filtered[match_column] == match_value
+            if missing_filter_columns:
+                print(
+                    f"Warning: model filter '{name}' missing columns: "
+                    + ", ".join(missing_filter_columns)
+                )
+            mask &= ~matched
+        if column and spec.get("require_notna", False):
             mask &= filtered[column].notna()
-        if "include_values" in spec:
+        if column and "include_values" in spec:
             mask &= filtered[column].isin(spec["include_values"])
-        if "exclude_values" in spec:
+        if column and "exclude_values" in spec:
             mask &= ~filtered[column].isin(spec["exclude_values"])
-        if "min_value" in spec:
+        if column and "min_value" in spec:
             mask &= (
                 pd.to_numeric(filtered[column], errors="coerce") >= spec["min_value"]
             )
-        if "max_value" in spec:
+        if column and "max_value" in spec:
             mask &= (
                 pd.to_numeric(filtered[column], errors="coerce") <= spec["max_value"]
             )
@@ -182,6 +198,11 @@ def apply_model_filters(
             {
                 "name": name,
                 "column": column,
+                "columns": (
+                    list(any_column_equals.keys())
+                    if any_column_equals
+                    else ([column] if column else [])
+                ),
                 "status": "applied",
                 "rows_before": before,
                 "rows_after": len(filtered),
@@ -997,13 +1018,7 @@ def remove_correlated_features(
     return [c for c in X.columns if c in kept_set]
 
 
-def run_training(args: argparse.Namespace) -> None:
-    optuna.logging.set_verbosity(optuna.logging.WARNING)
-    print("SELECTED ARGS:", args)
-
-    # ------------------------------------------------------------------
-    # 1. Load & preprocess
-    # ------------------------------------------------------------------
+def build_target_and_drop_sets(args: argparse.Namespace) -> Tuple[set, List[str]]:
     all_targets = {
         args.sepsis_target,
         args.hemo_target,
@@ -1012,65 +1027,135 @@ def run_training(args: argparse.Namespace) -> None:
     }
     cols_to_delete = list(DELETE_COLUMNS)
     cols_to_delete.extend([x for x in TARGET_REMOVE if x not in all_targets])
+    return all_targets, cols_to_delete
 
-    df, applied_model_filters = load_processed_dataframe(
+
+def load_and_filter_modelling_dataframe(
+    args: argparse.Namespace, cols_to_delete: List[str]
+) -> Tuple[pd.DataFrame, List[Dict]]:
+    return load_processed_dataframe(
         args.database_file,
         cols_to_delete,
         args.model_filters,
     )
 
-    missing = [c for c in all_targets if c not in df.columns]
+
+def validate_required_columns(df: pd.DataFrame, required_cols: set) -> None:
+    missing = [c for c in required_cols if c not in df.columns]
     if missing:
         raise ValueError(f"Required columns missing from dataframe: {missing}")
 
+
+def filter_valid_training_rows(
+    df: pd.DataFrame,
+    *,
+    sepsis_target: str,
+    weight_column: str,
+) -> pd.DataFrame:
     working_df = df.copy()
-    working_df[args.weight_column] = pd.to_numeric(
-        working_df[args.weight_column], errors="coerce"
+    working_df[weight_column] = pd.to_numeric(
+        working_df[weight_column], errors="coerce"
     )
-    # Drop rows where sepsis label or weight is missing (needed for split stratification)
-    working_df = working_df.dropna(subset=[args.sepsis_target, args.weight_column])
-    working_df = working_df[working_df[args.weight_column] > 0]
+    # Drop rows where sepsis label or weight is missing (needed for split stratification).
+    working_df = working_df.dropna(subset=[sepsis_target, weight_column])
+    return working_df[working_df[weight_column] > 0].copy()
 
-    exclude_cols = all_targets.copy()
-    feature_cols = [c for c in working_df.columns if c not in exclude_cols]
-    foco_dummy_cols = [
-        c for c in feature_cols if c.startswith("foco_") and c.endswith("_binary")
-    ]
-    if "foco" in feature_cols and foco_dummy_cols:
-        # Preprocessing already provides foco one-hot columns. Keep the
-        # categorical source column only for row filtering/review.
-        feature_cols.remove("foco")
 
-    # Drop high-NA feature columns
+def get_feature_columns(df: pd.DataFrame, exclude_cols: set) -> List[str]:
+    return [c for c in df.columns if c not in exclude_cols]
+
+
+def drop_high_na_feature_columns(
+    working_df: pd.DataFrame,
+    feature_cols: List[str],
+    na_perc_limit: float,
+) -> Tuple[pd.DataFrame, List[str]]:
     dropped_na = [
-        col
-        for col in feature_cols
-        if working_df[col].isna().mean() > args.na_perc_limit
+        col for col in feature_cols if working_df[col].isna().mean() > na_perc_limit
     ]
     if dropped_na:
         print(f"Dropping {len(dropped_na)} high-NA columns.")
-        working_df.drop(columns=dropped_na, inplace=True)
+        working_df = working_df.drop(columns=dropped_na)
         feature_cols = [c for c in feature_cols if c not in dropped_na]
-
     if not feature_cols:
         raise ValueError("No feature columns remain after NA filtering.")
+    return working_df, feature_cols
 
-    if args.impute_missing:
-        working_df = impute_missing_values(working_df, exclude_cols)
-    else:
-        working_df = working_df.dropna(subset=feature_cols)
 
-    feature_df = working_df[feature_cols]
-    cat_cols = feature_df.select_dtypes(include=["object", "category"]).columns.tolist()
-    if cat_cols:
-        feature_df = pd.get_dummies(feature_df, columns=cat_cols, drop_first=False)
-        feature_df.columns = feature_df.columns.str.replace(
-            "[^0-9a-zA-Z_]+", "_", regex=True
+def validate_preprocessed_feature_columns(feature_df: pd.DataFrame) -> None:
+    non_numeric_cols = [
+        col
+        for col in feature_df.columns
+        if not (is_numeric_dtype(feature_df[col]) or is_bool_dtype(feature_df[col]))
+    ]
+    if non_numeric_cols:
+        preview = ", ".join(non_numeric_cols[:20])
+        suffix = "" if len(non_numeric_cols) <= 20 else f", ... ({len(non_numeric_cols)} total)"
+        raise ValueError(
+            "Non-numeric feature columns found in modelling input. "
+            "Encode or drop these in the preprocessing pipeline before running "
+            f"the HPC model: {preview}{suffix}"
         )
 
-    # ------------------------------------------------------------------
-    # 2. Train / test split – stratified on sepsis
-    # ------------------------------------------------------------------
+
+def handle_missing_feature_values(
+    working_df: pd.DataFrame,
+    feature_cols: List[str],
+    exclude_cols: set,
+    impute_missing: bool,
+) -> Tuple[pd.DataFrame, List[str]]:
+    if impute_missing:
+        working_df = impute_missing_values(working_df, exclude_cols)
+        feature_cols = get_feature_columns(working_df, exclude_cols)
+    else:
+        working_df = working_df.dropna(subset=feature_cols)
+    return working_df, feature_cols
+
+
+def build_feature_dataframe(
+    working_df: pd.DataFrame, feature_cols: List[str]
+) -> pd.DataFrame:
+    feature_df = working_df[feature_cols]
+    validate_preprocessed_feature_columns(feature_df)
+    return feature_df
+
+
+def prepare_modelling_dataframe(
+    args: argparse.Namespace,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[Dict]]:
+    all_targets, cols_to_delete = build_target_and_drop_sets(args)
+    df, applied_model_filters = load_and_filter_modelling_dataframe(args, cols_to_delete)
+
+    validate_required_columns(df, all_targets)
+    working_df = filter_valid_training_rows(
+        df,
+        sepsis_target=args.sepsis_target,
+        weight_column=args.weight_column,
+    )
+    exclude_cols = all_targets.copy()
+    feature_cols = get_feature_columns(working_df, exclude_cols)
+    working_df, feature_cols = drop_high_na_feature_columns(
+        working_df,
+        feature_cols,
+        args.na_perc_limit,
+    )
+    feature_df = working_df[feature_cols]
+    validate_preprocessed_feature_columns(feature_df)
+    working_df, feature_cols = handle_missing_feature_values(
+        working_df,
+        feature_cols,
+        exclude_cols,
+        args.impute_missing,
+    )
+    feature_df = build_feature_dataframe(working_df, feature_cols)
+    return working_df, feature_df, applied_model_filters
+
+
+def split_modelling_data(
+    args: argparse.Namespace,
+    working_df: pd.DataFrame,
+    feature_df: pd.DataFrame,
+) -> Dict[str, pd.Series | pd.DataFrame]:
     y_sepsis = working_df.loc[feature_df.index, args.sepsis_target]
     y_hemo = working_df.loc[feature_df.index, args.hemo_target]
     y_cef = working_df.loc[feature_df.index, args.cef_target]
@@ -1098,154 +1183,251 @@ def run_training(args: argparse.Namespace) -> None:
         stratify=y_sepsis,
     )
     print(f"Train: {len(X_train)} rows  |  Test: {len(X_test)} rows")
+    return {
+        "X_train": X_train,
+        "X_test": X_test,
+        "y_sep_train": y_sep_train,
+        "y_sep_test": y_sep_test,
+        "y_hemo_train": y_hemo_train,
+        "y_hemo_test": y_hemo_test,
+        "y_cef_train": y_cef_train,
+        "y_cef_test": y_cef_test,
+        "w_train": w_train,
+        "w_test": w_test,
+    }
 
-    # ------------------------------------------------------------------
-    # 2b. Remove highly correlated features (training data only → no leakage)
-    # ------------------------------------------------------------------
+
+def apply_correlation_filter(
+    args: argparse.Namespace,
+    split_data: Dict[str, pd.Series | pd.DataFrame],
+) -> Dict[str, pd.Series | pd.DataFrame]:
     if args.max_corr < 1.0:
         print(f"\nRemoving features with |Spearman corr| > {args.max_corr} …")
+        X_train = split_data["X_train"]
+        X_test = split_data["X_test"]
         kept_cols = remove_correlated_features(X_train, threshold=args.max_corr)
         n_removed = len(X_train.columns) - len(kept_cols)
         if n_removed:
             print(
                 f"  Dropped {n_removed} redundant features → {len(kept_cols)} remain."
             )
-        X_train = X_train[kept_cols]
-        X_test = X_test[kept_cols]
+        split_data = dict(split_data)
+        split_data["X_train"] = X_train[kept_cols]
+        split_data["X_test"] = X_test[kept_cols]
+    return split_data
 
-    # ------------------------------------------------------------------
-    # 3. Output directory
-    # ------------------------------------------------------------------
+
+def create_output_dir(args: argparse.Namespace) -> Path:
     output_dir = Path(str(args.output_dir) + "_" + TODAY + "_" + JOB_ID)
     output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
-    all_summaries: Dict = {
-        "args": {str(k): str(v) for k, v in args.__dict__.items()},
-        "model_filters": applied_model_filters,
-    }
 
-    # ==================================================================
-    # LEVEL 1 – sepsis
-    # ==================================================================
+def print_level_header(title: str) -> None:
     print("\n" + "=" * 60)
-    print("LEVEL 1: sepsis")
+    print(title)
     print("=" * 60)
-    l1_dir = output_dir / "level1_sepsis"
-    l1_dir.mkdir(exist_ok=True)
 
-    le_sep = LabelEncoder()
-    y_sep_train_enc = pd.Series(
-        le_sep.fit_transform(y_sep_train.astype(str)),
-        index=y_sep_train.index,
-        name="sepsis_enc",
-    )
-    y_sep_test_enc = pd.Series(
-        le_sep.transform(y_sep_test.astype(str)),
-        index=y_sep_test.index,
-        name="sepsis_enc",
-    )
 
-    sw_l1 = compute_balanced_sample_weight(y_sep_train_enc, w_train)
-
-    print("  Selecting Level 1 features by SHAP importance …")
-    rank_model_l1 = _build_ranking_model(
-        args.model_type, y_sep_train_enc, args.random_state
+def encode_labels(
+    y_train: pd.Series,
+    y_test: pd.Series,
+    name: str,
+) -> Tuple[LabelEncoder, pd.Series, pd.Series]:
+    encoder = LabelEncoder()
+    y_train_enc = pd.Series(
+        encoder.fit_transform(y_train.astype(str)),
+        index=y_train.index,
+        name=name,
     )
-    selected_features, l1_rfecv_history = shap_rfecv(
-        rank_model_l1,
+    y_test_enc = pd.Series(
+        encoder.transform(y_test.astype(str)),
+        index=y_test.index,
+        name=name,
+    )
+    return encoder, y_train_enc, y_test_enc
+
+
+def select_and_scale_features(
+    *,
+    label: str,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train: pd.Series,
+    args: argparse.Namespace,
+    rank_model_type: str,
+    cap_model_type: str,
+) -> Tuple[pd.DataFrame, pd.DataFrame, List[str], List[str], Dict]:
+    print(f"  Selecting {label} features by SHAP importance …")
+    rank_model = _build_ranking_model(rank_model_type, y_train, args.random_state)
+    max_features = args.max_features or X_train.shape[1]
+    shap_features, rfecv_history = shap_rfecv(
+        rank_model,
         X_train,
-        y_sep_train_enc,
+        y_train,
         min_features=2,
-        max_features=args.max_features,
+        max_features=max_features,
     )
-    l1_features = cap_features(
-        selected_features,
+    selected_features = cap_features(
+        shap_features,
         X_train,
-        y_sep_train_enc,
+        y_train,
         args.max_features,
         args.random_state,
-        args.model_type,
-        rank_model=rank_model_l1,
+        cap_model_type,
+        rank_model=rank_model,
     )
-    print(f"  SHAP selection kept {len(l1_features)} features.")
+    print(f"  SHAP selection kept {len(selected_features)} features.")
 
-    scaler_l1 = MinMaxScaler()
-    X_l1_train = pd.DataFrame(
-        scaler_l1.fit_transform(X_train[l1_features]),
-        columns=l1_features,
+    scaler = MinMaxScaler()
+    X_train_scaled = pd.DataFrame(
+        scaler.fit_transform(X_train[selected_features]),
+        columns=selected_features,
         index=X_train.index,
     )
-    X_l1_test = pd.DataFrame(
-        scaler_l1.transform(X_test[l1_features]),
-        columns=l1_features,
+    X_test_scaled = pd.DataFrame(
+        scaler.transform(X_test[selected_features]),
+        columns=selected_features,
         index=X_test.index,
     )
+    return (
+        X_train_scaled,
+        X_test_scaled,
+        selected_features,
+        shap_features,
+        rfecv_history,
+    )
 
-    print("  Optimising Level 1 model …")
-    l1_params, l1_threshold, l1_study = optimise_binary_model(
-        X_l1_train,
-        y_sep_train_enc,
-        n_splits=args.cv_splits,
+
+def train_binary_level(
+    *,
+    label: str,
+    output_dir: Path,
+    args: argparse.Namespace,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    y_train_raw: pd.Series,
+    y_test_raw: pd.Series,
+    sample_weight_train: pd.Series,
+    model_type: str,
+    cv_splits: int,
+    calibration_cv: int,
+    encoded_name: str,
+) -> Tuple[Dict, Dict]:
+    level_dir = output_dir
+    level_dir.mkdir(exist_ok=True)
+    encoder, y_train_enc, y_test_enc = encode_labels(
+        y_train_raw, y_test_raw, encoded_name
+    )
+    sample_weight = compute_balanced_sample_weight(y_train_enc, sample_weight_train)
+    X_train_scaled, X_test_scaled, selected_features, shap_features, rfecv_history = (
+        select_and_scale_features(
+            label=label,
+            X_train=X_train,
+            X_test=X_test,
+            y_train=y_train_enc,
+            args=args,
+            rank_model_type=model_type,
+            cap_model_type=model_type,
+        )
+    )
+
+    print(f"  Optimising {label} model …")
+    params, threshold, study = optimise_binary_model(
+        X_train_scaled,
+        y_train_enc,
+        n_splits=cv_splits,
         n_trials=args.binary_trials,
         random_state=args.random_state,
-        sample_weight=sw_l1,
-        model_type=args.model_type,
+        sample_weight=sample_weight,
+        model_type=model_type,
     )
-    print(f"  Best threshold: {l1_threshold:.3f}")
+    print(f"  Best threshold: {threshold:.3f}")
 
-    # Final Level 1 model trained on all training data, then calibrated
-    l1_base = build_binary_model(args.model_type, l1_params.copy())
-    l1_model = CalibratedClassifierCV(l1_base, cv=5, method="isotonic")
-    l1_model.fit(X_l1_train, y_sep_train_enc)
+    base_model = build_binary_model(model_type, params.copy())
+    model = CalibratedClassifierCV(base_model, cv=calibration_cv, method="isotonic")
+    model.fit(X_train_scaled, y_train_enc)
 
-    l1_test_proba = l1_model.predict_proba(X_l1_test)[:, 1]
-    l1_test_pred = (l1_test_proba >= l1_threshold).astype(int)
-
-    l1_report = classification_report(
-        y_sep_test_enc,
-        l1_test_pred,
-        target_names=[str(c) for c in le_sep.classes_],
+    test_proba = model.predict_proba(X_test_scaled)[:, 1]
+    test_pred = (test_proba >= threshold).astype(int)
+    report = classification_report(
+        y_test_enc,
+        test_pred,
+        target_names=[str(c) for c in encoder.classes_],
         zero_division=0,
     )
-    l1_auc = roc_auc_score(y_sep_test_enc, l1_test_proba)
-    l1_f1 = f1_score(y_sep_test_enc, l1_test_pred, average="macro", zero_division=0)
-    print(f"  Level 1 – Macro F1: {l1_f1:.3f}  |  ROC-AUC: {l1_auc:.3f}")
+    f1 = f1_score(y_test_enc, test_pred, average="macro", zero_division=0)
+    auc: Optional[float] = None
+    if y_test_enc.nunique() > 1:
+        auc = float(roc_auc_score(y_test_enc, test_proba))
+    print(
+        f"  {label} – Macro F1: {f1:.3f}"
+        + (f"  |  ROC-AUC: {auc:.3f}" if auc is not None else "")
+    )
 
-    (l1_dir / "report.txt").write_text(l1_report)
-    (l1_dir / "summary.json").write_text(
+    (level_dir / "report.txt").write_text(report)
+    (level_dir / "summary.json").write_text(
         json.dumps(
             {
-                "params": l1_params,
-                "threshold": l1_threshold,
-                "macro_f1": l1_f1,
-                "roc_auc": l1_auc,
-                "classes": le_sep.classes_.tolist(),
-                "shaprfecv_features": selected_features,
-                "features": l1_features,
+                "params": params,
+                "threshold": threshold,
+                "macro_f1": f1,
+                "roc_auc": auc,
+                "classes": encoder.classes_.tolist(),
+                "shaprfecv_features": shap_features,
+                "features": selected_features,
             },
             indent=2,
         )
     )
-    l1_study.trials_dataframe().to_csv(l1_dir / "optuna_trials.csv", index=False)
+    study.trials_dataframe().to_csv(level_dir / "optuna_trials.csv", index=False)
     pd.DataFrame(
         {
-            "true": y_sep_test_enc.values,
-            "pred": l1_test_pred,
-            "proba": l1_test_proba,
+            "true": y_test_enc.values,
+            "pred": test_pred,
+            "proba": test_proba,
         }
-    ).to_csv(l1_dir / "predictions.csv", index=False)
+    ).to_csv(level_dir / "predictions.csv", index=False)
+    return {"macro_f1": f1, "roc_auc": auc}, rfecv_history
 
-    confusion_matrix(y_sep_test_enc, l1_test_pred, labels=[0, 1])
-    all_summaries["level1_sepsis"] = {"macro_f1": l1_f1, "roc_auc": l1_auc}
 
-    # ==================================================================
-    # LEVEL 2 – resultado_hemo_grouped
-    # ==================================================================
-    print("\n" + "=" * 60)
-    print("LEVEL 2: resultado_hemo_grouped")
-    print("=" * 60)
+def train_level1_sepsis(
+    *,
+    output_dir: Path,
+    args: argparse.Namespace,
+    split_data: Dict[str, pd.Series | pd.DataFrame],
+) -> Tuple[Dict, Dict]:
+    print_level_header("LEVEL 1: sepsis")
+    return train_binary_level(
+        label="Level 1",
+        output_dir=output_dir / "level1_sepsis",
+        args=args,
+        X_train=split_data["X_train"],
+        X_test=split_data["X_test"],
+        y_train_raw=split_data["y_sep_train"],
+        y_test_raw=split_data["y_sep_test"],
+        sample_weight_train=split_data["w_train"],
+        model_type=args.model_type,
+        cv_splits=args.cv_splits,
+        calibration_cv=5,
+        encoded_name="sepsis_enc",
+    )
+
+
+def train_level2_hemo(
+    *,
+    output_dir: Path,
+    args: argparse.Namespace,
+    split_data: Dict[str, pd.Series | pd.DataFrame],
+) -> Tuple[Dict, Dict]:
+    print_level_header("LEVEL 2: resultado_hemo_grouped")
     l2_dir = output_dir / "level2_hemo"
     l2_dir.mkdir(exist_ok=True)
+    X_train = split_data["X_train"]
+    X_test = split_data["X_test"]
+    y_hemo_train = split_data["y_hemo_train"]
+    y_hemo_test = split_data["y_hemo_test"]
+    w_train = split_data["w_train"]
 
     # Drop rare hemo classes (< 2 % of hemo-valid training samples)
     hemo_valid_train = y_hemo_train.notna()
@@ -1315,38 +1497,16 @@ def run_training(args: argparse.Namespace) -> None:
     X2_train_base = X_train.loc[l2_train_mask].copy()
     X2_test_base = X_test.loc[l2_test_mask].copy()
 
-    print("  Selecting Level 2 features by SHAP importance …")
-    rank_model_l2 = _build_ranking_model(
-        args.model_type, y2_train_enc, args.random_state
-    )
-    l2_shap_feats, l2_rfecv_history = shap_rfecv(
-        rank_model_l2,
-        X2_train_base,
-        y2_train_enc,
-        min_features=2,
-        max_features=args.max_features,
-    )
-    l2_features = cap_features(
-        l2_shap_feats,
-        X2_train_base,
-        y2_train_enc,
-        args.max_features,
-        args.random_state,
-        _l2_model_type,
-        rank_model=rank_model_l2,
-    )
-    print(f"  SHAP selection kept {len(l2_features)} features.")
-
-    scaler_l2 = MinMaxScaler()
-    X2_train_scaled = pd.DataFrame(
-        scaler_l2.fit_transform(X2_train_base[l2_features]),
-        columns=l2_features,
-        index=X2_train_base.index,
-    )
-    X2_test_scaled = pd.DataFrame(
-        scaler_l2.transform(X2_test_base[l2_features]),
-        columns=l2_features,
-        index=X2_test_base.index,
+    X2_train_scaled, X2_test_scaled, l2_features, l2_shap_feats, l2_rfecv_history = (
+        select_and_scale_features(
+            label="Level 2",
+            X_train=X2_train_base,
+            X_test=X2_test_base,
+            y_train=y2_train_enc,
+            args=args,
+            rank_model_type=args.model_type,
+            cap_model_type=_l2_model_type,
+        )
     )
 
     sw_l2 = compute_balanced_sample_weight(
@@ -1415,13 +1575,13 @@ def run_training(args: argparse.Namespace) -> None:
             }
         ).to_csv(l2_dir / "predictions.csv", index=False)
 
-        all_summaries["level2_hemo"] = {
+        return {
             "macro_f1": l2_f1,
             "roc_auc": l2_auc,
             "hemo_classes": le_hemo.classes_.tolist(),
             "is_binary": True,
             "threshold": l2_threshold,
-        }
+        }, l2_rfecv_history
 
     else:
         l2_threshold = None
@@ -1482,21 +1642,23 @@ def run_training(args: argparse.Namespace) -> None:
             l2_dir / "predictions.csv", index=False
         )
 
-        all_summaries["level2_hemo"] = {
+        return {
             "macro_f1": l2_f1,
             "roc_auc": l2_auc,
             "hemo_classes": le_hemo.classes_.tolist(),
             "is_binary": False,
-        }
+        }, l2_rfecv_history
 
-    # ==================================================================
-    # LEVEL 3 – resistente_cefalosporina
-    # ==================================================================
-    print("\n" + "=" * 60)
-    print("LEVEL 3: resistente_cefalosporina")
-    print("=" * 60)
-    l3_dir = output_dir / "level3_cefalosporina"
-    l3_dir.mkdir(exist_ok=True)
+
+def build_level3_data(
+    split_data: Dict[str, pd.Series | pd.DataFrame],
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    X_train = split_data["X_train"]
+    X_test = split_data["X_test"]
+    y_hemo_train = split_data["y_hemo_train"]
+    y_hemo_test = split_data["y_hemo_test"]
+    y_cef_train = split_data["y_cef_train"]
+    y_cef_test = split_data["y_cef_test"]
 
     # Filter: positive blood culture AND valid cef label
     # (positive blood culture = resultado_hemo_grouped != "NEGATIVE")
@@ -1518,15 +1680,29 @@ def run_training(args: argparse.Namespace) -> None:
     X3_test_base = X_test.loc[cef_test_mask].copy()
     y3_train_raw = y_cef_train.loc[cef_train_mask]
     y3_test_raw = y_cef_test.loc[cef_test_mask]
+    return X3_train_base, X3_test_base, y3_train_raw, y3_test_raw
 
+
+def train_level3_cef(
+    *,
+    output_dir: Path,
+    args: argparse.Namespace,
+    split_data: Dict[str, pd.Series | pd.DataFrame],
+) -> Tuple[Dict, Dict]:
+    print_level_header("LEVEL 3: resistente_cefalosporina")
+    l3_dir = output_dir / "level3_cefalosporina"
+    l3_dir.mkdir(exist_ok=True)
+    X3_train_base, X3_test_base, y3_train_raw, y3_test_raw = build_level3_data(
+        split_data
+    )
     le_cef = LabelEncoder()
     y3_train_enc = pd.Series(
         le_cef.fit_transform(y3_train_raw), index=y3_train_raw.index, name="cef_enc"
     )
     # Filter test to known cef classes only
-    cef_test_mask = cef_test_mask & y_cef_test.isin(le_cef.classes_)
-    X3_test_base = X_test.loc[cef_test_mask].copy()
-    y3_test_raw = y_cef_test.loc[cef_test_mask]
+    known_test_mask = y3_test_raw.isin(le_cef.classes_)
+    X3_test_base = X3_test_base.loc[known_test_mask].copy()
+    y3_test_raw = y3_test_raw.loc[known_test_mask]
     y3_test_enc = pd.Series(
         le_cef.transform(y3_test_raw), index=y3_test_raw.index, name="cef_enc"
     )
@@ -1557,42 +1733,20 @@ def run_training(args: argparse.Namespace) -> None:
             f"\n  Results should be interpreted with caution."
             f"\n  {'!' * 60}\n"
         )
-    print("  Selecting Level 3 features by SHAP importance …")
-    rank_model_l3 = _build_ranking_model(
-        args.model_type, y3_train_enc, args.random_state
-    )
-    l3_shap_feats, l3_rfecv_history = shap_rfecv(
-        rank_model_l3,
-        X3_train_base,
-        y3_train_enc,
-        min_features=2,
-        max_features=args.max_features,
-    )
-    l3_features = cap_features(
-        l3_shap_feats,
-        X3_train_base,
-        y3_train_enc,
-        args.max_features,
-        args.random_state,
-        args.model_type,
-        rank_model=rank_model_l3,
-    )
-    print(f"  SHAP selection kept {len(l3_features)} features.")
-
-    scaler_l3 = MinMaxScaler()
-    X3_train_scaled = pd.DataFrame(
-        scaler_l3.fit_transform(X3_train_base[l3_features]),
-        columns=l3_features,
-        index=X3_train_base.index,
-    )
-    X3_test_scaled = pd.DataFrame(
-        scaler_l3.transform(X3_test_base[l3_features]),
-        columns=l3_features,
-        index=X3_test_base.index,
+    X3_train_scaled, X3_test_scaled, l3_features, l3_shap_feats, l3_rfecv_history = (
+        select_and_scale_features(
+            label="Level 3",
+            X_train=X3_train_base,
+            X_test=X3_test_base,
+            y_train=y3_train_enc,
+            args=args,
+            rank_model_type=args.model_type,
+            cap_model_type=args.model_type,
+        )
     )
 
     sw_l3 = compute_balanced_sample_weight(
-        y3_train_enc, w_train.reindex(y3_train_enc.index)
+        y3_train_enc, split_data["w_train"].reindex(y3_train_enc.index)
     )
 
     print("  Optimising Level 3 model …")
@@ -1657,19 +1811,41 @@ def run_training(args: argparse.Namespace) -> None:
         }
     ).to_csv(l3_dir / "predictions.csv", index=False)
 
-    all_summaries["level3_cefalosporina"] = {"macro_f1": l3_f1, "roc_auc": l3_auc}
-    all_summaries["l1_rfecv_scores"] = l1_rfecv_history
-    all_summaries["l2_rfecv_scores"] = l2_rfecv_history
-    all_summaries["l3_rfecv_scores"] = l3_rfecv_history
+    return {"macro_f1": l3_f1, "roc_auc": l3_auc}, l3_rfecv_history
 
-    # ------------------------------------------------------------------
-    # Aggregate summary
-    # ------------------------------------------------------------------
+
+def write_aggregate_summary(output_dir: Path, all_summaries: Dict) -> None:
     (output_dir / "aggregate_summary.json").write_text(
         json.dumps(all_summaries, indent=2)
     )
     print("\n" + "=" * 60)
     print("COMPLETED.  Results saved in:", output_dir)
+
+
+def run_training(args: argparse.Namespace) -> None:
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    print("SELECTED ARGS:", args)
+
+    working_df, feature_df, applied_model_filters = prepare_modelling_dataframe(args)
+    split_data = split_modelling_data(args, working_df, feature_df)
+    split_data = apply_correlation_filter(args, split_data)
+    output_dir = create_output_dir(args)
+
+    all_summaries: Dict = {
+        "args": {str(k): str(v) for k, v in args.__dict__.items()},
+        "model_filters": applied_model_filters,
+    }
+
+    all_summaries["level1_sepsis"], all_summaries["l1_rfecv_scores"] = (
+        train_level1_sepsis(output_dir=output_dir, args=args, split_data=split_data)
+    )
+    all_summaries["level2_hemo"], all_summaries["l2_rfecv_scores"] = train_level2_hemo(
+        output_dir=output_dir, args=args, split_data=split_data
+    )
+    all_summaries["level3_cefalosporina"], all_summaries["l3_rfecv_scores"] = (
+        train_level3_cef(output_dir=output_dir, args=args, split_data=split_data)
+    )
+    write_aggregate_summary(output_dir, all_summaries)
 
 
 # ---------------------------------------------------------------------------
