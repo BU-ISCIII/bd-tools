@@ -18,6 +18,30 @@ def get_output_dir(config: BenchmarkConfig) -> Path:
     return Path(config.raw.get("output_dir", "outputs/ml_benchmark"))
 
 
+def build_pipeline_contract(
+    config: BenchmarkConfig,
+    job: BenchmarkJob,
+    feature_frame: Any,
+):
+    from .models import get_model_registry
+    from .pipeline import build_benchmark_pipeline, infer_column_types
+
+    registry = get_model_registry()
+    if job.model_name not in registry:
+        raise ValueError(f"Unknown model '{job.model_name}'.")
+    numeric_columns, categorical_columns = infer_column_types(feature_frame)
+    return build_benchmark_pipeline(
+        job=job,
+        model_spec=registry[job.model_name],
+        numeric_columns=numeric_columns,
+        categorical_columns=categorical_columns,
+        random_state=config.split.random_state,
+        n_jobs=configure_resources(
+            int(config.raw.get("compute", {}).get("default_n_jobs", 1))
+        ).n_jobs,
+    )
+
+
 def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False) -> Dict[str, Any]:
     resources = configure_resources(
         int(config.raw.get("compute", {}).get("default_n_jobs", 1))
@@ -43,4 +67,3 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         "status": "planned" if dry_run else "pending_implementation",
         "output_dir": str(output_dir),
     }
-

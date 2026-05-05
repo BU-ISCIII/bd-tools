@@ -75,6 +75,24 @@ class FeaturePolicySpec:
 
 
 @dataclass(frozen=True)
+class SplitSpec:
+    strategy: str = "cross_validation"
+    test_size: float = 0.20
+    validation_size: Optional[float] = None
+    cv_splits: int = 5
+    random_state: int = 42
+    stratify: bool = True
+
+
+@dataclass
+class PipelineBuildResult:
+    pipeline: Any
+    numeric_columns: List[str]
+    categorical_columns: List[str]
+    notes: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class ModelSpec:
     name: str
     supports_binary: bool
@@ -130,3 +148,4 @@ class BenchmarkConfig:
     feature_groups: Dict[str, FeatureGroupSpec]
     feature_views: List[FeatureViewSpec]
     feature_sets: List[FeatureSetSpec]
+    split: SplitSpec

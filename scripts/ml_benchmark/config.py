@@ -14,6 +14,7 @@ from .types import (
     FeaturePolicySpec,
     FeatureSetSpec,
     FeatureViewSpec,
+    SplitSpec,
     TargetSpec,
 )
 
@@ -42,7 +43,9 @@ def _load_targets(config: Dict[str, Any]) -> List[TargetSpec]:
 
 def _load_feature_sets(config: Dict[str, Any]) -> List[FeatureSetSpec]:
     feature_sets = []
-    for item in config.get("feature_sets", [{"name": "all_features", "strategy": "none"}]):
+    for item in config.get(
+        "feature_sets", [{"name": "all_features", "strategy": "none"}]
+    ):
         feature_sets.append(
             FeatureSetSpec(
                 name=item["name"],
@@ -119,9 +122,7 @@ def _load_feature_policies(config: Dict[str, Any]) -> Dict[str, FeaturePolicySpe
         policies[name] = FeaturePolicySpec(
             name=name,
             require_numeric=item.get("require_numeric", True),
-            categorical_handling=item.get(
-                "categorical_handling", "preprocessed"
-            ),
+            categorical_handling=item.get("categorical_handling", "preprocessed"),
             scale=item.get("scale", "none"),
             correlation_filter=CorrelationFilterSpec(
                 enabled=corr.get("enabled", False),
@@ -152,6 +153,22 @@ def _validate_model_feature_policies(
             )
 
 
+def _load_split(config: Dict[str, Any]) -> SplitSpec:
+    raw = config.get("split", {})
+    return SplitSpec(
+        strategy=raw.get("strategy", "cross_validation"),
+        test_size=float(raw.get("test_size", 0.20)),
+        validation_size=(
+            None
+            if raw.get("validation_size") is None
+            else float(raw.get("validation_size"))
+        ),
+        cv_splits=int(raw.get("cv_splits", 5)),
+        random_state=int(raw.get("random_state", 42)),
+        stratify=bool(raw.get("stratify", True)),
+    )
+
+
 def load_config(path: str | Path) -> BenchmarkConfig:
     config_path = Path(path)
     raw = load_yaml(config_path)
@@ -169,4 +186,5 @@ def load_config(path: str | Path) -> BenchmarkConfig:
         feature_groups=_load_feature_groups(raw),
         feature_views=_load_feature_views(raw),
         feature_sets=_load_feature_sets(raw),
+        split=_load_split(raw),
     )

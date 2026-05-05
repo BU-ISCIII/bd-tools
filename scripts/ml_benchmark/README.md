@@ -17,6 +17,8 @@ This first slice establishes:
   representations, such as raw, binary, or categorical vital-sign encodings.
 - Model-specific feature policies for scaling, categorical handling, and
   correlation-filter behavior.
+- Leakage-safe pipeline construction for imputation, encoding, scaling,
+  correlation filtering, feature-selection placeholders, and the estimator.
 - Slurm array helper output.
 - Slurm script rendering.
 - Resource limits based on `SLURM_CPUS_PER_TASK`.
@@ -27,6 +29,23 @@ This first slice establishes:
 
 Training, feature-selection caching, tuning, metrics, diagnostics, and aggregate
 reporting are the next implementation slices.
+
+## Leakage Rule
+
+All data-dependent transformations must be learned from training data only.
+The benchmark pipeline builder keeps these steps inside a fitted pipeline:
+
+- missing-value imputation;
+- one-hot category learning;
+- scaling means/standard deviations;
+- correlation-filter decisions;
+- feature-selection decisions;
+- model fitting.
+
+During cross-validation, each fold must build and fit its own pipeline using
+only that fold's training rows. During train/validation/test workflows, the
+pipeline is fitted on training rows and only transformed/evaluated on validation
+and test rows.
 
 ## Helper Commands
 
@@ -120,4 +139,19 @@ models:
     feature_policy: logistic_default
   - name: lightgbm
     feature_policy: tree_default
+```
+
+## Split Strategy
+
+The config includes an explicit split strategy so the same package can support
+cross-validation tuning now and train/validation/test evaluation later:
+
+```yaml
+split:
+  strategy: cross_validation
+  cv_splits: 5
+  test_size: 0.20
+  validation_size:
+  random_state: 99
+  stratify: true
 ```

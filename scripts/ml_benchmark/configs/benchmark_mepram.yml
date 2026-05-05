@@ -8,6 +8,14 @@ data:
 
 output_dir: outputs/ml_benchmark/mepram
 
+split:
+  strategy: cross_validation
+  cv_splits: 5
+  test_size: 0.20
+  validation_size:
+  random_state: 99
+  stratify: true
+
 targets:
   - name: sepsis
     type: binary
