@@ -1,0 +1,157 @@
+# Example MEPRAM benchmark config.
+# This config defines the job matrix only; training implementation will use the
+# same shape in the next development slice.
+
+data:
+  path: preprocess_test_filtered.csv
+  weight_column: sample_weight
+
+output_dir: outputs/ml_benchmark/mepram
+
+targets:
+  - name: sepsis
+    type: binary
+    main_metric: roc_auc
+
+  - name: resultado_hemo_grouped
+    type: multiclass
+    main_metric: f1_macro
+
+  - name: resistente_cefalosporina
+    type: binary
+    main_metric: roc_auc
+
+models:
+  - name: dummy_uniform
+    feature_policy: tree_default
+  - name: dummy_stratified
+    feature_policy: tree_default
+  - name: dummy_most_frequent
+    feature_policy: tree_default
+  - name: logistic
+    feature_policy: logistic_default
+  - name: random_forest
+    feature_policy: tree_default
+  - name: catboost
+    feature_policy: catboost_default
+  - name: lightgbm
+    feature_policy: tree_default
+  - name: xgboost
+    feature_policy: tree_default
+
+feature_policies:
+  logistic_default:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: standard
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+
+  tree_default:
+    require_numeric: true
+    categorical_handling: preprocessed
+    scale: none
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+
+  catboost_default:
+    require_numeric: false
+    categorical_handling: native
+    scale: none
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+
+feature_groups:
+  temperature:
+    description: Alternative temperature/fever representations available after preprocessing.
+    alternatives:
+      raw:
+        include:
+          - temperatura
+        exclude:
+          - temperatura_recoded
+          - sintoma_fiebre
+          - sintoma_fiebre_categorico
+
+      binary_flags:
+        include:
+          - sintoma_fiebre
+        exclude:
+          - temperatura
+          - temperatura_recoded
+          - sintoma_fiebre_categorico
+
+      category:
+        include:
+          - temperatura_recoded
+          - sintoma_fiebre_categorico
+        exclude:
+          - temperatura
+          - sintoma_fiebre
+
+feature_views:
+  - name: raw_vitals
+    description: Prefer raw continuous vital-sign representations.
+    include_patterns:
+      - "*"
+    groups:
+      temperature: raw
+
+  - name: binary_vitals
+    description: Prefer clinically thresholded vital-sign flags.
+    include_patterns:
+      - "*"
+    groups:
+      temperature: binary_flags
+
+  - name: categorical_vitals
+    description: Prefer ordinal/categorical vital-sign representations.
+    include_patterns:
+      - "*"
+    groups:
+      temperature: category
+
+feature_sets:
+  - name: all_features
+    strategy: none
+
+  - name: shap_rfecv_uncapped
+    strategy: shap_rfecv
+    max_features:
+
+  - name: shap_rfecv_top_20
+    strategy: shap_rfecv
+    max_features: 20
+
+  - name: shap_rfecv_top_50
+    strategy: shap_rfecv
+    max_features: 50
+
+  - name: shap_rfecv_top_100
+    strategy: shap_rfecv
+    max_features: 100
+
+compute:
+  default_n_jobs: 1
+  skip_existing: true
+  cache: true
+  max_shap_rows: 1000
+  max_diagnostic_rows: 1000
+
+slurm:
+  script_path: scripts/run_benchmark.py
+  job_name: ml_benchmark
+  cpus_per_task: 8
+  mem: 32G
+  time: "08:00:00"
+  output: logs/benchmark_%A_%a.out
+  error: logs/benchmark_%A_%a.err
