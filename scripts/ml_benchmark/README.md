@@ -17,8 +17,11 @@ This first slice establishes:
   representations, such as raw, binary, or categorical vital-sign encodings.
 - Model-specific feature policies for scaling, categorical handling, and
   correlation-filter behavior.
-- Leakage-safe pipeline construction for imputation, encoding, scaling,
-  correlation filtering, feature-selection placeholders, and the estimator.
+- Leakage-safe pipeline construction for imputation, encoding, scaling, qcut
+  binning, IQR handling, correlation filtering, feature-selection placeholders,
+  and the estimator.
+- Cross-validation training and evaluation for dummy baselines, logistic
+  regression, and CatBoost.
 - Slurm array helper output.
 - Slurm script rendering.
 - Resource limits based on `SLURM_CPUS_PER_TASK`.
@@ -27,8 +30,8 @@ This first slice establishes:
 - Homogeneous job output contract with `summary.json` and
   `diagnostics_manifest.json`.
 
-Training, feature-selection caching, tuning, metrics, diagnostics, and aggregate
-reporting are the next implementation slices.
+Feature-selection caching, tuning, richer diagnostics, and aggregate reporting
+are the next implementation slices.
 
 ## Leakage Rule
 
@@ -50,6 +53,10 @@ pipeline is fitted on training rows and only transformed/evaluated on validation
 and test rows.
 
 ## Helper Commands
+
+The benchmark is launched through `scripts/run_benchmark.py`. The script reads
+one YAML config, expands the configured job matrix, selects either one job or a
+filtered subset, and then runs each selected job.
 
 Print the job matrix:
 
@@ -83,6 +90,77 @@ python scripts/run_benchmark.py \
   --array-index 15 \
   --dry-run
 ```
+
+Run one train/evaluate job:
+
+```bash
+python scripts/run_benchmark.py \
+  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+  --target sepsis \
+  --model logistic \
+  --feature-view raw_vitals \
+  --feature-set all_features
+```
+
+Completed jobs write `summary.json`, `cv_results.csv`, `predictions.csv`, and
+`diagnostics_manifest.json` under `outputs/ml_benchmark/.../jobs/<job_slug>/`.
+
+The runner removes every configured target column from `X`. Additional
+target-like columns can be listed under `data.target_like_columns`; this is
+where culture, organism, and resistance outcomes that are not the active target
+should live.
+
+## Pipeline Structure
+
+At launch time, the CLI does not hard-code model inputs. The YAML config
+controls the data path, targets, models, feature views, feature policies, split
+strategy, and output location.
+
+```mermaid
+flowchart TD
+    A["CLI: scripts/run_benchmark.py"] --> B["Load YAML config"]
+    B --> C["Build job matrix<br/>target x model x feature_view x feature_set"]
+    C --> D{"Select jobs"}
+    D -->|array-index| E["One Slurm/local job"]
+    D -->|target/model/view/set filters| F["Filtered local jobs"]
+    E --> G["run_job"]
+    F --> G
+
+    G --> H["Read analytical CSV"]
+    H --> I["Choose active target y"]
+    I --> J["Remove active target, other configured targets,<br/>sample weight, and target_like_columns from X"]
+    J --> K["Resolve feature_view and manual feature groups"]
+    K --> L["Apply feature_policy drop columns/patterns"]
+    L --> M["Infer numeric vs categorical columns"]
+    M --> N["Build sklearn Pipeline"]
+
+    N --> O["Cross-validation splitter"]
+    O --> P["For each fold"]
+    P --> Q["Fit fold pipeline on training rows only"]
+    Q --> R["BenchmarkPreprocessor"]
+    R --> S["Numeric path:<br/>IQR bounds -> qcut bins -> impute -> optional scale"]
+    R --> T{"Categorical handling"}
+    T -->|one_hot| U["Impute categories -> OneHotEncoder"]
+    T -->|native| V["Impute categories -> keep strings for CatBoost"]
+    S --> W["CorrelationFilter"]
+    U --> W
+    V --> W
+    W --> X["FeatureSelectionPlaceholder"]
+    X --> Y["Estimator:<br/>dummy, logistic, CatBoost"]
+    Y --> Z["Predict validation fold"]
+    Z --> AA["Fold metrics and out-of-fold predictions"]
+
+    AA --> AB["Write outputs"]
+    AB --> AC["summary.json"]
+    AB --> AD["cv_results.csv"]
+    AB --> AE["predictions.csv"]
+    AB --> AF["diagnostics_manifest.json"]
+```
+
+The important leakage boundary is inside the fold loop: IQR bounds, qcut bins,
+imputation values, one-hot categories, scaling parameters, correlation-filter
+decisions, feature-selection decisions, and model parameters are all fitted only
+on the training rows for that fold.
 
 ## Feature Views
 
