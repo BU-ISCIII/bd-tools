@@ -105,8 +105,16 @@ python scripts/run_benchmark.py \
 ```
 
 Completed jobs write `summary.json`, `cv_results.csv`,
-`validation_predictions.csv`, `test_predictions.csv`, and
-`diagnostics_manifest.json` under `outputs/ml_benchmark/.../jobs/<job_slug>/`.
+`validation_predictions.csv`, `test_predictions.csv`,
+`diagnostics_manifest.json`, `final_features.csv`, `imputation_report.csv`,
+`correlation_matrix.csv`, and `correlation_pairs.csv` under
+`outputs/ml_benchmark/.../jobs/<job_slug>/`.
+
+`summary.json` includes a `benchmark_audit` section with row counts, feature
+counts, target-like feature removal, feature-view filtering, imputation
+strategies, qcut-created variables, IQR outlier handling, categorical encoding,
+correlation filtering, and feature-selection status. Large tabular artifacts
+are referenced from the summary and written as CSV files.
 
 The runner removes every configured target column from `X`. Additional
 target-like columns can be listed under `data.target_like_columns`; this is

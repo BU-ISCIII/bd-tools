@@ -130,7 +130,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         task_type=job.target.task_type,
         positive_label=job.target.positive_label,
     )
-    test_metrics, test_predictions = _fit_and_evaluate_test(
+    test_metrics, test_predictions, final_estimator = _fit_and_evaluate_test(
         job=job,
         pipeline=build_result.pipeline,
         X_train=split_data["X_train"],
@@ -145,9 +145,20 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
+    legacy_predictions = output_dir / "predictions.csv"
+    if legacy_predictions.exists():
+        legacy_predictions.unlink()
     cv_results.to_csv(output_dir / "cv_results.csv", index=False)
     predictions.to_csv(output_dir / "validation_predictions.csv", index=False)
     test_predictions.to_csv(output_dir / "test_predictions.csv", index=False)
+    audit = _build_and_write_audit(
+        output_dir=output_dir,
+        prepared=prepared,
+        split_data=split_data,
+        final_estimator=final_estimator,
+        build_result=build_result,
+        job=job,
+    )
 
     diagnostics = [
         DiagnosticResult(
@@ -157,6 +168,10 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "cv_results.csv",
                 "validation_predictions.csv",
                 "test_predictions.csv",
+                "final_features.csv",
+                "imputation_report.csv",
+                "correlation_matrix.csv",
+                "correlation_pairs.csv",
             ],
             message=(
                 f"Held out {len(split_data['X_test'])} test rows, then completed "
@@ -172,6 +187,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "dropped_missing_target_rows": prepared["dropped_missing_target_rows"],
                 "train_rows": len(split_data["X_train"]),
                 "test_rows": len(split_data["X_test"]),
+                "audit_files": audit["files"],
             },
         )
     ]
@@ -200,6 +216,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                     "feature_view_resolution"
                 ].excluded_by_group,
             },
+            "benchmark_audit": audit["summary"],
         },
     )
     return {
@@ -251,6 +268,8 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
         if not data_path.exists():
             data_path = Path(config.raw.get("data", {}).get("path", ""))
     df = pd.read_csv(data_path)
+    original_rows = len(df)
+    original_columns = list(df.columns)
 
     target_columns = _target_columns(config, job)
     target_column = target_columns[0]
@@ -269,6 +288,7 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
         reserved_columns.add(weight_column)
 
     candidate_columns = [column for column in df.columns if column not in reserved_columns]
+    target_removed_columns = [column for column in original_columns if column in reserved_columns]
     resolution = resolve_feature_view(
         candidate_columns,
         job.feature_view,
@@ -291,6 +311,12 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
         "feature_columns": feature_columns,
         "feature_view_resolution": resolution,
         "dropped_missing_target_rows": dropped_missing_target_rows,
+        "original_rows": original_rows,
+        "original_features": len(original_columns),
+        "original_columns": original_columns,
+        "rows_after_target_na_drop": len(df),
+        "target_removed_columns": target_removed_columns,
+        "candidate_features_after_target_removal": len(candidate_columns),
     }
 
 
@@ -436,7 +462,272 @@ def _fit_and_evaluate_test(
     if proba is not None:
         for class_idx, class_value in enumerate(classes):
             predictions[f"proba_{class_value}"] = proba[:, class_idx]
-    return metrics, predictions
+    return metrics, predictions, estimator
+
+
+def _build_and_write_audit(
+    *,
+    output_dir: Path,
+    prepared: Dict[str, Any],
+    split_data: Dict[str, Any],
+    final_estimator,
+    build_result: PipelineBuildResult,
+    job: BenchmarkJob,
+) -> Dict[str, Any]:
+    preprocess = final_estimator.named_steps["preprocess"]
+    correlation_filter = final_estimator.named_steps["correlation_filter"]
+    feature_selection = final_estimator.named_steps["feature_selection"]
+
+    transformed_train = preprocess.transform(split_data["X_train"])
+    transformed_train = _as_dataframe(transformed_train, preprocess.get_feature_names_out())
+    final_features = final_estimator[:-1].get_feature_names_out().tolist()
+
+    final_features_path = output_dir / "final_features.csv"
+    pd.DataFrame({"feature": final_features}).to_csv(final_features_path, index=False)
+
+    imputation_report = _imputation_report(preprocess)
+    imputation_report_path = output_dir / "imputation_report.csv"
+    imputation_report.to_csv(imputation_report_path, index=False)
+
+    corr_numeric = transformed_train.select_dtypes(include=[np.number])
+    corr_matrix = corr_numeric.corr(method="spearman").fillna(0.0)
+    corr_matrix_path = output_dir / "correlation_matrix.csv"
+    corr_matrix.to_csv(corr_matrix_path)
+
+    corr_pairs = _top_correlation_pairs(
+        corr_matrix,
+        threshold=job.feature_policy.correlation_filter.threshold,
+    )
+    corr_pairs_path = output_dir / "correlation_pairs.csv"
+    corr_pairs.to_csv(corr_pairs_path, index=False)
+
+    numeric_builder = preprocess.numeric_pipeline_
+    qcut_created = [
+        f"{column}_qcut"
+        for column, bins in numeric_builder.qcut_bins_.items()
+        if len(bins) >= 2
+    ]
+    iqr_report = _iqr_report(split_data["X_train"], numeric_builder)
+    feature_view = prepared["feature_view_resolution"]
+    policy_dropped = sorted(
+        set(feature_view.selected_columns) - set(prepared["feature_columns"])
+    )
+    feature_set_status = (
+        "not_configured"
+        if job.feature_set.strategy in {"none", "all"}
+        else "pending_implementation"
+    )
+
+    summary = {
+        "rows": {
+            "original_rows": prepared["original_rows"],
+            "rows_dropped_missing_target": prepared["dropped_missing_target_rows"],
+            "rows_after_target_na_drop": prepared["rows_after_target_na_drop"],
+            "rows_dropped_custom_filters": 0,
+            "custom_filters_status": "not_configured",
+            "rows_dropped_feature_na": 0,
+            "feature_na_row_filter_status": "not_configured",
+            "train_rows": len(split_data["X_train"]),
+            "validation_folds": job_feature_cv_summary(job, split_data),
+            "test_rows": len(split_data["X_test"]),
+        },
+        "features": {
+            "original_features": prepared["original_features"],
+            "target_removed_features": {
+                "count": len(prepared["target_removed_columns"]),
+                "columns": prepared["target_removed_columns"],
+            },
+            "candidate_features_after_target_removal": prepared[
+                "candidate_features_after_target_removal"
+            ],
+            "feature_view": {
+                "name": feature_view.feature_view,
+                "selected_count": len(feature_view.selected_columns),
+                "excluded_count": len(feature_view.excluded_columns),
+                "excluded_columns": feature_view.excluded_columns,
+                "included_by_group": feature_view.included_by_group,
+                "excluded_by_group": feature_view.excluded_by_group,
+            },
+            "feature_policy_dropped": {
+                "count": len(policy_dropped),
+                "columns": policy_dropped,
+                "drop_columns": job.feature_policy.drop_columns,
+                "drop_patterns": job.feature_policy.drop_patterns,
+            },
+            "selected_input_features": len(prepared["feature_columns"]),
+            "features_dropped_too_many_na": {
+                "count": 0,
+                "columns": [],
+                "status": "not_configured",
+            },
+            "recoded_variables_created": {
+                "count": len(qcut_created),
+                "columns": qcut_created,
+                "source": "qcut_numeric",
+            },
+            "imputation": {
+                "numeric_strategy": job.feature_policy.impute_numeric,
+                "categorical_strategy": job.feature_policy.impute_categorical,
+                "imputed_feature_count": int(len(imputation_report)),
+                "details_file": "imputation_report.csv",
+            },
+            "iqr_outlier_handling": {
+                "strategy": job.feature_policy.iqr_outlier_handling,
+                "multiplier": job.feature_policy.iqr_multiplier,
+                "features_with_bounds": len(numeric_builder.iqr_bounds_),
+                "outliers_replaced_with_na_total": int(
+                    iqr_report["outliers_replaced_with_na"].sum()
+                ),
+                "top_features": iqr_report.head(20).to_dict(orient="records"),
+            },
+            "qcut_numeric": {
+                "strategy": job.feature_policy.qcut_numeric,
+                "requested_bins": job.feature_policy.qcut_bins,
+                "created_count": len(qcut_created),
+                "created_columns": qcut_created,
+            },
+            "categorical_encoding": _categorical_encoding_summary(preprocess),
+            "correlation": {
+                "enabled": job.feature_policy.correlation_filter.enabled,
+                "mode": job.feature_policy.correlation_filter.mode,
+                "threshold": job.feature_policy.correlation_filter.threshold,
+                "matrix_file": "correlation_matrix.csv",
+                "pairs_file": "correlation_pairs.csv",
+                "pairs_above_threshold": int(len(corr_pairs)),
+                "dropped_count": len(correlation_filter.dropped_features_),
+                "dropped_features": correlation_filter.dropped_features_,
+            },
+            "feature_selection": {
+                "strategy": job.feature_set.strategy,
+                "max_features": job.feature_set.max_features,
+                "status": feature_set_status,
+                "kept_count": len(final_features),
+                "kept_features_file": "final_features.csv",
+            },
+        },
+        "files": {
+            "final_features": "final_features.csv",
+            "imputation_report": "imputation_report.csv",
+            "correlation_matrix": "correlation_matrix.csv",
+            "correlation_pairs": "correlation_pairs.csv",
+        },
+    }
+    return {
+        "summary": summary,
+        "files": list(summary["files"].values()),
+    }
+
+
+def job_feature_cv_summary(job: BenchmarkJob, split_data: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "strategy": job.feature_set.strategy,
+        "cv_source": "training_subset_only",
+        "training_subset_rows": len(split_data["X_train"]),
+    }
+
+
+def _as_dataframe(X, columns) -> pd.DataFrame:
+    if isinstance(X, pd.DataFrame):
+        return X
+    return pd.DataFrame(np.asarray(X), columns=list(columns))
+
+
+def _imputation_report(preprocess) -> pd.DataFrame:
+    rows = []
+    numeric_builder = preprocess.numeric_pipeline_
+    if numeric_builder.imputer_ is not None:
+        for column, value in zip(
+            numeric_builder.feature_names_out_,
+            numeric_builder.imputer_.statistics_,
+        ):
+            rows.append(
+                {
+                    "feature": column,
+                    "source": "numeric",
+                    "strategy": numeric_builder.impute_numeric,
+                    "fill_value": value,
+                }
+            )
+    if preprocess.categorical_imputer_ is not None:
+        for column, value in zip(
+            list(preprocess.categorical_columns),
+            preprocess.categorical_imputer_.statistics_,
+        ):
+            rows.append(
+                {
+                    "feature": column,
+                    "source": "categorical",
+                    "strategy": preprocess.impute_categorical,
+                    "fill_value": value,
+                }
+            )
+    return pd.DataFrame(rows, columns=["feature", "source", "strategy", "fill_value"])
+
+
+def _iqr_report(X_train: pd.DataFrame, numeric_builder) -> pd.DataFrame:
+    rows = []
+    numeric = X_train[list(numeric_builder.feature_names_in_)].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    for column, (lower, upper) in numeric_builder.iqr_bounds_.items():
+        mask = (numeric[column] < lower) | (numeric[column] > upper)
+        rows.append(
+            {
+                "feature": column,
+                "lower_bound": lower,
+                "upper_bound": upper,
+                "outliers_replaced_with_na": int(mask.sum()),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "feature",
+            "lower_bound",
+            "upper_bound",
+            "outliers_replaced_with_na",
+        ],
+    ).sort_values(
+        "outliers_replaced_with_na", ascending=False
+    )
+
+
+def _top_correlation_pairs(corr: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    rows = []
+    columns = list(corr.columns)
+    for left_idx, left in enumerate(columns):
+        for right in columns[left_idx + 1 :]:
+            value = float(abs(corr.loc[left, right]))
+            if value > threshold:
+                rows.append(
+                    {
+                        "feature_1": left,
+                        "feature_2": right,
+                        "abs_spearman": value,
+                    }
+                )
+    return pd.DataFrame(
+        rows,
+        columns=["feature_1", "feature_2", "abs_spearman"],
+    ).sort_values("abs_spearman", ascending=False)
+
+
+def _categorical_encoding_summary(preprocess) -> Dict[str, Any]:
+    columns = list(preprocess.categorical_columns)
+    if preprocess.one_hot_encoder_ is None:
+        return {
+            "handling": preprocess.categorical_handling,
+            "input_columns": columns,
+            "created_columns_count": 0,
+            "created_columns": [],
+        }
+    created = preprocess.one_hot_encoder_.get_feature_names_out(columns).tolist()
+    return {
+        "handling": preprocess.categorical_handling,
+        "input_columns": columns,
+        "created_columns_count": len(created),
+        "created_columns": created,
+    }
 
 
 def _build_splitter(config: BenchmarkConfig, y: pd.Series):

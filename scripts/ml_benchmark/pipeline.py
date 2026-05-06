@@ -47,11 +47,15 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
         self.feature_names_in_ = _feature_names(X)
         self.kept_indices_ = list(range(len(self.feature_names_in_)))
         self.dropped_features_ = []
+        self.correlation_pairs_ = []
+        self.correlation_matrix_ = pd.DataFrame()
         if not self.enabled or self.mode == "disabled" or self.threshold >= 1.0:
             return self
 
         frame = _as_frame(X, self.feature_names_in_)
         corr = frame.corr(method="spearman").abs().fillna(0.0)
+        self.correlation_matrix_ = corr
+        self.correlation_pairs_ = _correlation_pairs(corr, self.threshold)
         col_order = frame.var().sort_values(ascending=False).index.tolist()
 
         dropped = set()
@@ -82,6 +86,23 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
 
     def get_feature_names_out(self, input_features=None):
         return np.asarray([self.feature_names_in_[idx] for idx in self.kept_indices_])
+
+
+def _correlation_pairs(corr: pd.DataFrame, threshold: float) -> list[dict[str, object]]:
+    pairs: list[dict[str, object]] = []
+    columns = list(corr.columns)
+    for left_idx, left in enumerate(columns):
+        for right in columns[left_idx + 1 :]:
+            value = float(corr.loc[left, right])
+            if value > threshold:
+                pairs.append(
+                    {
+                        "feature_1": left,
+                        "feature_2": right,
+                        "abs_spearman": value,
+                    }
+                )
+    return sorted(pairs, key=lambda item: item["abs_spearman"], reverse=True)
 
 
 class FeatureSelectionPlaceholder(BaseEstimator, TransformerMixin):
@@ -278,6 +299,8 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
                 q1 = series.quantile(0.25)
                 q3 = series.quantile(0.75)
                 iqr = q3 - q1
+                if iqr <= 0:
+                    continue
                 self.iqr_bounds_[column] = (
                     q1 - self.iqr_multiplier * iqr,
                     q3 + self.iqr_multiplier * iqr,
@@ -293,7 +316,7 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
         if self.qcut_numeric in {"optional", "append", "quartile"}:
             for column in self.feature_names_in_:
                 series = cleaned[column].dropna()
-                if series.empty or series.nunique(dropna=True) < 2:
+                if series.empty or series.nunique(dropna=True) < self.qcut_bins:
                     self.qcut_bins_[column] = []
                     continue
                 try:
