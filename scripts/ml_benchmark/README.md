@@ -47,10 +47,12 @@ The benchmark pipeline builder keeps these steps inside a fitted pipeline:
 - feature-selection decisions;
 - model fitting.
 
-During cross-validation, each fold must build and fit its own pipeline using
-only that fold's training rows. During train/validation/test workflows, the
-pipeline is fitted on training rows and only transformed/evaluated on validation
-and test rows.
+Each job first creates a held-out test set using `split.test_size`. The test set
+is not used for cross-validation, feature selection, model selection, or
+preprocessing decisions. Cross-validation is then run only inside the remaining
+training rows. Each validation fold builds and fits its own pipeline using only
+that fold's training rows. After validation, a final pipeline is fitted on the
+full training subset and evaluated once on the held-out test set.
 
 ## Helper Commands
 
@@ -102,7 +104,8 @@ python scripts/run_benchmark.py \
   --feature-set all_features
 ```
 
-Completed jobs write `summary.json`, `cv_results.csv`, `predictions.csv`, and
+Completed jobs write `summary.json`, `cv_results.csv`,
+`validation_predictions.csv`, `test_predictions.csv`, and
 `diagnostics_manifest.json` under `outputs/ml_benchmark/.../jobs/<job_slug>/`.
 
 The runner removes every configured target column from `X`. Additional
@@ -131,36 +134,44 @@ flowchart TD
     I --> J["Remove active target, other configured targets,<br/>sample weight, and target_like_columns from X"]
     J --> K["Resolve feature_view and manual feature groups"]
     K --> L["Apply feature_policy drop columns/patterns"]
-    L --> M["Infer numeric vs categorical columns"]
-    M --> N["Build sklearn Pipeline"]
+    L --> M["Outer split:<br/>training subset + held-out test set"]
+    M --> N["Infer numeric vs categorical columns from training columns"]
+    N --> O["Build sklearn Pipeline"]
 
-    N --> O["Cross-validation splitter"]
-    O --> P["For each fold"]
-    P --> Q["Fit fold pipeline on training rows only"]
-    Q --> R["BenchmarkPreprocessor"]
-    R --> S["Numeric path:<br/>IQR bounds -> qcut bins -> impute -> optional scale"]
-    R --> T{"Categorical handling"}
-    T -->|one_hot| U["Impute categories -> OneHotEncoder"]
-    T -->|native| V["Impute categories -> keep strings for CatBoost"]
-    S --> W["CorrelationFilter"]
-    U --> W
-    V --> W
-    W --> X["FeatureSelectionPlaceholder"]
-    X --> Y["Estimator:<br/>dummy, logistic, CatBoost"]
-    Y --> Z["Predict validation fold"]
-    Z --> AA["Fold metrics and out-of-fold predictions"]
+    O --> P["Validation CV splitter<br/>training subset only"]
+    P --> Q["For each validation fold"]
+    Q --> R["Fit fold pipeline on fold-training rows only"]
+    R --> S["BenchmarkPreprocessor"]
+    S --> T["Numeric path:<br/>IQR bounds -> qcut bins -> impute -> optional scale"]
+    S --> U{"Categorical handling"}
+    U -->|one_hot| V["Impute categories -> OneHotEncoder"]
+    U -->|native| W["Impute categories -> keep strings for CatBoost"]
+    T --> X["CorrelationFilter"]
+    V --> X
+    W --> X
+    X --> Y["FeatureSelectionPlaceholder"]
+    Y --> Z["Estimator:<br/>dummy, logistic, CatBoost"]
+    Z --> AA["Predict validation fold"]
+    AA --> AB["Fold metrics and out-of-fold validation predictions"]
 
-    AA --> AB["Write outputs"]
-    AB --> AC["summary.json"]
-    AB --> AD["cv_results.csv"]
-    AB --> AE["predictions.csv"]
-    AB --> AF["diagnostics_manifest.json"]
+    O --> AC["Final training pipeline"]
+    AC --> AD["Fit on full training subset only"]
+    AD --> AE["Evaluate once on held-out test set"]
+
+    AB --> AF["Write outputs"]
+    AE --> AF
+    AF --> AG["summary.json"]
+    AF --> AH["cv_results.csv"]
+    AF --> AI["validation_predictions.csv"]
+    AF --> AJ["test_predictions.csv"]
+    AF --> AK["diagnostics_manifest.json"]
 ```
 
-The important leakage boundary is inside the fold loop: IQR bounds, qcut bins,
-imputation values, one-hot categories, scaling parameters, correlation-filter
-decisions, feature-selection decisions, and model parameters are all fitted only
-on the training rows for that fold.
+There are two leakage boundaries. First, the held-out test set is separated
+before validation and is not touched until final evaluation. Second, inside the
+validation fold loop, IQR bounds, qcut bins, imputation values, one-hot
+categories, scaling parameters, correlation-filter decisions, feature-selection
+decisions, and model parameters are all fitted only on the fold-training rows.
 
 ## Feature Views
 
@@ -259,3 +270,7 @@ split:
   random_state: 99
   stratify: true
 ```
+
+With this strategy, `test_size` controls the outer held-out test split.
+`cv_splits` controls the validation folds created only within the training
+subset.

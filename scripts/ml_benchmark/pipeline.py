@@ -14,7 +14,12 @@ import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import MinMaxScaler, OneHotEncoder, RobustScaler, StandardScaler
+from sklearn.preprocessing import (
+    MinMaxScaler,
+    OneHotEncoder,
+    RobustScaler,
+    StandardScaler,
+)
 
 from .types import BenchmarkJob, ModelSpec, PipelineBuildResult
 
@@ -139,6 +144,8 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
         self.iqr_multiplier = iqr_multiplier
 
     def fit(self, X, y=None):
+        # Called by sklearn Pipeline.fit on training rows only. Everything
+        # learned here is later reused by transform on validation/test rows.
         numeric_columns = list(self.numeric_columns)
         categorical_columns = list(self.categorical_columns)
         X = _as_frame(X, numeric_columns + categorical_columns)
@@ -161,9 +168,7 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
             cat_frame = X[categorical_columns].where(
                 X[categorical_columns].notna(), np.nan
             )
-            cat_values = self.categorical_imputer_.fit_transform(
-                cat_frame
-            )
+            cat_values = self.categorical_imputer_.fit_transform(cat_frame)
             if self.categorical_handling == "one_hot":
                 self.one_hot_encoder_ = _one_hot_encoder()
                 self.one_hot_encoder_.fit(cat_values)
@@ -195,6 +200,8 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        # Called by Pipeline.predict/predict_proba for validation/test rows.
+        # Use the already-fitted numeric pipeline, imputer, and encoder only.
         numeric_columns = list(self.numeric_columns)
         categorical_columns = list(self.categorical_columns)
         X = _as_frame(X, numeric_columns + categorical_columns)
@@ -207,9 +214,7 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
         if not categorical_columns:
             return numeric_df
 
-        cat_frame = X[categorical_columns].where(
-            X[categorical_columns].notna(), np.nan
-        )
+        cat_frame = X[categorical_columns].where(X[categorical_columns].notna(), np.nan)
         cat_values = self.categorical_imputer_.transform(cat_frame)
         if self.categorical_handling == "native":
             categorical_df = pd.DataFrame(
@@ -318,6 +323,8 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
         return self
 
     def transform(self, X):
+        # Apply train-fitted IQR bounds, qcut bins, imputer values, and scaler
+        # parameters. This method must not learn from validation/test rows.
         X = _as_frame(X, self.feature_names_in_).apply(pd.to_numeric, errors="coerce")
         if not self.feature_names_out_:
             return pd.DataFrame(index=X.index)

@@ -17,7 +17,7 @@ from sklearn.metrics import (
     log_loss,
     roc_auc_score,
 )
-from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 from .feature_views import resolve_feature_view
 from .reporting import job_output_dir, write_diagnostics_manifest, write_job_summary
@@ -113,36 +113,56 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
 
     prepared = _prepare_job_data(config, job)
     build_result = build_pipeline_contract(config, job, prepared["X"])
+    split_data = _split_train_test(config, prepared)
     cv_results, predictions = _cross_validate_job(
         config=config,
         job=job,
         pipeline=build_result.pipeline,
-        X=prepared["X"],
-        y=prepared["y"],
-        sample_weight=prepared["sample_weight"],
+        X=split_data["X_train"],
+        y=split_data["y_train"],
+        sample_weight=split_data["sample_weight_train"],
     )
-    metrics = _aggregate_metrics(
+    validation_metrics = _aggregate_metrics(
         y_true=predictions["y_true"],
         y_pred=predictions["y_pred"],
         proba=_prediction_probabilities(predictions),
-        classes=prepared["classes"],
+        classes=split_data["classes"],
         task_type=job.target.task_type,
         positive_label=job.target.positive_label,
     )
+    test_metrics, test_predictions = _fit_and_evaluate_test(
+        job=job,
+        pipeline=build_result.pipeline,
+        X_train=split_data["X_train"],
+        y_train=split_data["y_train"],
+        X_test=split_data["X_test"],
+        y_test=split_data["y_test"],
+        sample_weight_train=split_data["sample_weight_train"],
+    )
+    metrics = {
+        "validation_cv": validation_metrics,
+        "test": test_metrics,
+    }
 
     output_dir.mkdir(parents=True, exist_ok=True)
     cv_results.to_csv(output_dir / "cv_results.csv", index=False)
-    predictions.to_csv(output_dir / "predictions.csv", index=False)
+    predictions.to_csv(output_dir / "validation_predictions.csv", index=False)
+    test_predictions.to_csv(output_dir / "test_predictions.csv", index=False)
 
     diagnostics = [
         DiagnosticResult(
             name="training",
             status="completed",
-            files=["cv_results.csv", "predictions.csv"],
+            files=[
+                "cv_results.csv",
+                "validation_predictions.csv",
+                "test_predictions.csv",
+            ],
             message=(
-                f"Completed {config.split.cv_splits}-fold cross-validation on "
-                f"{len(prepared['X'])} rows and {prepared['X'].shape[1]} selected "
-                "input columns."
+                f"Held out {len(split_data['X_test'])} test rows, then completed "
+                f"{config.split.cv_splits}-fold cross-validation on "
+                f"{len(split_data['X_train'])} training rows and "
+                f"{prepared['X'].shape[1]} selected input columns."
             ),
             metadata={
                 "pipeline_notes": build_result.notes,
@@ -150,6 +170,8 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "categorical_columns": len(build_result.categorical_columns),
                 "feature_view_selected_columns": len(prepared["feature_columns"]),
                 "dropped_missing_target_rows": prepared["dropped_missing_target_rows"],
+                "train_rows": len(split_data["X_train"]),
+                "test_rows": len(split_data["X_test"]),
             },
         )
     ]
@@ -163,6 +185,8 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         diagnostic_results=diagnostics,
         extra={
             "n_rows": len(prepared["X"]),
+            "train_rows": len(split_data["X_train"]),
+            "test_rows": len(split_data["X_test"]),
             "n_features": prepared["X"].shape[1],
             "classes": [str(value) for value in prepared["classes"]],
             "main_metric": job.target.main_metric,
@@ -183,6 +207,38 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         "status": "completed",
         "metrics": metrics,
         "output_dir": str(output_dir),
+    }
+
+
+def _split_train_test(
+    config: BenchmarkConfig, prepared: Dict[str, Any]
+) -> Dict[str, Any]:
+    X = prepared["X"]
+    y = prepared["y"]
+    sample_weight = prepared["sample_weight"]
+    indices = np.arange(len(X))
+    stratify = y if config.split.stratify and y.value_counts().min() >= 2 else None
+    train_idx, test_idx = train_test_split(
+        indices,
+        test_size=config.split.test_size,
+        random_state=config.split.random_state,
+        shuffle=True,
+        stratify=stratify,
+    )
+    train_idx = np.sort(train_idx)
+    test_idx = np.sort(test_idx)
+    sample_weight_train = (
+        None if sample_weight is None else sample_weight.iloc[train_idx]
+    )
+    sample_weight_test = None if sample_weight is None else sample_weight.iloc[test_idx]
+    return {
+        "X_train": X.iloc[train_idx],
+        "X_test": X.iloc[test_idx],
+        "y_train": y.iloc[train_idx],
+        "y_test": y.iloc[test_idx],
+        "sample_weight_train": sample_weight_train,
+        "sample_weight_test": sample_weight_test,
+        "classes": sorted(pd.Series(y.iloc[train_idx]).dropna().unique().tolist(), key=str),
     }
 
 
@@ -289,18 +345,22 @@ def _cross_validate_job(
     fold_rows = []
     prediction_frames = []
 
-    for fold, (train_idx, test_idx) in enumerate(splitter.split(X, y)):
+    for fold, (train_idx, validation_idx) in enumerate(splitter.split(X, y)):
         estimator = clone(pipeline)
         fit_params = {}
         if sample_weight is not None:
             fit_params["model__sample_weight"] = sample_weight.iloc[train_idx]
+        # sklearn Pipeline.fit calls fit/fit_transform on every preprocessing
+        # step using only the fold-training rows, then fits the final model.
         estimator.fit(X.iloc[train_idx], y.iloc[train_idx], **fit_params)
 
-        y_true = y.iloc[test_idx].reset_index(drop=True)
+        y_true = y.iloc[validation_idx].reset_index(drop=True)
+        # Pipeline.predict calls transform on the fitted preprocessing steps for
+        # the validation rows. No imputer/qcut/scaler/category mapping is refit.
         y_pred = pd.Series(
-            np.asarray(estimator.predict(X.iloc[test_idx])).ravel()
+            np.asarray(estimator.predict(X.iloc[validation_idx])).ravel()
         ).reset_index(drop=True)
-        proba = _predict_proba(estimator, X.iloc[test_idx])
+        proba = _predict_proba(estimator, X.iloc[validation_idx])
         classes = _estimator_classes(estimator)
         fold_metrics = _aggregate_metrics(
             y_true=y_true,
@@ -314,7 +374,7 @@ def _cross_validate_job(
             {
                 "fold": fold,
                 "train_rows": int(len(train_idx)),
-                "test_rows": int(len(test_idx)),
+                "validation_rows": int(len(validation_idx)),
             }
         )
         fold_rows.append(fold_metrics)
@@ -322,7 +382,7 @@ def _cross_validate_job(
         pred_frame = pd.DataFrame(
             {
                 "fold": fold,
-                "row_index": X.index[test_idx],
+                "row_index": X.index[validation_idx],
                 "y_true": y_true,
                 "y_pred": y_pred,
             }
@@ -333,6 +393,50 @@ def _cross_validate_job(
         prediction_frames.append(pred_frame)
 
     return pd.DataFrame(fold_rows), pd.concat(prediction_frames, ignore_index=True)
+
+
+def _fit_and_evaluate_test(
+    *,
+    job: BenchmarkJob,
+    pipeline,
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    sample_weight_train: pd.Series | None,
+) -> tuple[Dict[str, Any], pd.DataFrame]:
+    estimator = clone(pipeline)
+    fit_params = {}
+    if sample_weight_train is not None:
+        fit_params["model__sample_weight"] = sample_weight_train
+    # Fit the whole pipeline once on the full training subset. The held-out test
+    # set is not seen while preprocessing statistics or model parameters are fit.
+    estimator.fit(X_train, y_train, **fit_params)
+
+    # This prediction path applies Pipeline.transform to X_test before the model
+    # predicts, reusing preprocessing learned from X_train.
+    y_pred = pd.Series(np.asarray(estimator.predict(X_test)).ravel(), index=X_test.index)
+    proba = _predict_proba(estimator, X_test)
+    classes = _estimator_classes(estimator)
+    metrics = _aggregate_metrics(
+        y_true=y_test,
+        y_pred=y_pred,
+        proba=proba,
+        classes=classes,
+        task_type=job.target.task_type,
+        positive_label=job.target.positive_label,
+    )
+    predictions = pd.DataFrame(
+        {
+            "row_index": X_test.index,
+            "y_true": y_test.to_numpy(),
+            "y_pred": y_pred.to_numpy(),
+        }
+    )
+    if proba is not None:
+        for class_idx, class_value in enumerate(classes):
+            predictions[f"proba_{class_value}"] = proba[:, class_idx]
+    return metrics, predictions
 
 
 def _build_splitter(config: BenchmarkConfig, y: pd.Series):
