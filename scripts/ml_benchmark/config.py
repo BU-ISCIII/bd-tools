@@ -113,6 +113,12 @@ def _load_feature_policies(config: Dict[str, Any]) -> Dict[str, FeaturePolicySpe
             "require_numeric": True,
             "categorical_handling": "preprocessed",
             "scale": "none",
+            "impute_numeric": "median",
+            "impute_categorical": "most_frequent",
+            "qcut_numeric": "none",
+            "qcut_bins": 4,
+            "iqr_outlier_handling": "none",
+            "iqr_multiplier": 3.0,
             "correlation_filter": {"enabled": False, "mode": "report_only"},
         }
     }
@@ -124,6 +130,12 @@ def _load_feature_policies(config: Dict[str, Any]) -> Dict[str, FeaturePolicySpe
             require_numeric=item.get("require_numeric", True),
             categorical_handling=item.get("categorical_handling", "preprocessed"),
             scale=item.get("scale", "none"),
+            impute_numeric=item.get("impute_numeric", "median"),
+            impute_categorical=item.get("impute_categorical", "most_frequent"),
+            qcut_numeric=item.get("qcut_numeric", "none"),
+            qcut_bins=int(item.get("qcut_bins", 4)),
+            iqr_outlier_handling=item.get("iqr_outlier_handling", "none"),
+            iqr_multiplier=float(item.get("iqr_multiplier", 3.0)),
             correlation_filter=CorrelationFilterSpec(
                 enabled=corr.get("enabled", False),
                 threshold=float(corr.get("threshold", 0.90)),

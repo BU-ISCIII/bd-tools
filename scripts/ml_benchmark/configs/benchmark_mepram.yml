@@ -52,6 +52,12 @@ feature_policies:
     require_numeric: true
     categorical_handling: one_hot
     scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
     correlation_filter:
       enabled: true
       threshold: 0.80
@@ -60,8 +66,14 @@ feature_policies:
 
   tree_default:
     require_numeric: true
-    categorical_handling: preprocessed
+    categorical_handling: one_hot
     scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
     correlation_filter:
       enabled: false
       threshold: 0.90
@@ -72,6 +84,12 @@ feature_policies:
     require_numeric: false
     categorical_handling: native
     scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
     correlation_filter:
       enabled: false
       threshold: 0.90

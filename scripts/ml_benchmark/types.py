@@ -67,6 +67,12 @@ class FeaturePolicySpec:
     require_numeric: bool = True
     categorical_handling: str = "preprocessed"
     scale: str = "none"
+    impute_numeric: str = "median"
+    impute_categorical: str = "most_frequent"
+    qcut_numeric: str = "none"
+    qcut_bins: int = 4
+    iqr_outlier_handling: str = "none"
+    iqr_multiplier: float = 3.0
     correlation_filter: CorrelationFilterSpec = field(
         default_factory=CorrelationFilterSpec
     )

@@ -38,6 +38,8 @@ The benchmark pipeline builder keeps these steps inside a fitted pipeline:
 - missing-value imputation;
 - one-hot category learning;
 - scaling means/standard deviations;
+- qcut bin learning;
+- IQR outlier bounds;
 - correlation-filter decisions;
 - feature-selection decisions;
 - model fitting.
@@ -121,6 +123,11 @@ feature_policies:
   logistic_default:
     categorical_handling: one_hot
     scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: true
       threshold: 0.80
@@ -128,8 +135,12 @@ feature_policies:
       manual_groups_first: true
 
   tree_default:
-    categorical_handling: preprocessed
+    categorical_handling: one_hot
     scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: false
       mode: report_only
@@ -140,6 +151,21 @@ models:
   - name: lightgbm
     feature_policy: tree_default
 ```
+
+`categorical_handling: one_hot` is the default for sklearn, XGBoost, and
+LightGBM-style estimators that need numeric matrices. `categorical_handling:
+native` keeps categorical columns as imputed strings for CatBoost and passes
+their column names to CatBoost as native categorical features. Numeric scaling
+is controlled per policy with `scale: none`, `standard`, `minmax`, or `robust`;
+tree policies normally keep `scale: none`.
+
+Numeric and categorical imputation are also policy-specific. `impute_numeric:
+median` and `impute_categorical: most_frequent` are the current defaults.
+`qcut_numeric: optional` appends train-fitted quartile-style columns named
+`<variable>_qcut`; `qcut_bins` controls the requested number of bins.
+`iqr_outlier_handling: train_fit` learns IQR bounds on the training fold and
+sets values outside those bounds to missing before imputation. Use
+`iqr_multiplier` to change the bound width.
 
 ## Split Strategy
 
