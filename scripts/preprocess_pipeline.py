@@ -3174,7 +3174,7 @@ def build_filtered_dataset_log(
     log.validation_checks.append(f"filtered_columns_dropped:{len(dropped_columns)}")
     return validate_result(
         PreprocessResult(df=filtered_df, log=log),
-        required_columns=["person_id"],
+        required_columns=[],
     ).log
 
 

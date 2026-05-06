@@ -51,6 +51,8 @@ from sklearn.base import BaseEstimator
 from sklearn.metrics import (
     classification_report,
     f1_score,
+    precision_score,
+    recall_score,
     roc_auc_score,
     roc_curve,
 )
@@ -864,32 +866,60 @@ def shap_rfecv(
     is_multiclass = n_classes > 2
 
     skf = StratifiedKFold(n_splits=cv, shuffle=True, random_state=random_state)
-    history: Dict[str, Tuple[float, List[str]]] = {}
+    history: Dict[str, dict] = {}
 
-    def _cv_score(features: List[str]) -> float:
-        """Return mean CV score for *features* using the current skf splits."""
+    def _cv_metrics(features: List[str]) -> dict:
+        """Return mean CV metrics for *features* using the current skf splits."""
         if scoring != "roc_auc":
             raise ValueError("Only roc_auc is supported for shap_rfecv")
-        scores = []
+
+        y_oof = np.zeros_like(y)
+        y_pred = np.zeros_like(y)
+        y_proba = np.zeros((len(y), n_classes)) if is_multiclass else np.zeros(len(y), dtype=float)
+
         for train_idx, val_idx in skf.split(X[features], y):
             X_tr = X.iloc[train_idx][features]
             X_va = X.iloc[val_idx][features]
             y_tr, y_va = y[train_idx], y[val_idx]
             est = copy.deepcopy(model)
             est.fit(X_tr, y_tr)
-            try:
-                if is_multiclass:
-                    proba = est.predict_proba(X_va)
-                    score = roc_auc_score(
-                        y_va, proba, multi_class="ovr", average="macro"
-                    )
-                else:
-                    proba = est.predict_proba(X_va)[:, 1]
-                    score = roc_auc_score(y_va, proba)
-            except Exception:
-                score = 0.0
-            scores.append(score)
-        return float(np.mean(scores))
+
+            if is_multiclass:
+                proba = est.predict_proba(X_va)
+                pred = np.argmax(proba, axis=1)
+                y_proba[val_idx] = proba
+            else:
+                proba = est.predict_proba(X_va)[:, 1]
+                pred = est.predict(X_va)
+                y_proba[val_idx] = proba
+
+            y_oof[val_idx] = y_va
+            y_pred[val_idx] = pred
+
+        metrics = {
+            "roc_auc": 0.0,
+            "macro_f1": float(
+                f1_score(y_oof, y_pred, average="macro", zero_division=0)
+            ),
+            "precision": float(
+                precision_score(y_oof, y_pred, average="macro", zero_division=0)
+            ),
+            "recall": float(
+                recall_score(y_oof, y_pred, average="macro", zero_division=0)
+            ),
+            "features": features.copy(),
+        }
+        try:
+            if is_multiclass:
+                metrics["roc_auc"] = float(
+                    roc_auc_score(y_oof, y_proba, multi_class="ovr", average="macro")
+                )
+            else:
+                metrics["roc_auc"] = float(roc_auc_score(y_oof, y_proba))
+        except Exception:
+            metrics["roc_auc"] = 0.0
+
+        return metrics
 
     def _global_worst_feature(features: List[str]) -> str:
         """Fit on all training data; return the least-important feature by mean |SHAP|."""
@@ -913,9 +943,13 @@ def shap_rfecv(
 
     while len(remaining_features) > min_features:
         # Score the CURRENT feature set — label and score are in sync
-        mean_score = _cv_score(remaining_features)
-        history[str(len(remaining_features))] = (mean_score, remaining_features.copy())
-        print(f"Features: {len(remaining_features)} | CV score: {mean_score:.4f}")
+        metrics = _cv_metrics(remaining_features)
+        history[str(len(remaining_features))] = metrics
+        print(
+            f"Features: {len(remaining_features)} | CV ROC-AUC: {metrics['roc_auc']:.4f} "
+            f"| F1: {metrics['macro_f1']:.4f} | precision: {metrics['precision']:.4f} "
+            f"| recall: {metrics['recall']:.4f}"
+        )
 
         # Remove the globally least important feature
         removed = _global_worst_feature(remaining_features)
@@ -923,16 +957,22 @@ def shap_rfecv(
         print(f"Removed feature: {removed}")
 
     # Score and record the final minimal feature set
-    final_score = _cv_score(remaining_features)
-    history[str(len(remaining_features))] = (final_score, remaining_features.copy())
-    print(f"Features: {len(remaining_features)} | CV score: {final_score:.4f}")
+    metrics = _cv_metrics(remaining_features)
+    history[str(len(remaining_features))] = metrics
+    print(
+        f"Features: {len(remaining_features)} | CV ROC-AUC: {metrics['roc_auc']:.4f} "
+        f"| F1: {metrics['macro_f1']:.4f} | precision: {metrics['precision']:.4f} "
+        f"| recall: {metrics['recall']:.4f}"
+    )
 
     # Return the feature set whose CV score was highest (true RFECV selection),
     # constrained to at most max_features.  Keys are strings; cast before comparing.
     best_n = max(
-        history, key=lambda k: history[k][0] if int(k) <= max_features else 0.0
+        history,
+        key=lambda k: history[k]["roc_auc"] if int(k) <= max_features else 0.0,
     )
-    best_score, best_features = history[best_n]
+    best_score = history[best_n]["roc_auc"]
+    best_features = history[best_n]["features"]
     print(
         f"Best CV score: {best_score:.4f} at {best_n} features → "
         f"Selected {len(best_features)} features."
