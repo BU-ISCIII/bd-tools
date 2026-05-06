@@ -1125,18 +1125,6 @@ def preprocess_tbl_sepsis(
             target="foco",
             how="map foco codes to readable labels using foco_map",
         )
-        foco_dummy_columns = []
-        for foco_label in sorted(df["foco"].dropna().unique()):
-            dummy_column = f"foco_{feature_name(foco_label)}_binary"
-            df[dummy_column] = np.where(df["foco"] == foco_label, 1, 0)
-            foco_dummy_columns.append(dummy_column)
-        add_change(
-            log,
-            "created_variables",
-            source="foco",
-            target=foco_dummy_columns,
-            how="create one binary dummy column per mapped foco category while keeping the original categorical foco column",
-        )
 
     sepsis_outlier_columns = [col for col in config["SEPSIS_OUTLIER_COLUMNS"] if col in df.columns]
     sepsis_quartile_columns = [

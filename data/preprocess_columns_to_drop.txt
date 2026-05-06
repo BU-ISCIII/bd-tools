@@ -24,7 +24,6 @@ otros_cult_fenotipo_*_tuple
 # Foco/table, administrative, date, location, and ID variables
 person_id
 fecha_ingreso_urgencias
-foco
 fecha_nacimiento
 codigo_postal
 dag
@@ -40,6 +39,7 @@ mujer_gestante
 hepatopatia
 
 ## Technical/test determined removals.
+*_recoded
 
 # Detailed comorbidity dummies collapsed into canceres_si_no and hepatopatias_si_no.
 tipo_cancer_*
