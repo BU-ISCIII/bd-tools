@@ -127,8 +127,8 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
         iqr_outlier_handling: str = "none",
         iqr_multiplier: float = 3.0,
     ):
-        self.numeric_columns = list(numeric_columns)
-        self.categorical_columns = list(categorical_columns)
+        self.numeric_columns = numeric_columns
+        self.categorical_columns = categorical_columns
         self.categorical_handling = categorical_handling
         self.scale = scale
         self.impute_numeric = impute_numeric
@@ -139,7 +139,9 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
         self.iqr_multiplier = iqr_multiplier
 
     def fit(self, X, y=None):
-        X = _as_frame(X, list(self.numeric_columns) + list(self.categorical_columns))
+        numeric_columns = list(self.numeric_columns)
+        categorical_columns = list(self.categorical_columns)
+        X = _as_frame(X, numeric_columns + categorical_columns)
         self.numeric_pipeline_ = NumericFeatureBuilder(
             impute_numeric=self.impute_numeric,
             scale=self.scale,
@@ -148,14 +150,16 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
             iqr_outlier_handling=self.iqr_outlier_handling,
             iqr_multiplier=self.iqr_multiplier,
         )
-        self.numeric_pipeline_.fit(X[self.numeric_columns], y)
+        self.numeric_pipeline_.fit(X[numeric_columns], y)
 
         self.categorical_imputer_ = None
         self.one_hot_encoder_ = None
-        if self.categorical_columns:
-            self.categorical_imputer_ = SimpleImputer(strategy=self.impute_categorical)
-            cat_frame = X[self.categorical_columns].where(
-                X[self.categorical_columns].notna(), np.nan
+        if categorical_columns:
+            self.categorical_imputer_ = _simple_imputer(
+                strategy=self.impute_categorical
+            )
+            cat_frame = X[categorical_columns].where(
+                X[categorical_columns].notna(), np.nan
             )
             cat_values = self.categorical_imputer_.fit_transform(
                 cat_frame
@@ -177,38 +181,40 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
                 )
 
         numeric_names = self.numeric_pipeline_.get_feature_names_out(
-            self.numeric_columns
+            numeric_columns
         ).tolist()
         if self.categorical_handling == "one_hot" and self.one_hot_encoder_ is not None:
             categorical_names = self.one_hot_encoder_.get_feature_names_out(
-                self.categorical_columns
+                categorical_columns
             ).tolist()
         elif self.categorical_handling == "native":
-            categorical_names = list(self.categorical_columns)
+            categorical_names = categorical_columns
         else:
             categorical_names = []
         self.feature_names_out_ = numeric_names + categorical_names
         return self
 
     def transform(self, X):
-        X = _as_frame(X, list(self.numeric_columns) + list(self.categorical_columns))
-        numeric = self.numeric_pipeline_.transform(X[self.numeric_columns])
+        numeric_columns = list(self.numeric_columns)
+        categorical_columns = list(self.categorical_columns)
+        X = _as_frame(X, numeric_columns + categorical_columns)
+        numeric = self.numeric_pipeline_.transform(X[numeric_columns])
         numeric_df = _as_frame(
             numeric,
             self.numeric_pipeline_.get_feature_names_out(self.numeric_columns),
         )
         numeric_df.index = X.index
-        if not self.categorical_columns:
+        if not categorical_columns:
             return numeric_df
 
-        cat_frame = X[self.categorical_columns].where(
-            X[self.categorical_columns].notna(), np.nan
+        cat_frame = X[categorical_columns].where(
+            X[categorical_columns].notna(), np.nan
         )
         cat_values = self.categorical_imputer_.transform(cat_frame)
         if self.categorical_handling == "native":
             categorical_df = pd.DataFrame(
                 cat_values,
-                columns=self.categorical_columns,
+                columns=categorical_columns,
                 index=X.index,
             ).astype(str)
         elif self.categorical_handling == "one_hot":
@@ -216,7 +222,7 @@ class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
             categorical_df = pd.DataFrame(
                 encoded,
                 columns=self.one_hot_encoder_.get_feature_names_out(
-                    self.categorical_columns
+                    categorical_columns
                 ),
                 index=X.index,
             )
@@ -303,7 +309,7 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
             )
 
         expanded = self._append_qcut(cleaned)
-        self.imputer_ = SimpleImputer(strategy=self.impute_numeric)
+        self.imputer_ = _simple_imputer(strategy=self.impute_numeric)
         imputed = self.imputer_.fit_transform(expanded)
         self.scaler_ = _numeric_scaler(self.scale)
         if self.scaler_ is not None:
@@ -335,20 +341,22 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
     def _append_qcut(self, X: pd.DataFrame) -> pd.DataFrame:
         if not self.qcut_bins_:
             return X.copy()
-        expanded = X.copy()
+        qcut_columns = {}
         for column, bins in self.qcut_bins_.items():
             qcut_column = f"{column}_qcut"
             if len(bins) < 2:
-                expanded[qcut_column] = np.nan
+                qcut_columns[qcut_column] = pd.Series(np.nan, index=X.index)
                 continue
             encoded = pd.cut(
-                expanded[column],
+                X[column],
                 bins=bins,
                 labels=False,
                 include_lowest=True,
             )
-            expanded[qcut_column] = encoded.astype(float)
-        return expanded
+            qcut_columns[qcut_column] = encoded.astype(float)
+        if not qcut_columns:
+            return X.copy()
+        return pd.concat([X.copy(), pd.DataFrame(qcut_columns, index=X.index)], axis=1)
 
 
 def build_benchmark_pipeline(
@@ -463,6 +471,13 @@ def _one_hot_encoder() -> OneHotEncoder:
         return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
     except TypeError:
         return OneHotEncoder(handle_unknown="ignore", sparse=False)
+
+
+def _simple_imputer(strategy: str) -> SimpleImputer:
+    try:
+        return SimpleImputer(strategy=strategy, keep_empty_features=True)
+    except TypeError:
+        return SimpleImputer(strategy=strategy)
 
 
 def _numeric_scaler(scale: str):
