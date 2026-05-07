@@ -49,7 +49,7 @@ models:
     feature_policy: tree_default
   - name: dummy_stratified
     feature_policy: tree_default
-  - name: dummy_most_frequent
+  - name: dummy_prior
     feature_policy: tree_default
   - name: logistic
     feature_policy: logistic_default

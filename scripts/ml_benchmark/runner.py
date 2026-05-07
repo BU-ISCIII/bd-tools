@@ -28,7 +28,7 @@ from .types import BenchmarkConfig, BenchmarkJob, DiagnosticResult, PipelineBuil
 SUPPORTED_TRAINING_MODELS = {
     "dummy_uniform",
     "dummy_stratified",
-    "dummy_most_frequent",
+    "dummy_prior",
     "logistic",
     "catboost",
     "lightgbm",

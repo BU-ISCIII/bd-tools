@@ -28,11 +28,10 @@ def get_dummy_specs():
             build_estimator=lambda **kwargs: _build_dummy("stratified", **kwargs),
         ),
         ModelSpec(
-            name="dummy_most_frequent",
+            name="dummy_prior",
             supports_binary=True,
             supports_multiclass=True,
             supports_multilabel=False,
-            build_estimator=lambda **kwargs: _build_dummy("most_frequent", **kwargs),
+            build_estimator=lambda **kwargs: _build_dummy("prior", **kwargs),
         ),
     ]
-
