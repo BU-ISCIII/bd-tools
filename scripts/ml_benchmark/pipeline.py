@@ -664,10 +664,9 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
             return X.copy()
         qcut_columns = {}
         for column, bins in self.qcut_bins_.items():
-            qcut_column = f"{column}_qcut"
             if len(bins) < 2:
-                qcut_columns[qcut_column] = pd.Series(np.nan, index=X.index)
                 continue
+            qcut_column = f"{column}_qcut"
             encoded = pd.cut(
                 X[column],
                 bins=bins,
