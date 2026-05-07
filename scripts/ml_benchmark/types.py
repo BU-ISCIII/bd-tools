@@ -90,6 +90,35 @@ class SplitSpec:
     stratify: bool = True
 
 
+@dataclass(frozen=True)
+class CohortFilterRuleSpec:
+    name: str
+    type: str
+    column: str
+    enabled: bool = True
+    values: List[Any] = field(default_factory=list)
+    min_count: Optional[int] = None
+    min_fraction: Optional[float] = None
+    drop_missing: bool = False
+
+
+@dataclass(frozen=True)
+class FeatureNARowFilterSpec:
+    enabled: bool = False
+    columns: List[str] = field(default_factory=list)
+    include_patterns: List[str] = field(default_factory=list)
+    exclude_columns: List[str] = field(default_factory=list)
+    exclude_patterns: List[str] = field(default_factory=list)
+    mode: str = "any"
+    max_missing_fraction: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class RowFilterSpec:
+    cohort_rules: List[CohortFilterRuleSpec] = field(default_factory=list)
+    feature_na: Optional[FeatureNARowFilterSpec] = None
+
+
 @dataclass
 class PipelineBuildResult:
     pipeline: Any
@@ -155,3 +184,4 @@ class BenchmarkConfig:
     feature_views: List[FeatureViewSpec]
     feature_sets: List[FeatureSetSpec]
     split: SplitSpec
+    row_filters: RowFilterSpec = field(default_factory=RowFilterSpec)

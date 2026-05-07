@@ -10,10 +10,13 @@ import yaml
 from .types import (
     BenchmarkConfig,
     CorrelationFilterSpec,
+    CohortFilterRuleSpec,
     FeatureGroupSpec,
+    FeatureNARowFilterSpec,
     FeaturePolicySpec,
     FeatureSetSpec,
     FeatureViewSpec,
+    RowFilterSpec,
     SplitSpec,
     TargetSpec,
 )
@@ -181,6 +184,50 @@ def _load_split(config: Dict[str, Any]) -> SplitSpec:
     )
 
 
+def _load_row_filters(config: Dict[str, Any]) -> RowFilterSpec:
+    raw = config.get("row_filters") or {}
+    cohort_rules = []
+    for item in raw.get("cohort_filters", []) or []:
+        cohort_rules.append(
+            CohortFilterRuleSpec(
+                name=item["name"],
+                type=item["type"],
+                column=item["column"],
+                enabled=bool(item.get("enabled", True)),
+                values=list(item.get("values", [])),
+                min_count=(
+                    None
+                    if item.get("min_count") is None
+                    else int(item.get("min_count"))
+                ),
+                min_fraction=(
+                    None
+                    if item.get("min_fraction") is None
+                    else float(item.get("min_fraction"))
+                ),
+                drop_missing=bool(item.get("drop_missing", False)),
+            )
+        )
+
+    feature_na = None
+    if "feature_na_filter" in raw:
+        item = raw.get("feature_na_filter") or {}
+        feature_na = FeatureNARowFilterSpec(
+            enabled=bool(item.get("enabled", False)),
+            columns=list(item.get("columns", [])),
+            include_patterns=list(item.get("include_patterns", [])),
+            exclude_columns=list(item.get("exclude_columns", [])),
+            exclude_patterns=list(item.get("exclude_patterns", [])),
+            mode=item.get("mode", "any"),
+            max_missing_fraction=(
+                None
+                if item.get("max_missing_fraction") is None
+                else float(item.get("max_missing_fraction"))
+            ),
+        )
+    return RowFilterSpec(cohort_rules=cohort_rules, feature_na=feature_na)
+
+
 def load_config(path: str | Path) -> BenchmarkConfig:
     config_path = Path(path)
     raw = load_yaml(config_path)
@@ -199,4 +246,5 @@ def load_config(path: str | Path) -> BenchmarkConfig:
         feature_views=_load_feature_views(raw),
         feature_sets=_load_feature_sets(raw),
         split=_load_split(raw),
+        row_filters=_load_row_filters(raw),
     )

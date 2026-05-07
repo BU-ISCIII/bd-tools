@@ -31,6 +31,36 @@ split:
   random_state: 99
   stratify: true
 
+row_filters:
+  cohort_filters:
+    - name: exclude_minor_foci
+      type: exclude_values
+      enabled: false
+      column: foco
+      values:
+        - catéter venoso
+        - vías altas respiratorias
+        - cardiovascular
+        - osteoarticular
+        - sistema nervioso central
+        - genital
+
+    - name: keep_common_foci
+      type: min_frequency
+      enabled: false
+      column: foco
+      min_count:
+      min_fraction: 0.04
+      drop_missing: false
+
+  feature_na_filter:
+    enabled: false
+    mode: max_fraction
+    max_missing_fraction: 0.50
+    include_patterns:
+      - "*"
+    exclude_columns: []
+
 targets:
   - name: sepsis
     type: binary

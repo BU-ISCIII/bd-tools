@@ -15,6 +15,8 @@ This first slice establishes:
 - `target x model x feature_view x feature_set` job-matrix expansion.
 - Manual feature groups and feature views for comparing alternative clinical
   representations, such as raw, binary, or categorical vital-sign encodings.
+- Configurable row filters for cohort restrictions and feature-missingness
+  row exclusion, with audit counts.
 - Model-specific feature policies for scaling, categorical handling, and
   correlation-filter behavior.
 - Leakage-safe pipeline construction for imputation, encoding, scaling, qcut
@@ -121,11 +123,60 @@ target-like columns can be listed under `data.target_like_columns`; this is
 where culture, organism, and resistance outcomes that are not the active target
 should live.
 
+## Row Filters
+
+Row filtering is configured separately from feature preprocessing because it
+changes the cohort before train/test splitting. Cohort filters are applied after
+missing active-target rows are removed and before the held-out test split.
+Feature-NA row filters are applied after target removal, feature-view selection,
+and feature-policy column drops, so they use the actual candidate feature matrix
+for the current job.
+
+Available cohort rule types are:
+
+- `exclude_values`: drop rows where `column` is one of `values`.
+- `include_values`: keep only rows where `column` is one of `values`.
+- `drop_missing`: drop rows where `column` is missing.
+- `min_frequency`: keep levels in `column` that meet `min_count` and/or
+  `min_fraction`; `drop_missing: false` keeps missing rows.
+
+The example config includes disabled filters for excluding minor foci and
+keeping only common foci. Enabling them makes the row counts appear in
+`summary.json` under `benchmark_audit.rows.custom_filters`.
+
+```yaml
+row_filters:
+  cohort_filters:
+    - name: exclude_minor_foci
+      type: exclude_values
+      enabled: false
+      column: foco
+      values: [catéter venoso, vías altas respiratorias, cardiovascular]
+
+    - name: keep_common_foci
+      type: min_frequency
+      enabled: false
+      column: foco
+      min_fraction: 0.04
+      drop_missing: false
+
+  feature_na_filter:
+    enabled: false
+    mode: max_fraction
+    max_missing_fraction: 0.50
+    include_patterns: ["*"]
+```
+
+`feature_na_filter.mode` can be `any`, `all`, or `max_fraction`. When no row
+filters are configured the audit reports `not_configured`; when filters are
+present but disabled it reports `disabled`; when enabled filters run it reports
+`applied` with before/after row counts.
+
 ## Pipeline Structure
 
 At launch time, the CLI does not hard-code model inputs. The YAML config
-controls the data path, targets, models, feature views, feature policies, split
-strategy, and output location.
+controls the data path, targets, row filters, models, feature views, feature
+policies, split strategy, and output location.
 
 ```mermaid
 flowchart TD
@@ -139,40 +190,43 @@ flowchart TD
 
     G --> H["Read analytical CSV"]
     H --> I["Choose active target y"]
-    I --> J["Remove active target, other configured targets,<br/>sample weight, and target_like_columns from X"]
-    J --> K["Resolve feature_view and manual feature groups"]
-    K --> L["Apply feature_policy drop columns/patterns"]
-    L --> M["Outer split:<br/>training subset + held-out test set"]
-    M --> N["Infer numeric vs categorical columns from training columns"]
-    N --> O["Build sklearn Pipeline"]
+    I --> J["Drop rows with missing active target"]
+    J --> K["Apply configured cohort row filters<br/>for example minor/low-frequency foci"]
+    K --> L["Remove active target, other configured targets,<br/>sample weight, and target_like_columns from X"]
+    L --> M["Resolve feature_view and manual feature groups"]
+    M --> N["Apply feature_policy drop columns/patterns"]
+    N --> O["Apply optional feature-NA row filter"]
+    O --> P["Outer split:<br/>training subset + held-out test set"]
+    P --> Q["Infer numeric vs categorical columns from training columns"]
+    Q --> R["Build sklearn Pipeline"]
 
-    O --> P["Validation CV splitter<br/>training subset only"]
-    P --> Q["For each validation fold"]
-    Q --> R["Fit fold pipeline on fold-training rows only"]
-    R --> S["BenchmarkPreprocessor"]
-    S --> T["Numeric path:<br/>IQR bounds -> qcut bins -> impute -> optional scale"]
-    S --> U{"Categorical handling"}
-    U -->|one_hot| V["Impute categories -> OneHotEncoder"]
-    U -->|native| W["Impute categories -> keep strings for CatBoost"]
-    T --> X["CorrelationFilter"]
-    V --> X
-    W --> X
-    X --> Y["ShapRFECVSelector<br/>when feature_set strategy is shap_rfecv"]
-    Y --> Z["Estimator:<br/>dummy, logistic, CatBoost, LightGBM"]
-    Z --> AA["Predict validation fold"]
-    AA --> AB["Fold metrics and out-of-fold validation predictions"]
+    R --> S["Validation CV splitter<br/>training subset only"]
+    S --> T["For each validation fold"]
+    T --> U["Fit fold pipeline on fold-training rows only"]
+    U --> V["BenchmarkPreprocessor"]
+    V --> W["Numeric path:<br/>IQR bounds -> qcut bins -> impute -> optional scale"]
+    V --> X{"Categorical handling"}
+    X -->|one_hot| Y["Impute categories -> OneHotEncoder"]
+    X -->|native| Z["Impute categories -> keep strings for CatBoost"]
+    W --> AA["CorrelationFilter"]
+    Y --> AA
+    Z --> AA
+    AA --> AB["ShapRFECVSelector<br/>when feature_set strategy is shap_rfecv"]
+    AB --> AC["Estimator:<br/>dummy, logistic, CatBoost, LightGBM"]
+    AC --> AD["Predict validation fold"]
+    AD --> AE["Fold metrics and out-of-fold validation predictions"]
 
-    O --> AC["Final training pipeline"]
-    AC --> AD["Fit on full training subset only"]
-    AD --> AE["Evaluate once on held-out test set"]
+    R --> AF["Final training pipeline"]
+    AF --> AG["Fit on full training subset only"]
+    AG --> AH["Evaluate once on held-out test set"]
 
-    AB --> AF["Write outputs"]
-    AE --> AF
-    AF --> AG["summary.json"]
-    AF --> AH["cv_results.csv"]
-    AF --> AI["validation_predictions.csv"]
-    AF --> AJ["test_predictions.csv"]
-    AF --> AK["diagnostics_manifest.json"]
+    AE --> AI["Write outputs"]
+    AH --> AI
+    AI --> AJ["summary.json"]
+    AI --> AK["cv_results.csv"]
+    AI --> AL["validation_predictions.csv"]
+    AI --> AM["test_predictions.csv"]
+    AI --> AN["diagnostics_manifest.json"]
 ```
 
 There are two leakage boundaries. First, the held-out test set is separated

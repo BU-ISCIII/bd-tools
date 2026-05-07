@@ -300,6 +300,8 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
     if dropped_missing_target_rows:
         df = df.loc[~missing_targets].copy()
 
+    df, cohort_filter_report = _apply_cohort_row_filters(df, config)
+
     y = df[target_column]
     reserved_columns = set(_all_target_columns(config))
     reserved_columns.update(target_columns)
@@ -319,6 +321,10 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
     feature_columns = list(resolution.selected_columns)
     X = _apply_policy_drops(df[feature_columns], job)
     feature_columns = list(X.columns)
+    X, feature_na_report = _apply_feature_na_row_filter(X, config)
+    y = y.loc[X.index]
+    if sample_weight is not None:
+        sample_weight = sample_weight.loc[X.index]
     if X.empty:
         raise ValueError(
             f"Feature view '{job.feature_view.name}' produced no columns for job "
@@ -336,10 +342,184 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
         "original_rows": original_rows,
         "original_features": len(original_columns),
         "original_columns": original_columns,
-        "rows_after_target_na_drop": len(df),
+        "rows_after_target_na_drop": original_rows - dropped_missing_target_rows,
+        "rows_after_cohort_filters": cohort_filter_report["rows_after"],
+        "rows_after_feature_na_filter": feature_na_report["rows_after"],
+        "cohort_filter_report": cohort_filter_report,
+        "feature_na_filter_report": feature_na_report,
         "target_removed_columns": target_removed_columns,
         "candidate_features_after_target_removal": len(candidate_columns),
     }
+
+
+def _apply_cohort_row_filters(
+    df: pd.DataFrame,
+    config: BenchmarkConfig,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    rules = config.row_filters.cohort_rules
+    report = {
+        "status": "not_configured" if not rules else "disabled",
+        "rows_before": len(df),
+        "rows_after": len(df),
+        "rows_dropped": 0,
+        "rules": [],
+    }
+    if not rules:
+        return df, report
+
+    filtered = df
+    applied = False
+    enabled = False
+    for rule in rules:
+        rule_report = {
+            "name": rule.name,
+            "type": rule.type,
+            "column": rule.column,
+            "enabled": rule.enabled,
+            "status": "disabled",
+            "rows_before": len(filtered),
+            "rows_after": len(filtered),
+            "rows_dropped": 0,
+            "values": rule.values,
+            "min_count": rule.min_count,
+            "min_fraction": rule.min_fraction,
+            "drop_missing": rule.drop_missing,
+        }
+        if not rule.enabled:
+            report["rules"].append(rule_report)
+            continue
+        enabled = True
+        if rule.column not in filtered.columns:
+            rule_report["status"] = "missing_column"
+            report["rules"].append(rule_report)
+            continue
+
+        rule_input = filtered
+        mask = _cohort_rule_mask(rule_input, rule)
+        before = len(filtered)
+        filtered = filtered.loc[mask].copy()
+        rule_report.update(
+            {
+                "status": "applied",
+                "rows_after": len(filtered),
+                "rows_dropped": before - len(filtered),
+            }
+        )
+        if rule.type == "min_frequency":
+            counts = rule_input[rule.column].value_counts(dropna=False)
+            kept_values = filtered[rule.column].dropna().unique().tolist()
+            rule_report["kept_values"] = sorted(kept_values, key=str)
+            rule_report["value_counts_before"] = {
+                str(key): int(value) for key, value in counts.items()
+            }
+        applied = True
+        report["rules"].append(rule_report)
+
+    report.update(
+        {
+            "status": (
+                "applied"
+                if applied
+                else ("configured_no_effect" if enabled else "disabled")
+            ),
+            "rows_after": len(filtered),
+            "rows_dropped": len(df) - len(filtered),
+        }
+    )
+    return filtered, report
+
+
+def _cohort_rule_mask(df: pd.DataFrame, rule: Any) -> pd.Series:
+    series = df[rule.column]
+    if rule.type == "exclude_values":
+        return ~series.isin(rule.values)
+    if rule.type == "include_values":
+        return series.isin(rule.values)
+    if rule.type == "drop_missing":
+        return series.notna()
+    if rule.type == "min_frequency":
+        counts = series.value_counts(dropna=False)
+        total = len(series)
+        keep_values = set(counts.index)
+        if rule.min_count is not None:
+            keep_values &= set(counts[counts >= rule.min_count].index)
+        if rule.min_fraction is not None:
+            keep_values &= set(counts[(counts / total) >= rule.min_fraction].index)
+        mask = series.isin(keep_values)
+        if not rule.drop_missing:
+            mask = mask | series.isna()
+        return mask
+    raise ValueError(
+        f"Unknown cohort row filter type '{rule.type}' for rule '{rule.name}'."
+    )
+
+
+def _apply_feature_na_row_filter(
+    X: pd.DataFrame,
+    config: BenchmarkConfig,
+) -> tuple[pd.DataFrame, Dict[str, Any]]:
+    spec = config.row_filters.feature_na
+    report = {
+        "status": "not_configured" if spec is None else "disabled",
+        "rows_before": len(X),
+        "rows_after": len(X),
+        "rows_dropped": 0,
+        "columns": [],
+        "missing_columns": [],
+        "mode": None if spec is None else spec.mode,
+        "max_missing_fraction": None if spec is None else spec.max_missing_fraction,
+    }
+    if spec is None or not spec.enabled:
+        return X, report
+
+    columns, missing_columns = _resolve_feature_na_columns(X, spec)
+    report["columns"] = columns
+    report["missing_columns"] = missing_columns
+    if not columns:
+        report["status"] = "no_matching_columns"
+        return X, report
+
+    missing = X[columns].isna()
+    if spec.mode == "any":
+        drop_mask = missing.any(axis=1)
+    elif spec.mode == "all":
+        drop_mask = missing.all(axis=1)
+    elif spec.mode == "max_fraction":
+        if spec.max_missing_fraction is None:
+            raise ValueError(
+                "feature_na_filter.mode=max_fraction requires max_missing_fraction."
+            )
+        drop_mask = missing.mean(axis=1) > spec.max_missing_fraction
+    else:
+        raise ValueError(f"Unknown feature_na_filter mode '{spec.mode}'.")
+
+    filtered = X.loc[~drop_mask].copy()
+    report.update(
+        {
+            "status": "applied",
+            "rows_after": len(filtered),
+            "rows_dropped": int(drop_mask.sum()),
+        }
+    )
+    return filtered, report
+
+
+def _resolve_feature_na_columns(X: pd.DataFrame, spec: Any) -> tuple[list[str], list[str]]:
+    selected = set()
+    missing = []
+    for column in spec.columns:
+        if column in X.columns:
+            selected.add(column)
+        else:
+            missing.append(column)
+    patterns = spec.include_patterns or (["*"] if not spec.columns else [])
+    for pattern in patterns:
+        selected.update(column for column in X.columns if fnmatch(column, pattern))
+    for column in spec.exclude_columns:
+        selected.discard(column)
+    for pattern in spec.exclude_patterns:
+        selected = {column for column in selected if not fnmatch(column, pattern)}
+    return sorted(selected), missing
 
 
 def _target_columns(config: BenchmarkConfig, job: BenchmarkJob) -> list[str]:
@@ -544,10 +724,20 @@ def _build_and_write_audit(
             "original_rows": prepared["original_rows"],
             "rows_dropped_missing_target": prepared["dropped_missing_target_rows"],
             "rows_after_target_na_drop": prepared["rows_after_target_na_drop"],
-            "rows_dropped_custom_filters": 0,
-            "custom_filters_status": "not_configured",
-            "rows_dropped_feature_na": 0,
-            "feature_na_row_filter_status": "not_configured",
+            "rows_after_cohort_filters": prepared["rows_after_cohort_filters"],
+            "rows_dropped_custom_filters": prepared["cohort_filter_report"][
+                "rows_dropped"
+            ],
+            "custom_filters_status": prepared["cohort_filter_report"]["status"],
+            "custom_filters": prepared["cohort_filter_report"]["rules"],
+            "rows_after_feature_na_filter": prepared["rows_after_feature_na_filter"],
+            "rows_dropped_feature_na": prepared["feature_na_filter_report"][
+                "rows_dropped"
+            ],
+            "feature_na_row_filter_status": prepared["feature_na_filter_report"][
+                "status"
+            ],
+            "feature_na_row_filter": prepared["feature_na_filter_report"],
             "train_rows": len(split_data["X_train"]),
             "validation_folds": job_feature_cv_summary(job, split_data),
             "test_rows": len(split_data["X_test"]),
