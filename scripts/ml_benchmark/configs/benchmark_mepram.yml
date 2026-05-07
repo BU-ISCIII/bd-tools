@@ -234,6 +234,20 @@ feature_selection:
       xgboost:
         n_estimators: 100
 
+tuning:
+  enabled: false
+  n_trials: 25
+  timeout_seconds:
+  cv_splits: 3
+  metric:
+  direction: auto
+  reuse_existing: true
+  storage: sqlite
+  models:
+    - logistic
+    - catboost
+    - lightgbm
+
 compute:
   default_n_jobs: 1
   skip_existing: true

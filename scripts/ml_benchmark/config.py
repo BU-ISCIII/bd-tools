@@ -21,6 +21,7 @@ from .types import (
     ShapRFECVSpec,
     SplitSpec,
     TargetSpec,
+    TuningSpec,
 )
 
 
@@ -252,6 +253,25 @@ def _load_feature_selection(config: Dict[str, Any]) -> FeatureSelectionSpec:
     )
 
 
+def _load_tuning(config: Dict[str, Any]) -> TuningSpec:
+    raw = config.get("tuning") or {}
+    return TuningSpec(
+        enabled=bool(raw.get("enabled", False)),
+        n_trials=int(raw.get("n_trials", 25)),
+        timeout_seconds=(
+            None
+            if raw.get("timeout_seconds") is None
+            else int(raw.get("timeout_seconds"))
+        ),
+        cv_splits=int(raw.get("cv_splits", 3)),
+        metric=raw.get("metric"),
+        direction=raw.get("direction", "maximize"),
+        reuse_existing=bool(raw.get("reuse_existing", True)),
+        storage=raw.get("storage", "sqlite"),
+        models=list(raw.get("models", [])),
+    )
+
+
 def load_config(path: str | Path) -> BenchmarkConfig:
     config_path = Path(path)
     raw = load_yaml(config_path)
@@ -272,4 +292,5 @@ def load_config(path: str | Path) -> BenchmarkConfig:
         split=_load_split(raw),
         row_filters=_load_row_filters(raw),
         feature_selection=_load_feature_selection(raw),
+        tuning=_load_tuning(raw),
     )

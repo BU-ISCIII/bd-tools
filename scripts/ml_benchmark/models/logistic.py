@@ -20,6 +20,15 @@ def build_logistic(task_type: str, random_state: int = 42, n_jobs: int = 1, **kw
     )
 
 
+def suggest_logistic_params(trial, task_type: str):
+    return {
+        "C": trial.suggest_float("C", 1e-3, 10.0, log=True),
+        "penalty": "l2",
+        "solver": "saga",
+        "max_iter": 3000,
+    }
+
+
 def get_logistic_spec() -> ModelSpec:
     return ModelSpec(
         name="logistic",
@@ -27,4 +36,5 @@ def get_logistic_spec() -> ModelSpec:
         supports_multiclass=True,
         supports_multilabel=True,
         build_estimator=build_logistic,
+        suggest_params=suggest_logistic_params,
     )

@@ -105,6 +105,7 @@ def build_pipeline_contract(
     config: BenchmarkConfig,
     job: BenchmarkJob,
     feature_frame: Any,
+    model_params: dict[str, Any] | None = None,
 ) -> PipelineBuildResult:
     from .models import get_model_registry
     from .pipeline import build_benchmark_pipeline, infer_column_types
@@ -124,6 +125,7 @@ def build_pipeline_contract(
         n_jobs=configure_resources(
             int(config.raw.get("compute", {}).get("default_n_jobs", 1))
         ).n_jobs,
+        model_params=model_params,
         feature_selection=shap_rfecv,
         feature_selection_estimator_params=shap_rfecv.selector_estimator_params.get(
             job.model_name, {}
@@ -135,6 +137,191 @@ def build_pipeline_contract(
         ),
         feature_selection_cache_key=_feature_selection_cache_key(job),
     )
+
+
+def _tune_hyperparameters(
+    config: BenchmarkConfig,
+    job: BenchmarkJob,
+    prepared: Dict[str, Any],
+    split_data: Dict[str, Any],
+) -> Dict[str, Any]:
+    tuning = config.tuning
+    output_dir = job_output_dir(get_output_dir(config), job)
+    base_result = {
+        "best_params": {},
+        "files": [],
+        "summary": {
+            "enabled": tuning.enabled,
+            "status": "disabled",
+            "best_params": {},
+        },
+    }
+    if not tuning.enabled:
+        return base_result
+    if tuning.models and job.model_name not in set(tuning.models):
+        base_result["summary"].update(
+            {"status": "skipped_model", "configured_models": tuning.models}
+        )
+        return base_result
+
+    from .models import get_model_registry
+
+    model_spec = get_model_registry()[job.model_name]
+    if model_spec.suggest_params is None:
+        base_result["summary"].update({"status": "no_search_space"})
+        return base_result
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    best_params_path = output_dir / "best_params.json"
+    trials_path = output_dir / "tuning_trials.csv"
+    study_path = get_output_dir(config) / "optuna_studies" / f"{job.slug}.db"
+    study_path.parent.mkdir(parents=True, exist_ok=True)
+    metric = _tuning_metric(config, job)
+    direction = _tuning_direction(config, metric)
+
+    if tuning.reuse_existing and best_params_path.exists():
+        best_payload = json.loads(best_params_path.read_text(encoding="utf-8"))
+        return {
+            "best_params": best_payload.get("best_params", {}),
+            "files": [str(best_params_path), str(trials_path)],
+            "summary": {
+                "enabled": True,
+                "status": "cached_result",
+                "metric": best_payload.get("metric", metric),
+                "direction": best_payload.get("direction", direction),
+                "best_value": best_payload.get("best_value"),
+                "best_params": best_payload.get("best_params", {}),
+                "study_file": str(study_path),
+                "best_params_file": str(best_params_path),
+                "trials_file": str(trials_path),
+                "validation_scope": best_payload.get(
+                    "validation_scope",
+                    "training_subset_only",
+                ),
+                "held_out_test_used": best_payload.get("held_out_test_used", False),
+            },
+        }
+
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RuntimeError(
+            "Optuna tuning is enabled, but optuna is not installed."
+        ) from exc
+
+    storage = f"sqlite:///{study_path}" if tuning.storage == "sqlite" else None
+    study = optuna.create_study(
+        study_name=job.slug,
+        direction=direction,
+        storage=storage,
+        load_if_exists=True,
+    )
+    completed_trials = [
+        trial for trial in study.trials if trial.state == optuna.trial.TrialState.COMPLETE
+    ]
+    remaining_trials = max(0, tuning.n_trials - len(completed_trials))
+
+    def objective(trial):
+        params = model_spec.suggest_params(trial, job.target.task_type)
+        pipeline = build_pipeline_contract(config, job, prepared["X"], params).pipeline
+        return _tuning_cv_score(
+            config=config,
+            job=job,
+            pipeline=pipeline,
+            X=split_data["X_train"],
+            y=split_data["y_train"],
+            sample_weight=split_data["sample_weight_train"],
+            metric=metric,
+        )
+
+    if remaining_trials:
+        study.optimize(
+            objective,
+            n_trials=remaining_trials,
+            timeout=tuning.timeout_seconds,
+            show_progress_bar=False,
+        )
+
+    trials = study.trials_dataframe(attrs=("number", "value", "state", "params"))
+    trials.to_csv(trials_path, index=False)
+    best_payload = {
+        "metric": metric,
+        "direction": direction,
+        "best_value": study.best_value,
+        "best_params": study.best_params,
+        "study_name": study.study_name,
+        "study_file": str(study_path),
+        "n_trials_requested": tuning.n_trials,
+        "n_trials_total": len(study.trials),
+        "cv_splits": tuning.cv_splits,
+        "validation_scope": "training_subset_only",
+        "held_out_test_used": False,
+    }
+    best_params_path.write_text(json.dumps(best_payload, indent=2), encoding="utf-8")
+    return {
+        "best_params": study.best_params,
+        "files": [str(best_params_path), str(trials_path)],
+        "summary": {
+            "enabled": True,
+            "status": "completed" if remaining_trials else "cached_study",
+            **best_payload,
+            "best_params_file": str(best_params_path),
+            "trials_file": str(trials_path),
+        },
+    }
+
+
+def _tuning_metric(config: BenchmarkConfig, job: BenchmarkJob) -> str:
+    if config.tuning.metric:
+        return config.tuning.metric
+    if job.target.main_metric:
+        return job.target.main_metric
+    return "roc_auc" if job.target.task_type == "binary" else "f1_macro"
+
+
+def _tuning_direction(config: BenchmarkConfig, metric: str) -> str:
+    if config.tuning.direction in {"maximize", "minimize"}:
+        return config.tuning.direction
+    return "minimize" if metric == "log_loss" else "maximize"
+
+
+def _tuning_cv_score(
+    *,
+    config: BenchmarkConfig,
+    job: BenchmarkJob,
+    pipeline,
+    X: pd.DataFrame,
+    y: pd.Series,
+    sample_weight: pd.Series | None,
+    metric: str,
+) -> float:
+    splitter = _build_splitter(config, y, cv_splits=config.tuning.cv_splits)
+    scores = []
+    for train_idx, validation_idx in splitter.split(X, y):
+        estimator = clone(pipeline)
+        fit_params = {}
+        if sample_weight is not None:
+            fit_params["model__sample_weight"] = sample_weight.iloc[train_idx]
+        estimator.fit(X.iloc[train_idx], y.iloc[train_idx], **fit_params)
+        y_true = y.iloc[validation_idx].reset_index(drop=True)
+        y_pred = pd.Series(
+            np.asarray(estimator.predict(X.iloc[validation_idx])).ravel()
+        ).reset_index(drop=True)
+        proba = _predict_proba(estimator, X.iloc[validation_idx])
+        metrics = _aggregate_metrics(
+            y_true=y_true,
+            y_pred=y_pred,
+            proba=proba,
+            classes=_estimator_classes(estimator),
+            task_type=job.target.task_type,
+            positive_label=job.target.positive_label,
+        )
+        if metric not in metrics:
+            raise ValueError(
+                f"Tuning metric '{metric}' was not computed for job '{job.slug}'."
+            )
+        scores.append(metrics[metric])
+    return float(np.mean(scores))
 
 
 def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False) -> Dict[str, Any]:
@@ -186,8 +373,14 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         }
 
     prepared = _prepare_job_data(config, job)
-    build_result = build_pipeline_contract(config, job, prepared["X"])
     split_data = _split_train_test(config, prepared)
+    tuning_result = _tune_hyperparameters(config, job, prepared, split_data)
+    build_result = build_pipeline_contract(
+        config,
+        job,
+        prepared["X"],
+        model_params=tuning_result["best_params"],
+    )
     cv_results, predictions = _cross_validate_job(
         config=config,
         job=job,
@@ -248,6 +441,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "correlation_matrix.csv",
                 "correlation_pairs.csv",
                 "shap_rfecv_history.csv",
+                *tuning_result["files"],
                 *([str(cache_index_path)] if cache_index_path is not None else []),
             ],
             message=(
@@ -265,6 +459,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "train_rows": len(split_data["X_train"]),
                 "test_rows": len(split_data["X_test"]),
                 "audit_files": audit["files"],
+                "tuning": tuning_result["summary"],
                 "feature_selection_cache_index": (
                     str(cache_index_path)
                     if cache_index_path is not None
@@ -288,6 +483,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
             "n_features": prepared["X"].shape[1],
             "classes": [str(value) for value in prepared["classes"]],
             "main_metric": job.target.main_metric,
+            "tuning": tuning_result["summary"],
             "feature_selection_cache_index": (
                 str(cache_index_path)
                 if cache_index_path is not None
@@ -1074,12 +1270,17 @@ def _shap_rfecv_history(feature_selection) -> pd.DataFrame:
     )
 
 
-def _build_splitter(config: BenchmarkConfig, y: pd.Series):
+def _build_splitter(
+    config: BenchmarkConfig,
+    y: pd.Series,
+    cv_splits: int | None = None,
+):
     if config.split.strategy != "cross_validation":
         raise NotImplementedError(
             "Only split.strategy='cross_validation' is implemented in this slice."
         )
-    n_splits = min(config.split.cv_splits, int(y.value_counts().min()))
+    requested_splits = cv_splits or config.split.cv_splits
+    n_splits = min(requested_splits, int(y.value_counts().min()))
     if n_splits < 2:
         raise ValueError("Need at least two rows per class for stratified CV.")
     if config.split.stratify:
@@ -1089,7 +1290,7 @@ def _build_splitter(config: BenchmarkConfig, y: pd.Series):
             random_state=config.split.random_state,
         )
     return KFold(
-        n_splits=min(config.split.cv_splits, len(y)),
+        n_splits=min(requested_splits, len(y)),
         shuffle=True,
         random_state=config.split.random_state,
     )

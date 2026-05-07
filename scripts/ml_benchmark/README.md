@@ -337,6 +337,44 @@ feature_sets:
 The selected final feature list is written to `final_features.csv`; the
 recursive elimination trace is written to `shap_rfecv_history.csv`.
 
+## Hyperparameter Tuning
+
+Optuna tuning is configured per benchmark job and is disabled by default.
+When enabled, each `target x model x feature_view x feature_set` job gets its
+own study and cached best-parameter file. Tuning is fitted and scored only
+inside the training subset created after the outer held-out test split. The
+held-out test set is evaluated once after tuning selects the final parameters.
+
+```yaml
+tuning:
+  enabled: false
+  n_trials: 25
+  timeout_seconds:
+  cv_splits: 3
+  metric:
+  direction: auto
+  reuse_existing: true
+  storage: sqlite
+  models:
+    - logistic
+    - catboost
+    - lightgbm
+```
+
+If `metric` is empty, tuning uses the target `main_metric`, falling back to
+`roc_auc` for binary targets and `f1_macro` otherwise. `direction: auto`
+minimizes `log_loss` and maximizes other metrics. With `reuse_existing: true`,
+the runner reuses `best_params.json` when present; otherwise it resumes or
+creates the job's SQLite Optuna study.
+
+Tuning artifacts are written under the job output directory:
+
+- `best_params.json`: selected metric, direction, best value, and best params.
+- `tuning_trials.csv`: trial numbers, values, states, and parameter columns.
+
+SQLite studies are stored under
+`outputs/ml_benchmark/.../optuna_studies/<job_slug>.db`.
+
 ## Feature Policies
 
 Feature policies define model-specific preprocessing rules. For example,
@@ -387,7 +425,8 @@ tree policies normally keep `scale: none`.
 Numeric and categorical imputation are also policy-specific. `impute_numeric:
 median` and `impute_categorical: most_frequent` are the current defaults.
 `qcut_numeric: optional` appends train-fitted quartile-style columns named
-`<variable>_qcut`; `qcut_bins` controls the requested number of bins.
+`<variable>_qcut` only when enough distinct numeric values exist; `qcut_bins`
+controls the requested number of bins.
 `iqr_outlier_handling: train_fit` learns IQR bounds on the training fold and
 sets values outside those bounds to missing before imputation. Use
 `iqr_multiplier` to change the bound width.

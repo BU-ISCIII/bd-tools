@@ -93,6 +93,14 @@ def build_catboost(task_type: str, random_state: int = 42, n_jobs: int = 1, **kw
     )
 
 
+def suggest_catboost_params(trial, task_type: str):
+    return {
+        "iterations": trial.suggest_int("iterations", 100, 700, step=100),
+        "depth": trial.suggest_int("depth", 4, 8),
+        "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.20, log=True),
+    }
+
+
 def _categorical_columns(X) -> list[str] | list[int]:
     if hasattr(X, "select_dtypes"):
         return X.select_dtypes(include=["object", "category", "bool"]).columns.tolist()
@@ -106,4 +114,5 @@ def get_catboost_spec() -> ModelSpec:
         supports_multiclass=True,
         supports_multilabel=False,
         build_estimator=build_catboost,
+        suggest_params=suggest_catboost_params,
     )

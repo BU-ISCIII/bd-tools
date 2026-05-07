@@ -137,6 +137,19 @@ class FeatureSelectionSpec:
     shap_rfecv: ShapRFECVSpec = field(default_factory=ShapRFECVSpec)
 
 
+@dataclass(frozen=True)
+class TuningSpec:
+    enabled: bool = False
+    n_trials: int = 25
+    timeout_seconds: Optional[int] = None
+    cv_splits: int = 3
+    metric: Optional[str] = None
+    direction: str = "maximize"
+    reuse_existing: bool = True
+    storage: str = "sqlite"
+    models: List[str] = field(default_factory=list)
+
+
 @dataclass
 class PipelineBuildResult:
     pipeline: Any
@@ -206,3 +219,4 @@ class BenchmarkConfig:
     feature_selection: FeatureSelectionSpec = field(
         default_factory=FeatureSelectionSpec
     )
+    tuning: TuningSpec = field(default_factory=TuningSpec)

@@ -687,6 +687,7 @@ def build_benchmark_pipeline(
     categorical_columns: Sequence[str],
     random_state: int,
     n_jobs: int,
+    model_params: dict | None = None,
     feature_selection: ShapRFECVSpec | None = None,
     feature_selection_estimator_params: dict | None = None,
     feature_selection_cache_dir: str | None = None,
@@ -714,6 +715,7 @@ def build_benchmark_pipeline(
         task_type=job.target.task_type,
         random_state=random_state,
         n_jobs=n_jobs,
+        **(model_params or {}),
     )
     corr = job.feature_policy.correlation_filter
     if corr.manual_groups_first:

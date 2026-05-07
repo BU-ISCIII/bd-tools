@@ -18,6 +18,14 @@ def build_random_forest(random_state: int = 42, n_jobs: int = 1, **kwargs):
     )
 
 
+def suggest_random_forest_params(trial, task_type: str):
+    return {
+        "n_estimators": trial.suggest_int("n_estimators", 100, 700, step=100),
+        "max_depth": trial.suggest_int("max_depth", 3, 20),
+        "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 20),
+    }
+
+
 def get_random_forest_spec() -> ModelSpec:
     return ModelSpec(
         name="random_forest",
@@ -25,5 +33,5 @@ def get_random_forest_spec() -> ModelSpec:
         supports_multiclass=True,
         supports_multilabel=True,
         build_estimator=build_random_forest,
+        suggest_params=suggest_random_forest_params,
     )
-
