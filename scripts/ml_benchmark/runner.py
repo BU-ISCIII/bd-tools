@@ -173,6 +173,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "imputation_report.csv",
                 "correlation_matrix.csv",
                 "correlation_pairs.csv",
+                "shap_rfecv_history.csv",
             ],
             message=(
                 f"Held out {len(split_data['X_test'])} test rows, then completed "
@@ -501,6 +502,9 @@ def _build_and_write_audit(
     )
     corr_pairs_path = output_dir / "correlation_pairs.csv"
     corr_pairs.to_csv(corr_pairs_path, index=False)
+    shap_history = _shap_rfecv_history(feature_selection)
+    shap_history_path = output_dir / "shap_rfecv_history.csv"
+    shap_history.to_csv(shap_history_path, index=False)
 
     numeric_builder = preprocess.numeric_pipeline_
     qcut_created = [
@@ -513,11 +517,7 @@ def _build_and_write_audit(
     policy_dropped = sorted(
         set(feature_view.selected_columns) - set(prepared["feature_columns"])
     )
-    feature_set_status = (
-        "not_configured"
-        if job.feature_set.strategy in {"none", "all"}
-        else "pending_implementation"
-    )
+    feature_set_status = getattr(feature_selection, "status_", "unknown")
 
     summary = {
         "rows": {
@@ -602,7 +602,15 @@ def _build_and_write_audit(
                 "strategy": job.feature_set.strategy,
                 "max_features": job.feature_set.max_features,
                 "status": feature_set_status,
+                "history_file": "shap_rfecv_history.csv",
+                "history_rounds": int(len(shap_history)),
                 "kept_count": len(final_features),
+                "dropped_count": len(
+                    getattr(feature_selection, "dropped_features_", [])
+                ),
+                "dropped_features": getattr(
+                    feature_selection, "dropped_features_", []
+                ),
                 "kept_features_file": "final_features.csv",
             },
         },
@@ -611,6 +619,7 @@ def _build_and_write_audit(
             "imputation_report": "imputation_report.csv",
             "correlation_matrix": "correlation_matrix.csv",
             "correlation_pairs": "correlation_pairs.csv",
+            "shap_rfecv_history": "shap_rfecv_history.csv",
         },
     }
     return {
@@ -729,6 +738,30 @@ def _categorical_encoding_summary(preprocess) -> Dict[str, Any]:
         "created_columns_count": len(created),
         "created_columns": created,
     }
+
+
+def _shap_rfecv_history(feature_selection) -> pd.DataFrame:
+    rows = []
+    for item in getattr(feature_selection, "history_", []):
+        rows.append(
+            {
+                "round": item.get("round"),
+                "n_features": item.get("n_features"),
+                "cv_score": item.get("cv_score"),
+                "best_score_so_far": item.get("best_score_so_far"),
+                "removed_features": "|".join(item.get("removed_features") or []),
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "round",
+            "n_features",
+            "cv_score",
+            "best_score_so_far",
+            "removed_features",
+        ],
+    )
 
 
 def _build_splitter(config: BenchmarkConfig, y: pd.Series):

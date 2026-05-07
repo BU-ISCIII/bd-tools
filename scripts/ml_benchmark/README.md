@@ -18,7 +18,7 @@ This first slice establishes:
 - Model-specific feature policies for scaling, categorical handling, and
   correlation-filter behavior.
 - Leakage-safe pipeline construction for imputation, encoding, scaling, qcut
-  binning, IQR handling, correlation filtering, feature-selection placeholders,
+  binning, IQR handling, correlation filtering, SHAP-RFECV feature selection,
   and the estimator.
 - Cross-validation training and evaluation for dummy baselines, logistic
   regression, CatBoost, and LightGBM.
@@ -30,8 +30,8 @@ This first slice establishes:
 - Homogeneous job output contract with `summary.json` and
   `diagnostics_manifest.json`.
 
-Feature-selection caching, tuning, richer diagnostics, and aggregate reporting
-are the next implementation slices.
+Feature-selection caching, tuning, richer diagnostics, aggregate reporting, and
+additional model runners are the next implementation slices.
 
 ## Leakage Rule
 
@@ -107,8 +107,8 @@ python scripts/run_benchmark.py \
 Completed jobs write `summary.json`, `cv_results.csv`,
 `validation_predictions.csv`, `test_predictions.csv`,
 `diagnostics_manifest.json`, `final_features.csv`, `imputation_report.csv`,
-`correlation_matrix.csv`, and `correlation_pairs.csv` under
-`outputs/ml_benchmark/.../jobs/<job_slug>/`.
+`correlation_matrix.csv`, `correlation_pairs.csv`, and
+`shap_rfecv_history.csv` under `outputs/ml_benchmark/.../jobs/<job_slug>/`.
 
 `summary.json` includes a `benchmark_audit` section with row counts, feature
 counts, target-like feature removal, feature-view filtering, imputation
@@ -157,7 +157,7 @@ flowchart TD
     T --> X["CorrelationFilter"]
     V --> X
     W --> X
-    X --> Y["FeatureSelectionPlaceholder"]
+    X --> Y["ShapRFECVSelector<br/>when feature_set strategy is shap_rfecv"]
     Y --> Z["Estimator:<br/>dummy, logistic, CatBoost, LightGBM"]
     Z --> AA["Predict validation fold"]
     AA --> AB["Fold metrics and out-of-fold validation predictions"]
@@ -208,6 +208,40 @@ feature_views:
     groups:
       temperature: raw
 ```
+
+## Feature Selection
+
+Feature sets control whether the model uses all candidates or a selected subset.
+`strategy: shap_rfecv` runs a train-fitted SHAP recursive feature elimination
+step inside the sklearn pipeline, after preprocessing and correlation filtering
+and before the final estimator.
+
+For each selector fit, the benchmark:
+
+- evaluates the current feature subset with internal cross-validation on the
+  current training split only;
+- fits a temporary selector estimator on the current training split;
+- computes mean absolute SHAP importance;
+- removes the least important features recursively;
+- keeps the best-scoring subset, capped by `max_features` when configured.
+
+The held-out test set is never used by SHAP-RFECV. Each outer validation fold
+gets its own selected features learned only from that fold's training rows. The
+final test evaluation gets a selected feature set learned only from the full
+training subset.
+
+```yaml
+feature_sets:
+  - name: all_features
+    strategy: none
+
+  - name: shap_rfecv_top_20
+    strategy: shap_rfecv
+    max_features: 20
+```
+
+The selected final feature list is written to `final_features.csv`; the
+recursive elimination trace is written to `shap_rfecv_history.csv`.
 
 ## Feature Policies
 

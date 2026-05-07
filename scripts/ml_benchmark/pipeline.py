@@ -11,8 +11,10 @@ from typing import List, Sequence
 
 import numpy as np
 import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.base import BaseEstimator, TransformerMixin, clone
 from sklearn.impute import SimpleImputer
+from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.model_selection import StratifiedKFold
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import (
     MinMaxScaler,
@@ -105,28 +107,180 @@ def _correlation_pairs(corr: pd.DataFrame, threshold: float) -> list[dict[str, o
     return sorted(pairs, key=lambda item: item["abs_spearman"], reverse=True)
 
 
-class FeatureSelectionPlaceholder(BaseEstimator, TransformerMixin):
-    """Placeholder for cached feature-selection strategies.
+class ShapRFECVSelector(BaseEstimator, TransformerMixin):
+    """Train-fitted SHAP recursive feature elimination with internal CV.
 
-    This keeps the pipeline contract explicit while the actual cached SHAP-RFECV
-    implementation is added in a later slice.
+    The selector is itself a pipeline step, so sklearn fits it only on the
+    current training split. Validation/test rows only pass through transform.
     """
 
-    def __init__(self, strategy: str = "none", max_features: int | None = None):
+    def __init__(
+        self,
+        strategy: str = "none",
+        max_features: int | None = None,
+        estimator=None,
+        task_type: str = "binary",
+        cv_splits: int = 2,
+        step_fraction: float = 0.50,
+        min_features_to_select: int = 20,
+        max_shap_rows: int = 500,
+        random_state: int = 42,
+    ):
         self.strategy = strategy
         self.max_features = max_features
+        self.estimator = estimator
+        self.task_type = task_type
+        self.cv_splits = cv_splits
+        self.step_fraction = step_fraction
+        self.min_features_to_select = min_features_to_select
+        self.max_shap_rows = max_shap_rows
+        self.random_state = random_state
 
     def fit(self, X, y=None):
         self.feature_names_in_ = _feature_names(X)
-        if self.strategy not in {"none", "all"}:
-            self.pending_implementation_ = True
+        self.selected_features_ = list(self.feature_names_in_)
+        self.dropped_features_ = []
+        self.history_ = []
+        self.status_ = "not_configured"
+        if self.strategy in {"none", "all"}:
+            return self
+        if self.strategy != "shap_rfecv":
+            self.status_ = "unsupported_strategy"
+            return self
+        if self.estimator is None or y is None:
+            self.status_ = "missing_estimator_or_target"
+            return self
+
+        frame = _as_frame(X, self.feature_names_in_)
+        if not _all_numeric(frame):
+            self.status_ = "skipped_non_numeric_features"
+            return self
+
+        target_count = self._target_feature_count(len(self.feature_names_in_))
+        current_features = list(self.feature_names_in_)
+        best_features = current_features
+        best_score = -np.inf
+        round_idx = 0
+
+        while True:
+            score = self._cv_score(frame[current_features], y)
+            importances = self._shap_importance(frame[current_features], y)
+            if score is not None and score > best_score:
+                best_score = score
+                best_features = list(current_features)
+            self.history_.append(
+                {
+                    "round": round_idx,
+                    "n_features": len(current_features),
+                    "cv_score": score,
+                    "best_score_so_far": None if best_score == -np.inf else best_score,
+                    "removed_features": [],
+                }
+            )
+            if len(current_features) <= target_count:
+                break
+            if importances.empty:
+                self.status_ = "shap_importance_failed"
+                break
+
+            remove_count = min(
+                len(current_features) - target_count,
+                max(1, int(len(current_features) * self.step_fraction)),
+            )
+            removed = importances.tail(remove_count)["feature"].tolist()
+            current_features = [f for f in current_features if f not in set(removed)]
+            self.history_[-1]["removed_features"] = removed
+            round_idx += 1
+
+        if self.max_features is not None and len(best_features) > self.max_features:
+            final_importances = self._shap_importance(frame[best_features], y)
+            if not final_importances.empty:
+                best_features = final_importances.head(self.max_features)[
+                    "feature"
+                ].tolist()
+        self.selected_features_ = list(best_features)
+        selected_set = set(self.selected_features_)
+        self.dropped_features_ = [
+            feature for feature in self.feature_names_in_ if feature not in selected_set
+        ]
+        self.status_ = "completed"
         return self
 
     def transform(self, X):
-        return X
+        if isinstance(X, pd.DataFrame):
+            return X[self.selected_features_]
+        indices = [
+            self.feature_names_in_.index(feature) for feature in self.selected_features_
+        ]
+        return np.asarray(X)[:, indices]
 
     def get_feature_names_out(self, input_features=None):
-        return np.asarray(getattr(self, "feature_names_in_", input_features))
+        return np.asarray(getattr(self, "selected_features_", input_features))
+
+    def _target_feature_count(self, n_features: int) -> int:
+        if self.max_features is not None:
+            return max(1, min(int(self.max_features), n_features))
+        return max(1, min(self.min_features_to_select, n_features))
+
+    def _selector_estimator(self):
+        estimator = clone(self.estimator)
+        params = estimator.get_params(deep=False)
+        capped = {}
+        if "n_estimators" in params:
+            capped["n_estimators"] = min(int(params.get("n_estimators") or 100), 100)
+        if "iterations" in params:
+            capped["iterations"] = min(int(params.get("iterations") or 100), 100)
+        if "max_iter" in params:
+            capped["max_iter"] = min(int(params.get("max_iter") or 1000), 1000)
+        if capped:
+            estimator.set_params(**capped)
+        return estimator
+
+    def _cv_score(self, X: pd.DataFrame, y) -> float | None:
+        y_series = pd.Series(y)
+        splitter = _selector_splitter(
+            y_series, self.cv_splits, self.random_state
+        )
+        if splitter is None:
+            return None
+        scores = []
+        for train_idx, validation_idx in splitter.split(X, y_series):
+            estimator = self._selector_estimator()
+            estimator.fit(X.iloc[train_idx], y_series.iloc[train_idx])
+            y_true = y_series.iloc[validation_idx]
+            if self.task_type == "binary" and hasattr(estimator, "predict_proba"):
+                proba = estimator.predict_proba(X.iloc[validation_idx])
+                scores.append(roc_auc_score(y_true, proba[:, 1]))
+            else:
+                y_pred = np.asarray(estimator.predict(X.iloc[validation_idx])).ravel()
+                scores.append(f1_score(y_true, y_pred, average="macro"))
+        return float(np.mean(scores)) if scores else None
+
+    def _shap_importance(self, X: pd.DataFrame, y) -> pd.DataFrame:
+        try:
+            import shap
+
+            estimator = self._selector_estimator()
+            estimator.fit(X, y)
+            sample = X.sample(
+                n=min(len(X), self.max_shap_rows),
+                random_state=self.random_state,
+            )
+            explainer = shap.Explainer(estimator, sample)
+            values = explainer(sample).values
+            if isinstance(values, list):
+                values = np.asarray(values)
+            values = np.asarray(values)
+            if values.ndim == 3:
+                importance = np.abs(values).mean(axis=(0, 2))
+            else:
+                importance = np.abs(values).mean(axis=0)
+            return pd.DataFrame(
+                {"feature": list(X.columns), "mean_abs_shap": importance}
+            ).sort_values("mean_abs_shap", ascending=False)
+        except Exception as exc:
+            self.shap_error_ = str(exc)
+            return pd.DataFrame(columns=["feature", "mean_abs_shap"])
 
 
 class BenchmarkPreprocessor(BaseEstimator, TransformerMixin):
@@ -428,11 +582,10 @@ def build_benchmark_pipeline(
             "Native categorical columns are kept through preprocessing; CatBoost "
             "receives their column names during fit."
         )
-    if job.feature_set.strategy != "none":
-        notes.append(
-            f"Feature-selection strategy '{job.feature_set.strategy}' is declared "
-            "but not implemented in this scaffold yet."
-        )
+    if job.feature_set.strategy == "shap_rfecv":
+        notes.append("SHAP-RFECV feature selection is fitted inside each split.")
+    elif job.feature_set.strategy != "none":
+        notes.append(f"Feature-selection strategy '{job.feature_set.strategy}' is unsupported.")
 
     pipeline = Pipeline(
         steps=[
@@ -447,9 +600,12 @@ def build_benchmark_pipeline(
             ),
             (
                 "feature_selection",
-                FeatureSelectionPlaceholder(
+                ShapRFECVSelector(
                     strategy=job.feature_set.strategy,
                     max_features=job.feature_set.max_features,
+                    estimator=estimator,
+                    task_type=job.target.task_type,
+                    random_state=random_state,
                 ),
             ),
             ("model", estimator),
@@ -521,6 +677,21 @@ def _numeric_scaler(scale: str):
         return RobustScaler()
     raise ValueError(
         f"Unsupported scale='{scale}'. Use one of: none, standard, minmax, robust."
+    )
+
+
+def _all_numeric(frame: pd.DataFrame) -> bool:
+    return all(pd.api.types.is_numeric_dtype(dtype) for dtype in frame.dtypes)
+
+
+def _selector_splitter(y: pd.Series, cv_splits: int, random_state: int):
+    n_splits = min(int(cv_splits), int(y.value_counts().min()))
+    if n_splits < 2:
+        return None
+    return StratifiedKFold(
+        n_splits=n_splits,
+        shuffle=True,
+        random_state=random_state,
     )
 
 
