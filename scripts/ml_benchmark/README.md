@@ -21,7 +21,7 @@ This first slice establishes:
   binning, IQR handling, correlation filtering, feature-selection placeholders,
   and the estimator.
 - Cross-validation training and evaluation for dummy baselines, logistic
-  regression, and CatBoost.
+  regression, CatBoost, and LightGBM.
 - Slurm array helper output.
 - Slurm script rendering.
 - Resource limits based on `SLURM_CPUS_PER_TASK`.
@@ -158,7 +158,7 @@ flowchart TD
     V --> X
     W --> X
     X --> Y["FeatureSelectionPlaceholder"]
-    Y --> Z["Estimator:<br/>dummy, logistic, CatBoost"]
+    Y --> Z["Estimator:<br/>dummy, logistic, CatBoost, LightGBM"]
     Z --> AA["Predict validation fold"]
     AA --> AB["Fold metrics and out-of-fold validation predictions"]
 

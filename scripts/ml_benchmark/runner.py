@@ -31,6 +31,7 @@ SUPPORTED_TRAINING_MODELS = {
     "dummy_most_frequent",
     "logistic",
     "catboost",
+    "lightgbm",
 }
 
 
@@ -92,8 +93,8 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 name="training",
                 status="not_implemented",
                 message=(
-                    "Training is currently implemented for dummy, logistic, and "
-                    f"CatBoost jobs only. Received model='{job.model_name}'."
+                    "Training is currently implemented for dummy, logistic, "
+                    f"CatBoost, and LightGBM jobs only. Received model='{job.model_name}'."
                 ),
             )
         ]
