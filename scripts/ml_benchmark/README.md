@@ -274,7 +274,8 @@ For each selector fit, the benchmark:
 
 - evaluates the current feature subset with internal cross-validation on the
   current training split only;
-- fits a temporary selector estimator on the current training split;
+- fits a temporary selector estimator on the current training split, optionally
+  using model-specific lighter parameters;
 - computes mean absolute SHAP importance;
 - removes the least important features recursively;
 - keeps the best-scoring selected ranking, capped by `max_features` when
@@ -294,6 +295,34 @@ and `shap_rfecv_top_100` reuse the same train-fitted SHAP-RFECV ranking and
 apply different top-N caps without recomputing selection. If the selected
 ranking has fewer than the requested cap, the benchmark keeps the full selected
 ranking rather than adding lower-ranked eliminated features.
+
+Selector behavior is configured independently from feature-set caps:
+
+```yaml
+feature_selection:
+  cache_enabled: true
+  shap_rfecv:
+    cv_splits: 2
+    step_fraction: 0.50
+    min_features_to_select: 20
+    max_shap_rows: 1000
+    max_selector_rows: 2500
+    selector_estimator_params:
+      logistic:
+        max_iter: 1000
+      lightgbm:
+        n_estimators: 80
+      catboost:
+        iterations: 80
+```
+
+`max_selector_rows` speeds up RFECV by fitting the selector on a stratified
+sample of the current training split. It does not use validation or test rows.
+`selector_estimator_params` lets expensive final models use cheaper selector
+estimators without changing the final estimator used for training/evaluation.
+After each completed job, the benchmark refreshes
+`outputs/ml_benchmark/.../feature_selection_cache_index.csv` with one row per
+cache file, including selector settings, cache feature counts, and best score.
 
 ```yaml
 feature_sets:

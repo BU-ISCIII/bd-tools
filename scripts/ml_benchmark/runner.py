@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Dict
@@ -57,6 +58,49 @@ def _feature_selection_cache_key(job: BenchmarkJob) -> str:
     )
 
 
+def _write_feature_selection_cache_index(base_output_dir: Path) -> Path | None:
+    cache_dir = base_output_dir / "feature_selection_cache"
+    cache_files = sorted(cache_dir.glob("*.json"))
+    if not cache_files:
+        return None
+
+    rows = []
+    for path in cache_files:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            rows.append({"cache_file": str(path), "status": "invalid_json"})
+            continue
+        metadata = payload.get("metadata", {})
+        rows.append(
+            {
+                "cache_file": str(path),
+                "status": "ok",
+                "ranking_feature_count": len(payload.get("ranking_features", [])),
+                "history_rounds": len(payload.get("history", [])),
+                "best_score": payload.get("best_score"),
+                "best_feature_count": payload.get("best_feature_count"),
+                "input_feature_count": metadata.get("input_feature_count"),
+                "selector_rows": metadata.get("selector_rows"),
+                "cv_splits": metadata.get("cv_splits"),
+                "step_fraction": metadata.get("step_fraction"),
+                "min_features_to_select": metadata.get("min_features_to_select"),
+                "max_features_cap": metadata.get("max_features_cap"),
+                "max_shap_rows": metadata.get("max_shap_rows"),
+                "max_selector_rows": metadata.get("max_selector_rows"),
+                "selector_estimator": metadata.get("selector_estimator"),
+                "selector_estimator_params": json.dumps(
+                    metadata.get("selector_estimator_params", {}),
+                    sort_keys=True,
+                ),
+            }
+        )
+    path = base_output_dir / "feature_selection_cache_index.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
+
+
 def build_pipeline_contract(
     config: BenchmarkConfig,
     job: BenchmarkJob,
@@ -70,6 +114,7 @@ def build_pipeline_contract(
         raise ValueError(f"Unknown model '{job.model_name}'.")
     feature_frame = _apply_policy_drops(feature_frame, job)
     numeric_columns, categorical_columns = infer_column_types(feature_frame)
+    shap_rfecv = config.feature_selection.shap_rfecv
     return build_benchmark_pipeline(
         job=job,
         model_spec=registry[job.model_name],
@@ -79,7 +124,15 @@ def build_pipeline_contract(
         n_jobs=configure_resources(
             int(config.raw.get("compute", {}).get("default_n_jobs", 1))
         ).n_jobs,
-        feature_selection_cache_dir=_feature_selection_cache_dir(config),
+        feature_selection=shap_rfecv,
+        feature_selection_estimator_params=shap_rfecv.selector_estimator_params.get(
+            job.model_name, {}
+        ),
+        feature_selection_cache_dir=(
+            _feature_selection_cache_dir(config)
+            if config.feature_selection.cache_enabled
+            else None
+        ),
         feature_selection_cache_key=_feature_selection_cache_key(job),
     )
 
@@ -180,6 +233,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         build_result=build_result,
         job=job,
     )
+    cache_index_path = _write_feature_selection_cache_index(get_output_dir(config))
 
     diagnostics = [
         DiagnosticResult(
@@ -194,6 +248,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "correlation_matrix.csv",
                 "correlation_pairs.csv",
                 "shap_rfecv_history.csv",
+                *([str(cache_index_path)] if cache_index_path is not None else []),
             ],
             message=(
                 f"Held out {len(split_data['X_test'])} test rows, then completed "
@@ -210,6 +265,11 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "train_rows": len(split_data["X_train"]),
                 "test_rows": len(split_data["X_test"]),
                 "audit_files": audit["files"],
+                "feature_selection_cache_index": (
+                    str(cache_index_path)
+                    if cache_index_path is not None
+                    else None
+                ),
             },
         )
     ]
@@ -228,6 +288,11 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
             "n_features": prepared["X"].shape[1],
             "classes": [str(value) for value in prepared["classes"]],
             "main_metric": job.target.main_metric,
+            "feature_selection_cache_index": (
+                str(cache_index_path)
+                if cache_index_path is not None
+                else None
+            ),
             "feature_view_resolution": {
                 "selected_columns": prepared["feature_columns"],
                 "excluded_columns": prepared["feature_view_resolution"].excluded_columns,
@@ -820,6 +885,33 @@ def _build_and_write_audit(
                     getattr(feature_selection, "ranking_features_", [])
                 ),
                 "best_score": getattr(feature_selection, "best_score_", None),
+                "selector_rows": getattr(feature_selection, "selector_rows_", None),
+                "selector_cv_splits": getattr(feature_selection, "cv_splits", None),
+                "selector_step_fraction": getattr(
+                    feature_selection,
+                    "step_fraction",
+                    None,
+                ),
+                "selector_min_features_to_select": getattr(
+                    feature_selection,
+                    "min_features_to_select",
+                    None,
+                ),
+                "selector_max_shap_rows": getattr(
+                    feature_selection,
+                    "max_shap_rows",
+                    None,
+                ),
+                "selector_max_rows": getattr(
+                    feature_selection,
+                    "max_selector_rows",
+                    None,
+                ),
+                "selector_estimator_params": getattr(
+                    feature_selection,
+                    "selector_estimator_params_",
+                    {},
+                ),
                 "history_file": "shap_rfecv_history.csv",
                 "history_rounds": int(len(shap_history)),
                 "kept_count": len(final_features),

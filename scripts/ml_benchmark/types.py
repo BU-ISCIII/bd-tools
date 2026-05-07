@@ -119,6 +119,24 @@ class RowFilterSpec:
     feature_na: Optional[FeatureNARowFilterSpec] = None
 
 
+@dataclass(frozen=True)
+class ShapRFECVSpec:
+    cv_splits: int = 2
+    step_fraction: float = 0.50
+    min_features_to_select: int = 20
+    max_shap_rows: int = 500
+    max_selector_rows: Optional[int] = None
+    selector_estimator_params: Dict[str, Dict[str, Any]] = field(
+        default_factory=dict
+    )
+
+
+@dataclass(frozen=True)
+class FeatureSelectionSpec:
+    cache_enabled: bool = True
+    shap_rfecv: ShapRFECVSpec = field(default_factory=ShapRFECVSpec)
+
+
 @dataclass
 class PipelineBuildResult:
     pipeline: Any
@@ -185,3 +203,6 @@ class BenchmarkConfig:
     feature_sets: List[FeatureSetSpec]
     split: SplitSpec
     row_filters: RowFilterSpec = field(default_factory=RowFilterSpec)
+    feature_selection: FeatureSelectionSpec = field(
+        default_factory=FeatureSelectionSpec
+    )

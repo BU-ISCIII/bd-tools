@@ -26,7 +26,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from .types import BenchmarkJob, ModelSpec, PipelineBuildResult
+from .types import BenchmarkJob, ModelSpec, PipelineBuildResult, ShapRFECVSpec
 
 
 class CorrelationFilter(BaseEstimator, TransformerMixin):
@@ -127,6 +127,8 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         step_fraction: float = 0.50,
         min_features_to_select: int = 20,
         max_shap_rows: int = 500,
+        max_selector_rows: int | None = None,
+        selector_estimator_params: dict | None = None,
         random_state: int = 42,
         cache_dir: str | None = None,
         cache_key: str | None = None,
@@ -139,6 +141,8 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         self.step_fraction = step_fraction
         self.min_features_to_select = min_features_to_select
         self.max_shap_rows = max_shap_rows
+        self.max_selector_rows = max_selector_rows
+        self.selector_estimator_params = selector_estimator_params
         self.random_state = random_state
         self.cache_dir = cache_dir
         self.cache_key = cache_key
@@ -153,6 +157,8 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         self.cache_path_ = None
         self.ranking_features_ = list(self.feature_names_in_)
         self.best_score_ = None
+        self.selector_rows_ = None
+        self.selector_estimator_params_ = dict(self.selector_estimator_params or {})
         if self.strategy in {"none", "all"}:
             return self
         if self.strategy != "shap_rfecv":
@@ -167,9 +173,11 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             self.status_ = "skipped_non_numeric_features"
             return self
 
+        selector_frame, selector_y = self._selector_training_data(frame, y)
+        self.selector_rows_ = len(selector_frame)
         cached = self._load_cache(frame, y)
         if cached is None:
-            cached = self._fit_rfecv(frame, y)
+            cached = self._fit_rfecv(selector_frame, selector_y)
             self._write_cache(cached)
         else:
             self.cache_status_ = "hit"
@@ -241,6 +249,18 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             "history": self.history_,
             "best_score": None if best_score == -np.inf else float(best_score),
             "best_feature_count": len(best_features),
+            "metadata": {
+                "input_feature_count": len(self.feature_names_in_),
+                "selector_rows": len(frame),
+                "cv_splits": self.cv_splits,
+                "step_fraction": self.step_fraction,
+                "min_features_to_select": self.min_features_to_select,
+                "max_features_cap": self.max_features,
+                "max_shap_rows": self.max_shap_rows,
+                "max_selector_rows": self.max_selector_rows,
+                "selector_estimator": self.estimator.__class__.__name__,
+                "selector_estimator_params": self.selector_estimator_params_,
+            },
         }
 
     def transform(self, X):
@@ -288,6 +308,8 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             step_fraction=self.step_fraction,
             min_features_to_select=self.min_features_to_select,
             max_shap_rows=self.max_shap_rows,
+            max_selector_rows=self.max_selector_rows,
+            selector_estimator_params=self.selector_estimator_params_,
             estimator=self.estimator,
         )
         path = Path(self.cache_dir) / f"{self.cache_key}__{digest}.json"
@@ -306,7 +328,50 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             capped["max_iter"] = min(int(params.get("max_iter") or 1000), 1000)
         if capped:
             estimator.set_params(**capped)
+        if self.selector_estimator_params_:
+            valid_params = estimator.get_params(deep=False)
+            overrides = {
+                key: value
+                for key, value in self.selector_estimator_params_.items()
+                if key in valid_params
+            }
+            if overrides:
+                estimator.set_params(**overrides)
         return estimator
+
+    def _selector_training_data(
+        self,
+        X: pd.DataFrame,
+        y,
+    ) -> tuple[pd.DataFrame, pd.Series]:
+        y_series = pd.Series(y, index=X.index)
+        if self.max_selector_rows is None or len(X) <= self.max_selector_rows:
+            return X, y_series
+
+        sample_size = max(1, int(self.max_selector_rows))
+        sampled_indices = []
+        for _, class_indices in y_series.groupby(y_series, observed=True).groups.items():
+            class_indices = list(class_indices)
+            n_class = min(
+                len(class_indices),
+                max(1, round(sample_size * len(class_indices) / len(X))),
+            )
+            sampled_indices.extend(
+                pd.Series(class_indices).sample(
+                    n=n_class,
+                    random_state=self.random_state,
+                )
+            )
+        sampled_indices = pd.Index(sampled_indices)
+        if len(sampled_indices) > sample_size:
+            sampled_indices = pd.Index(
+                pd.Series(sampled_indices).sample(
+                    n=sample_size,
+                    random_state=self.random_state,
+                )
+            )
+        sampled_indices = sampled_indices.sort_values()
+        return X.loc[sampled_indices], y_series.loc[sampled_indices]
 
     def _cv_score(self, X: pd.DataFrame, y) -> float | None:
         y_series = pd.Series(y)
@@ -623,6 +688,8 @@ def build_benchmark_pipeline(
     categorical_columns: Sequence[str],
     random_state: int,
     n_jobs: int,
+    feature_selection: ShapRFECVSpec | None = None,
+    feature_selection_estimator_params: dict | None = None,
     feature_selection_cache_dir: str | None = None,
     feature_selection_cache_key: str | None = None,
 ) -> PipelineBuildResult:
@@ -630,6 +697,7 @@ def build_benchmark_pipeline(
     notes: List[str] = []
     numeric_columns = list(numeric_columns)
     categorical_columns = list(categorical_columns)
+    shap_rfecv = feature_selection or ShapRFECVSpec()
 
     preprocessor = build_preprocessor(
         numeric_columns=numeric_columns,
@@ -679,6 +747,12 @@ def build_benchmark_pipeline(
                     max_features=job.feature_set.max_features,
                     estimator=estimator,
                     task_type=job.target.task_type,
+                    cv_splits=shap_rfecv.cv_splits,
+                    step_fraction=shap_rfecv.step_fraction,
+                    min_features_to_select=shap_rfecv.min_features_to_select,
+                    max_shap_rows=shap_rfecv.max_shap_rows,
+                    max_selector_rows=shap_rfecv.max_selector_rows,
+                    selector_estimator_params=feature_selection_estimator_params,
                     random_state=random_state,
                     cache_dir=feature_selection_cache_dir,
                     cache_key=feature_selection_cache_key,
@@ -780,6 +854,8 @@ def _selection_fingerprint(
     step_fraction: float,
     min_features_to_select: int,
     max_shap_rows: int,
+    max_selector_rows: int | None,
+    selector_estimator_params: dict | None,
     estimator,
 ) -> str:
     payload = {
@@ -790,6 +866,10 @@ def _selection_fingerprint(
         "step_fraction": float(step_fraction),
         "min_features_to_select": int(min_features_to_select),
         "max_shap_rows": int(max_shap_rows),
+        "max_selector_rows": (
+            None if max_selector_rows is None else int(max_selector_rows)
+        ),
+        "selector_estimator_params": selector_estimator_params or {},
         "estimator": estimator.__class__.__name__ if estimator is not None else None,
     }
     hasher = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8"))

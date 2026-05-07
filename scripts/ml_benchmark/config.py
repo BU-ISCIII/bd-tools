@@ -11,12 +11,14 @@ from .types import (
     BenchmarkConfig,
     CorrelationFilterSpec,
     CohortFilterRuleSpec,
+    FeatureSelectionSpec,
     FeatureGroupSpec,
     FeatureNARowFilterSpec,
     FeaturePolicySpec,
     FeatureSetSpec,
     FeatureViewSpec,
     RowFilterSpec,
+    ShapRFECVSpec,
     SplitSpec,
     TargetSpec,
 )
@@ -228,6 +230,28 @@ def _load_row_filters(config: Dict[str, Any]) -> RowFilterSpec:
     return RowFilterSpec(cohort_rules=cohort_rules, feature_na=feature_na)
 
 
+def _load_feature_selection(config: Dict[str, Any]) -> FeatureSelectionSpec:
+    raw = config.get("feature_selection") or {}
+    shap_raw = raw.get("shap_rfecv") or {}
+    return FeatureSelectionSpec(
+        cache_enabled=bool(raw.get("cache_enabled", True)),
+        shap_rfecv=ShapRFECVSpec(
+            cv_splits=int(shap_raw.get("cv_splits", 2)),
+            step_fraction=float(shap_raw.get("step_fraction", 0.50)),
+            min_features_to_select=int(shap_raw.get("min_features_to_select", 20)),
+            max_shap_rows=int(shap_raw.get("max_shap_rows", 500)),
+            max_selector_rows=(
+                None
+                if shap_raw.get("max_selector_rows") is None
+                else int(shap_raw.get("max_selector_rows"))
+            ),
+            selector_estimator_params=dict(
+                shap_raw.get("selector_estimator_params", {})
+            ),
+        ),
+    )
+
+
 def load_config(path: str | Path) -> BenchmarkConfig:
     config_path = Path(path)
     raw = load_yaml(config_path)
@@ -247,4 +271,5 @@ def load_config(path: str | Path) -> BenchmarkConfig:
         feature_sets=_load_feature_sets(raw),
         split=_load_split(raw),
         row_filters=_load_row_filters(raw),
+        feature_selection=_load_feature_selection(raw),
     )
