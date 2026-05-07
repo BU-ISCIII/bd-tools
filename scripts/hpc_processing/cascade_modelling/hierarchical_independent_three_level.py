@@ -1029,34 +1029,81 @@ def remove_correlated_features(
     List[str]
         Column names to keep, preserved in their original order.
     """
+from typing import List, Tuple
+import pandas as pd
+
+
+def remove_correlated_features(
+    X: pd.DataFrame,
+    threshold: float = 0.90,
+) -> Tuple[List[str], List[str], pd.DataFrame]:
+    """
+    Return kept columns, dropped columns, and an audit table explaining drops.
+    """
     if threshold >= 1.0:
-        return X.columns.tolist()
+        empty_log = pd.DataFrame(
+            columns=[
+                "kept_col",
+                "dropped_col",
+                "spearman_abs_corr",
+                "kept_variance",
+                "dropped_variance",
+            ]
+        )
+        return X.columns.tolist(), [], empty_log
 
-    # Pairwise Spearman on training data.  Constant columns yield NaN
-    # correlations; fill with 0 so they are treated as uncorrelated and
-    # kept (SHAP can remove them later if they carry no information).
     corr = X.corr(method="spearman").abs().fillna(0.0)
+    variances = X.var()
 
-    # Higher-variance columns are preferred when breaking ties (a continuous
-    # vital sign carries more information than its 0-3 quartile-binned twin).
-    col_order = X.var().sort_values(ascending=False).index.tolist()
+    col_order = variances.sort_values(ascending=False).index.tolist()
 
-    dropped: set = set()
+    dropped: set[str] = set()
     kept_ordered: List[str] = []
+    drop_records = []
+
     for col in col_order:
         if col in dropped:
             continue
+
         kept_ordered.append(col)
-        # Schedule every column that is too similar to *col* for removal.
+
         redundant = corr.index[corr[col] > threshold].tolist()
+
         for partner in redundant:
-            if partner != col:
+            if partner == col:
+                continue
+
+            if partner not in dropped:
                 dropped.add(partner)
 
-    # Return names in the original DataFrame column order.
-    kept_set = set(kept_ordered)
-    return [c for c in X.columns if c in kept_set]
+                drop_records.append(
+                    {
+                        "kept_col": col,
+                        "dropped_col": partner,
+                        "spearman_abs_corr": corr.loc[col, partner],
+                        "kept_variance": variances[col],
+                        "dropped_variance": variances[partner],
+                    }
+                )
 
+    kept_set = set(kept_ordered)
+
+    kept_cols = [c for c in X.columns if c in kept_set]
+    dropped_cols = sorted(dropped)
+
+    drop_log = pd.DataFrame(drop_records)
+    
+    if not drop_log.empty:
+        drop_log = drop_log.sort_values(
+            by=["spearman_abs_corr", "kept_variance"],
+            ascending=[False, False],
+        ).reset_index(drop=True)
+
+        print("\n=== Correlation filter audit ===")
+        print(drop_log.to_string(index=False))
+        print("================================\n")
+
+    return kept_cols, dropped_cols, drop_log
 
 def build_target_and_drop_sets(args: argparse.Namespace) -> Tuple[set, List[str]]:
     all_targets = {
@@ -1179,14 +1226,22 @@ def prepare_modelling_dataframe(
         feature_cols,
         args.na_perc_limit,
     )
-    feature_df = working_df[feature_cols]
-    validate_preprocessed_feature_columns(feature_df)
     working_df, feature_cols = handle_missing_feature_values(
         working_df,
         feature_cols,
         exclude_cols,
         args.impute_missing,
     )
+
+    cat_cols = [c for c in ["foco", "ultimo_antib"] if c in working_df.columns]
+    if cat_cols:
+        print(f"  One-hot encoding categorical columns: {cat_cols}")
+        working_df = pd.get_dummies(working_df, columns=cat_cols, drop_first=False)
+        working_df.columns = working_df.columns.str.replace(
+            "[^0-9a-zA-Z_]+", "_", regex=True
+        )
+        feature_cols = get_feature_columns(working_df, exclude_cols)
+
     feature_df = build_feature_dataframe(working_df, feature_cols)
     return working_df, feature_df, applied_model_filters
 
@@ -1245,12 +1300,15 @@ def apply_correlation_filter(
         print(f"\nRemoving features with |Spearman corr| > {args.max_corr} …")
         X_train = split_data["X_train"]
         X_test = split_data["X_test"]
-        kept_cols = remove_correlated_features(X_train, threshold=args.max_corr)
+        kept_cols, redundant = remove_correlated_features(X_train, threshold=args.max_corr)
         n_removed = len(X_train.columns) - len(kept_cols)
         if n_removed:
             print(
                 f"  Dropped {n_removed} redundant features → {len(kept_cols)} remain."
             )
+            # print dropped features
+            for col in redundant:
+                print(f"DROPPED_FEATURE: {col}")
         split_data = dict(split_data)
         split_data["X_train"] = X_train[kept_cols]
         split_data["X_test"] = X_test[kept_cols]

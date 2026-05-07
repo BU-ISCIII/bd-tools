@@ -882,8 +882,6 @@ def preprocess_tbl_sintomas(
     )
 
     symptom_columns = [col for col in pivoted.columns if col not in ["person_id", "fecha_ingreso_urgencias"]]
-    presence = pivoted.copy()
-    presence[symptom_columns] = (presence[symptom_columns] > 0).astype(int)
 
     duration = pivoted.copy()
     duration[symptom_columns] = duration[symptom_columns].apply(
@@ -896,11 +894,18 @@ def preprocess_tbl_sintomas(
         log,
         "created_variables",
         source="duracion_sintoma",
-        target=[col for col in presence.columns if col.startswith("sintoma_")] + [col for col in duration.columns if col.endswith("_categorico")],
-        how=f"pivot symptoms to wide columns; binary presence is 1 if summed duration > 0, and categorical duration is 0 if absent, 1 if <= {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days, 2 if > {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days",
+        target=[f"{col}_categorico" for col in symptom_columns],
+        how=f"pivot symptoms to wide categorical columns with 0 absent, 1 if duration <= {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days, and 2 if duration > {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=symptom_columns,
+        target=[f"{col}_categorico" for col in symptom_columns],
+        how="drop raw symptom presence indicator columns after creating categorized symptom features",
     )
 
-    result = presence.merge(duration, on=["person_id", "fecha_ingreso_urgencias"], how="left")
+    result = duration
     log.output_rows = len(result)
     log.output_columns = result.columns.tolist()
     result_obj = PreprocessResult(df=result, log=log)
