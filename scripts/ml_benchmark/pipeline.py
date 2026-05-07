@@ -7,6 +7,9 @@ inside the training fold/split only. Validation and test data should only call
 
 from __future__ import annotations
 
+import hashlib
+import json
+from pathlib import Path
 from typing import List, Sequence
 
 import numpy as np
@@ -125,6 +128,8 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         min_features_to_select: int = 20,
         max_shap_rows: int = 500,
         random_state: int = 42,
+        cache_dir: str | None = None,
+        cache_key: str | None = None,
     ):
         self.strategy = strategy
         self.max_features = max_features
@@ -135,6 +140,8 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         self.min_features_to_select = min_features_to_select
         self.max_shap_rows = max_shap_rows
         self.random_state = random_state
+        self.cache_dir = cache_dir
+        self.cache_key = cache_key
 
     def fit(self, X, y=None):
         self.feature_names_in_ = _feature_names(X)
@@ -142,6 +149,10 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         self.dropped_features_ = []
         self.history_ = []
         self.status_ = "not_configured"
+        self.cache_status_ = "not_applicable"
+        self.cache_path_ = None
+        self.ranking_features_ = list(self.feature_names_in_)
+        self.best_score_ = None
         if self.strategy in {"none", "all"}:
             return self
         if self.strategy != "shap_rfecv":
@@ -156,7 +167,34 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             self.status_ = "skipped_non_numeric_features"
             return self
 
-        target_count = self._target_feature_count(len(self.feature_names_in_))
+        cached = self._load_cache(frame, y)
+        if cached is None:
+            cached = self._fit_rfecv(frame, y)
+            self._write_cache(cached)
+        else:
+            self.cache_status_ = "hit"
+
+        self.history_ = cached.get("history", [])
+        self.ranking_features_ = [
+            feature
+            for feature in cached.get("ranking_features", [])
+            if feature in self.feature_names_in_
+        ]
+        self.best_score_ = cached.get("best_score")
+        if not self.ranking_features_:
+            self.status_ = "empty_cached_ranking"
+            return self
+
+        self.selected_features_ = self._apply_max_feature_cap(self.ranking_features_)
+        selected_set = set(self.selected_features_)
+        self.dropped_features_ = [
+            feature for feature in self.feature_names_in_ if feature not in selected_set
+        ]
+        self.status_ = "completed"
+        return self
+
+    def _fit_rfecv(self, frame: pd.DataFrame, y) -> dict[str, object]:
+        target_count = self._rfecv_target_feature_count(len(self.feature_names_in_))
         current_features = list(self.feature_names_in_)
         best_features = current_features
         best_score = -np.inf
@@ -192,19 +230,18 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             self.history_[-1]["removed_features"] = removed
             round_idx += 1
 
-        if self.max_features is not None and len(best_features) > self.max_features:
-            final_importances = self._shap_importance(frame[best_features], y)
-            if not final_importances.empty:
-                best_features = final_importances.head(self.max_features)[
-                    "feature"
-                ].tolist()
-        self.selected_features_ = list(best_features)
-        selected_set = set(self.selected_features_)
-        self.dropped_features_ = [
-            feature for feature in self.feature_names_in_ if feature not in selected_set
-        ]
-        self.status_ = "completed"
-        return self
+        final_importances = self._shap_importance(frame[best_features], y)
+        if final_importances.empty:
+            ranking_features = list(best_features)
+        else:
+            ranking_features = final_importances["feature"].tolist()
+        self.cache_status_ = "created"
+        return {
+            "ranking_features": ranking_features,
+            "history": self.history_,
+            "best_score": None if best_score == -np.inf else float(best_score),
+            "best_feature_count": len(best_features),
+        }
 
     def transform(self, X):
         if isinstance(X, pd.DataFrame):
@@ -217,10 +254,45 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
     def get_feature_names_out(self, input_features=None):
         return np.asarray(getattr(self, "selected_features_", input_features))
 
-    def _target_feature_count(self, n_features: int) -> int:
-        if self.max_features is not None:
-            return max(1, min(int(self.max_features), n_features))
+    def _rfecv_target_feature_count(self, n_features: int) -> int:
         return max(1, min(self.min_features_to_select, n_features))
+
+    def _apply_max_feature_cap(self, ranking_features: list[str]) -> list[str]:
+        if self.max_features is None:
+            return list(ranking_features)
+        return list(ranking_features[: max(1, int(self.max_features))])
+
+    def _load_cache(self, X: pd.DataFrame, y) -> dict[str, object] | None:
+        cache_path = self._cache_path(X, y)
+        if cache_path is None or not cache_path.exists():
+            self.cache_status_ = "miss" if cache_path is not None else "disabled"
+            return None
+        self.cache_path_ = str(cache_path)
+        return json.loads(cache_path.read_text(encoding="utf-8"))
+
+    def _write_cache(self, payload: dict[str, object]) -> None:
+        if self.cache_path_ is None:
+            return
+        cache_path = Path(self.cache_path_)
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    def _cache_path(self, X: pd.DataFrame, y) -> Path | None:
+        if not self.cache_dir or not self.cache_key:
+            return None
+        digest = _selection_fingerprint(
+            X=X,
+            y=y,
+            task_type=self.task_type,
+            cv_splits=self.cv_splits,
+            step_fraction=self.step_fraction,
+            min_features_to_select=self.min_features_to_select,
+            max_shap_rows=self.max_shap_rows,
+            estimator=self.estimator,
+        )
+        path = Path(self.cache_dir) / f"{self.cache_key}__{digest}.json"
+        self.cache_path_ = str(path)
+        return path
 
     def _selector_estimator(self):
         estimator = clone(self.estimator)
@@ -551,6 +623,8 @@ def build_benchmark_pipeline(
     categorical_columns: Sequence[str],
     random_state: int,
     n_jobs: int,
+    feature_selection_cache_dir: str | None = None,
+    feature_selection_cache_key: str | None = None,
 ) -> PipelineBuildResult:
     """Build a leakage-safe sklearn pipeline for one benchmark job."""
     notes: List[str] = []
@@ -606,6 +680,8 @@ def build_benchmark_pipeline(
                     estimator=estimator,
                     task_type=job.target.task_type,
                     random_state=random_state,
+                    cache_dir=feature_selection_cache_dir,
+                    cache_key=feature_selection_cache_key,
                 ),
             ),
             ("model", estimator),
@@ -693,6 +769,33 @@ def _selector_splitter(y: pd.Series, cv_splits: int, random_state: int):
         shuffle=True,
         random_state=random_state,
     )
+
+
+def _selection_fingerprint(
+    *,
+    X: pd.DataFrame,
+    y,
+    task_type: str,
+    cv_splits: int,
+    step_fraction: float,
+    min_features_to_select: int,
+    max_shap_rows: int,
+    estimator,
+) -> str:
+    payload = {
+        "columns": list(X.columns),
+        "shape": list(X.shape),
+        "task_type": task_type,
+        "cv_splits": int(cv_splits),
+        "step_fraction": float(step_fraction),
+        "min_features_to_select": int(min_features_to_select),
+        "max_shap_rows": int(max_shap_rows),
+        "estimator": estimator.__class__.__name__ if estimator is not None else None,
+    }
+    hasher = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8"))
+    hasher.update(pd.util.hash_pandas_object(X, index=True).values.tobytes())
+    hasher.update(pd.util.hash_pandas_object(pd.Series(y), index=True).values.tobytes())
+    return hasher.hexdigest()[:24]
 
 
 def _feature_names(X) -> List[str]:

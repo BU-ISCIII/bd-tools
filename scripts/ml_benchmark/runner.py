@@ -39,6 +39,24 @@ def get_output_dir(config: BenchmarkConfig) -> Path:
     return Path(config.raw.get("output_dir", "outputs/ml_benchmark"))
 
 
+def _feature_selection_cache_dir(config: BenchmarkConfig) -> str:
+    return str(get_output_dir(config) / "feature_selection_cache")
+
+
+def _feature_selection_cache_key(job: BenchmarkJob) -> str:
+    # Deliberately excludes feature_set.name/max_features so top-N caps reuse
+    # the same train-fitted SHAP-RFECV ranking.
+    return "__".join(
+        [
+            job.target.name,
+            job.model_name,
+            job.feature_policy.name,
+            job.feature_view.name,
+            "shap_rfecv",
+        ]
+    )
+
+
 def build_pipeline_contract(
     config: BenchmarkConfig,
     job: BenchmarkJob,
@@ -61,6 +79,8 @@ def build_pipeline_contract(
         n_jobs=configure_resources(
             int(config.raw.get("compute", {}).get("default_n_jobs", 1))
         ).n_jobs,
+        feature_selection_cache_dir=_feature_selection_cache_dir(config),
+        feature_selection_cache_key=_feature_selection_cache_key(job),
     )
 
 
@@ -602,6 +622,14 @@ def _build_and_write_audit(
                 "strategy": job.feature_set.strategy,
                 "max_features": job.feature_set.max_features,
                 "status": feature_set_status,
+                "cache_status": getattr(
+                    feature_selection, "cache_status_", "not_applicable"
+                ),
+                "cache_file": getattr(feature_selection, "cache_path_", None),
+                "ranking_feature_count": len(
+                    getattr(feature_selection, "ranking_features_", [])
+                ),
+                "best_score": getattr(feature_selection, "best_score_", None),
                 "history_file": "shap_rfecv_history.csv",
                 "history_rounds": int(len(shap_history)),
                 "kept_count": len(final_features),

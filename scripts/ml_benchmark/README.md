@@ -223,12 +223,23 @@ For each selector fit, the benchmark:
 - fits a temporary selector estimator on the current training split;
 - computes mean absolute SHAP importance;
 - removes the least important features recursively;
-- keeps the best-scoring subset, capped by `max_features` when configured.
+- keeps the best-scoring selected ranking, capped by `max_features` when
+  configured.
 
 The held-out test set is never used by SHAP-RFECV. Each outer validation fold
 gets its own selected features learned only from that fold's training rows. The
 final test evaluation gets a selected feature set learned only from the full
 training subset.
+
+Feature-selection rankings are cached under
+`outputs/ml_benchmark/.../feature_selection_cache/`. The cache key includes the
+actual training rows, target values, post-preprocessing feature matrix,
+feature-view/model/policy context, and selector settings, but deliberately
+excludes `max_features`. This lets `shap_rfecv_top_20`, `shap_rfecv_top_50`,
+and `shap_rfecv_top_100` reuse the same train-fitted SHAP-RFECV ranking and
+apply different top-N caps without recomputing selection. If the selected
+ranking has fewer than the requested cap, the benchmark keeps the full selected
+ranking rather than adding lower-ranked eliminated features.
 
 ```yaml
 feature_sets:
