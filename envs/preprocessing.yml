@@ -1,0 +1,9 @@
+name: mepram-preprocessing
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy=2.3
+  - pandas=2.3
+  - matplotlib=3.10
+  - ipykernel=6.29

@@ -1,0 +1,136 @@
+domain,target_version,target_column,class,samples,percent
+Etiology,Microorganism target,resultado_hemo_mo,NEGATIVE,2072,53.0
+Etiology,Microorganism target,resultado_hemo_mo,Escherichia coli,850,21.7
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella pneumoniae,210,5.4
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus aureus,171,4.4
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus pneumoniae,106,2.7
+Etiology,Microorganism target,resultado_hemo_mo,Pseudomonas aeruginosa,84,2.1
+Etiology,Microorganism target,resultado_hemo_mo,Proteus mirabilis,37,0.9
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus epidermidis,32,0.8
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus hominis,31,0.8
+Etiology,Microorganism target,resultado_hemo_mo,Enterobacter cloacae,29,0.7
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella oxytoca,27,0.7
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus faecalis,24,0.6
+Etiology,Microorganism target,resultado_hemo_mo,_Enterobacteria,17,0.4
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus faecium,13,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Salmonella enterica,12,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Serratia marcescens,10,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella aerogenes,10,0.3
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus agalactiae,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Haemophilus influenzae,8,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus gallolyticus,7,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter koseri,7,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus anginosus,6,0.2
+Etiology,Microorganism target,resultado_hemo_mo,_Other bacteria,6,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Bacteroides fragilis,6,0.2
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter freundii,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus haemolyticus,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus mitis,5,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Listeria monocytogenes,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus parasanguinis,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus capitis,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Salmonella,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Streptococcus,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Morganella morganii,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus oralis,4,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Providencia stuartii,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus dysgalactiae,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Brevibacterium epidermidis,3,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Micrococcus luteus,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Bacteroides thetaiotaomicron,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Candida glabrata,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus equi,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Peptoniphilus harei,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus beta - hemolítico,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,_Fungi,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Elizabethkingia,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium afermentans,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,género Brevibacillus,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Fusobacterium nucleatum,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Candida parapsilosis,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus sanguinis,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus pyogenes,2,0.1
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium striatum,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pseudomonas stutzeri,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Staphylococcus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium jeikeium,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Bacteroides,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Prevotella denticola,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Micrococcus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter youngae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus lutetiensis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Candida albicans,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus durans,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Parvimonas micra,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Acinetobacter haemolyticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Morganella,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Schaalia odontolytica,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus constellatus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Proteus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterobacter asburiae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Neisseria meningitidis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Corynebacterium mucifaciens,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Citrobacter farmeri,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Capnocytophaga canimorsus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Klebsiella variicola,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,familia Enterobacteriaceae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Aerococcus urinae,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Brevibacillus agri,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Streptococcus equinus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Thomasclavelia ramosa,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Moraxella osloensis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Clostridium paraputrificum,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Brachybacterium muris,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Staphylococcus saprophyticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Eggerthella lenta,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Clostridium perfringens,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,cocobacilo anaeróbico grampositivo,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Peptoniphilus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Acinetobacter pittii,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Roseomonas mucosa,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Campylobacter jejuni,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pasteurella multocida,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Vibrio parahaemolyticus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Campylobacter fetus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Enterococcus,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Enterobacter,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Abiotrophia defectiva,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Anaerococcus vaginalis,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,género Arthrobacter,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Raoultella ornithinolytica,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Pantoea agglomerans,1,0.0
+Etiology,Microorganism target,resultado_hemo_mo,Providencia rettgeri,1,0.0
+Etiology,Clinical organism grouping,resultado_hemo,NEGATIVE,2072,53.0
+Etiology,Clinical organism grouping,resultado_hemo,Escherichia coli,850,21.7
+Etiology,Clinical organism grouping,resultado_hemo,Klebsiella pneumoniae,210,5.4
+Etiology,Clinical organism grouping,resultado_hemo,_Other bacteria,198,5.1
+Etiology,Clinical organism grouping,resultado_hemo,_Enterobacteria,176,4.5
+Etiology,Clinical organism grouping,resultado_hemo,Staphylococcus aureus,171,4.4
+Etiology,Clinical organism grouping,resultado_hemo,Streptococcus pneumoniae,106,2.7
+Etiology,Clinical organism grouping,resultado_hemo,Pseudomonas aeruginosa,84,2.1
+Etiology,Clinical organism grouping,resultado_hemo,Enterococcus,39,1.0
+Etiology,Clinical organism grouping,resultado_hemo,_Fungi,7,0.2
+Etiology,Gram grouped,resultado_hemo_grouped,NEGATIVE,2277,58.2
+Etiology,Gram grouped,resultado_hemo_grouped,Bacilo gram-,1320,33.7
+Etiology,Gram grouped,resultado_hemo_grouped,Coco gram+,316,8.1
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,NEGATIVE,3152,80.6
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico,438,11.2
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino,315,8.1
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftrixona o cefotaxima,208,5.3
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftazidima,188,4.8
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a piperacilina/tazobactam,173,4.4
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a cefepima,169,4.3
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Coco Gram positivo resistente a ampicilina o penicilina,168,4.3
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Coco Gram positivo resistente a meticilina,58,1.5
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a meropenem,11,0.3
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftazidima/avibactam,4,0.1
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ceftolozano/tazobactam,4,0.1
+Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Coco Gram positivo resistente a vancomicina,2,0.1
+Resistance,Antibiotic family labels,fenotipo_resistencia,NEGATIVE,3152,80.6
+Resistance,Antibiotic family labels,fenotipo_resistencia,Penicilinas,621,15.9
+Resistance,Antibiotic family labels,fenotipo_resistencia,Quinolonas,315,8.1
+Resistance,Antibiotic family labels,fenotipo_resistencia,Cefalosporinas 3/4 gen,235,6.0
+Resistance,Antibiotic family labels,fenotipo_resistencia,Carbapenemas,11,0.3
+Resistance,Antibiotic family labels,fenotipo_resistencia,Glicopéptidos,2,0.1
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,NEGATIVE,3678,94.0
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,RESIST_CEFALOSPORINAS_3a_4a,235,6.0

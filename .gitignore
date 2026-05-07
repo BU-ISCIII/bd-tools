@@ -61,6 +61,13 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Local preprocessing data and generated outputs
+db_mepram_sepsis_vf.sqlite3
+preprocess_test.csv
+preprocess_test_filtered.csv
+preprocess_test_log_detailed.json
+preprocess_test_log_summary.csv
+
 # Flask stuff:
 instance/
 .webassets-cache
@@ -160,3 +167,11 @@ cython_debug/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+.~lock.preprocess_test.csv#
+.~lock.*#
+.codex
+csv_comparison_report/differences_after_name_normalization.csv
+csv_comparison_report/columns_in_repo_not_in_source_after_name_normalization.csv
+csv_comparison_report/columns_in_source_not_in_repo_after_name_normalization.csv
+20260413_df_merged_full_multilabel_grouped.csv
+ANALYSIS_GUIDE_README.md

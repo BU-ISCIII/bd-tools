@@ -1,0 +1,14 @@
+group,unfiltered_variables,filtered_variables,removed_by_filter
+Patient/admission,13,8,5
+Comorbidities,107,21,86
+BMR risk factors,14,14,0
+Symptoms,32,32,0
+Vital signs,15,15,0
+Sepsis and infection focus,28,16,12
+Previous infections,34,14,20
+Previous antibiotic treatment,48,48,0
+Emergency blood cultures,35,5,30
+Previous colonizations,33,13,20
+Other emergency cultures,33,0,33
+Cross-table culture features,47,16,31
+Predictive targets,6,6,0

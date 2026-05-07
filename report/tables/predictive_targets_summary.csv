@@ -1,0 +1,4 @@
+model,target_column,samples,classes,majority_class,majority_class_percent,exclusions_or_grouping
+Model 1 - Sepsis,sepsis,3913,2,Sepsis (-),50.8,No exclusions; binary target over the full cohort.
+Model 2 - Etiology,resultado_hemo_grouped,3913,3,Negative blood culture,58.2,Grouped hemoculture target. NEGATIVE includes negative blood cultures and non-target or unmapped detected organisms.
+Model 3 - Resistance,resistente_cefalosporina,1636,2,Not resistant,85.8,Restricted to grouped positive blood cultures (resultado_hemo_grouped != NEGATIVE); grouped as binary cephalosporin 3a/4a resistance.
