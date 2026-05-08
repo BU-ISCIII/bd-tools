@@ -68,11 +68,11 @@ targets:
 
   - name: resultado_hemo_grouped
     type: multiclass
-    main_metric: f1_macro
+    main_metric: log_loss
 
   - name: resistente_cefalosporina
     type: binary
-    main_metric: roc_auc
+    main_metric: average_precision
 
 models:
   - name: dummy_uniform

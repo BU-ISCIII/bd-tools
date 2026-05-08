@@ -14,7 +14,8 @@ from ml_benchmark.jobs import (
     format_slurm_array,
     get_job_by_index,
 )
-from ml_benchmark.runner import run_job
+from ml_benchmark.reporting import build_aggregate_report
+from ml_benchmark.runner import get_output_dir, run_job
 from ml_benchmark.slurm import render_slurm_script, write_slurm_script
 
 
@@ -30,6 +31,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--print-slurm-array", action="store_true")
     parser.add_argument("--print-slurm-script", action="store_true")
     parser.add_argument("--write-slurm-script", type=Path)
+    parser.add_argument("--build-report", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     return parser
 
@@ -69,6 +71,10 @@ def main() -> None:
     if args.write_slurm_script:
         path = write_slurm_script(config, len(jobs), args.write_slurm_script)
         print(path)
+        return
+    if args.build_report:
+        report = build_aggregate_report(get_output_dir(config))
+        print(json.dumps(report, indent=2))
         return
 
     selected = select_jobs(args, jobs)

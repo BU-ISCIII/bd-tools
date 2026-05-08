@@ -106,6 +106,14 @@ python scripts/run_benchmark.py \
   --feature-set all_features
 ```
 
+Build aggregate comparison reports after jobs have completed:
+
+```bash
+python scripts/run_benchmark.py \
+  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+  --build-report
+```
+
 Completed jobs write `summary.json`, `cv_results.csv`,
 `validation_predictions.csv`, `test_predictions.csv`,
 `diagnostics_manifest.json`, `final_features.csv`, `imputation_report.csv`,
@@ -122,6 +130,23 @@ The runner removes every configured target column from `X`. Additional
 target-like columns can be listed under `data.target_like_columns`; this is
 where culture, organism, and resistance outcomes that are not the active target
 should live.
+
+## Aggregate Reports
+
+`--build-report` scans completed job folders under the configured `output_dir`
+and writes aggregate artifacts under `outputs/ml_benchmark/.../reports/`:
+
+- `job_comparison.csv`: one row per completed job with validation/test metrics.
+- `model_rankings.csv`: per-target ranks using each target's main metric.
+- `class_level_metrics.csv`: precision, recall, F1, and support by class.
+- `diagnostic_artifacts.csv`: index of generated diagnostic plots.
+- `validation_vs_test__<target>.png` and `validation_test_bars__<target>.png`.
+- per-job confusion matrices, calibration curves, ROC curves, and PR curves
+  under `reports/jobs/<job_slug>/`.
+
+Binary jobs get ROC, PR, and calibration plots using the positive-class
+probability. Multiclass jobs get confusion matrices, class-level metrics, and
+one-vs-rest ROC/PR curves when class probability columns are available.
 
 ## Row Filters
 
