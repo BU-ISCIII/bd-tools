@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any, Dict
@@ -174,16 +175,37 @@ def _tune_hyperparameters(
     output_dir.mkdir(parents=True, exist_ok=True)
     best_params_path = output_dir / "best_params.json"
     trials_path = output_dir / "tuning_trials.csv"
-    study_path = get_output_dir(config) / "optuna_studies" / f"{job.slug}.db"
-    study_path.parent.mkdir(parents=True, exist_ok=True)
+    study_path = output_dir / "optuna_study.db"
+    legacy_study_path = get_output_dir(config) / "optuna_studies" / f"{job.slug}.db"
+    if legacy_study_path.exists() and not study_path.exists():
+        shutil.copy2(legacy_study_path, study_path)
+    report_paths = _optuna_report_paths(output_dir)
     metric = _tuning_metric(config, job)
     direction = _tuning_direction(config, metric)
 
+    try:
+        import optuna
+    except ImportError as exc:
+        raise RuntimeError(
+            "Optuna tuning is enabled, but optuna is not installed."
+        ) from exc
+
     if tuning.reuse_existing and best_params_path.exists():
         best_payload = json.loads(best_params_path.read_text(encoding="utf-8"))
+        report_files = []
+        report_status = {}
+        if study_path.exists():
+            study = optuna.load_study(
+                study_name=job.slug,
+                storage=f"sqlite:///{study_path}",
+            )
+            report_files, report_status = _write_optuna_html_reports(
+                study,
+                report_paths,
+            )
         return {
             "best_params": best_payload.get("best_params", {}),
-            "files": [str(best_params_path), str(trials_path)],
+            "files": [str(best_params_path), str(trials_path), *report_files],
             "summary": {
                 "enabled": True,
                 "status": "cached_result",
@@ -194,6 +216,8 @@ def _tune_hyperparameters(
                 "study_file": str(study_path),
                 "best_params_file": str(best_params_path),
                 "trials_file": str(trials_path),
+                "html_reports": report_files,
+                "html_report_status": report_status,
                 "validation_scope": best_payload.get(
                     "validation_scope",
                     "training_subset_only",
@@ -201,13 +225,6 @@ def _tune_hyperparameters(
                 "held_out_test_used": best_payload.get("held_out_test_used", False),
             },
         }
-
-    try:
-        import optuna
-    except ImportError as exc:
-        raise RuntimeError(
-            "Optuna tuning is enabled, but optuna is not installed."
-        ) from exc
 
     storage = f"sqlite:///{study_path}" if tuning.storage == "sqlite" else None
     study = optuna.create_study(
@@ -244,6 +261,7 @@ def _tune_hyperparameters(
 
     trials = study.trials_dataframe(attrs=("number", "value", "state", "params"))
     trials.to_csv(trials_path, index=False)
+    report_files, report_status = _write_optuna_html_reports(study, report_paths)
     best_payload = {
         "metric": metric,
         "direction": direction,
@@ -256,19 +274,69 @@ def _tune_hyperparameters(
         "cv_splits": tuning.cv_splits,
         "validation_scope": "training_subset_only",
         "held_out_test_used": False,
+        "html_reports": report_files,
+        "html_report_status": report_status,
     }
     best_params_path.write_text(json.dumps(best_payload, indent=2), encoding="utf-8")
     return {
         "best_params": study.best_params,
-        "files": [str(best_params_path), str(trials_path)],
+        "files": [str(best_params_path), str(trials_path), *report_files],
         "summary": {
             "enabled": True,
             "status": "completed" if remaining_trials else "cached_study",
             **best_payload,
             "best_params_file": str(best_params_path),
             "trials_file": str(trials_path),
+            "html_reports": report_files,
+            "html_report_status": report_status,
         },
     }
+
+
+def _optuna_report_paths(output_dir: Path) -> dict[str, Path]:
+    return {
+        "optimization_history": output_dir / "optuna_optimization_history.html",
+        "param_importances": output_dir / "optuna_param_importances.html",
+        "slice": output_dir / "optuna_slice.html",
+    }
+
+
+def _write_optuna_html_reports(study, report_paths: dict[str, Path]) -> tuple[list[str], dict[str, str]]:
+    try:
+        from optuna.visualization import (
+            plot_optimization_history,
+            plot_param_importances,
+            plot_slice,
+        )
+    except Exception as exc:
+        return [], {"status": f"visualization_unavailable: {exc}"}
+
+    completed_trials = [
+        trial
+        for trial in study.trials
+        if getattr(trial.state, "name", "") == "COMPLETE"
+    ]
+    if not completed_trials:
+        return [], {"status": "no_completed_trials"}
+
+    plotters = {
+        "optimization_history": plot_optimization_history,
+        "param_importances": plot_param_importances,
+        "slice": plot_slice,
+    }
+    files = []
+    status = {}
+    for name, plotter in plotters.items():
+        path = report_paths[name]
+        try:
+            fig = plotter(study)
+            fig.write_html(path)
+        except Exception as exc:
+            status[name] = f"failed: {exc}"
+            continue
+        files.append(str(path))
+        status[name] = "written"
+    return files, status
 
 
 def _tuning_metric(config: BenchmarkConfig, job: BenchmarkJob) -> str:

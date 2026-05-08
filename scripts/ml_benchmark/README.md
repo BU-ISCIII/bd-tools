@@ -371,9 +371,15 @@ Tuning artifacts are written under the job output directory:
 
 - `best_params.json`: selected metric, direction, best value, and best params.
 - `tuning_trials.csv`: trial numbers, values, states, and parameter columns.
+- `optuna_study.db`: the SQLite Optuna study for this exact job.
+- `optuna_optimization_history.html`: Optuna optimization history plot.
+- `optuna_param_importances.html`: Optuna parameter importance plot.
+- `optuna_slice.html`: Optuna slice plot.
 
-SQLite studies are stored under
-`outputs/ml_benchmark/.../optuna_studies/<job_slug>.db`.
+These files are also listed in `diagnostics_manifest.json` and the tuning block
+inside `summary.json`. Older shared study files under
+`outputs/ml_benchmark/.../optuna_studies/<job_slug>.db` are copied into the job
+folder when present so existing studies can still be reused.
 
 ## Feature Policies
 
