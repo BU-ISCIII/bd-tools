@@ -15,6 +15,7 @@ from sklearn.metrics import (
     PrecisionRecallDisplay,
     RocCurveDisplay,
     average_precision_score,
+    brier_score_loss,
     classification_report,
     precision_recall_curve,
     roc_auc_score,
@@ -88,6 +89,8 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
     plot_files.extend(_write_validation_test_plots(comparison, reports_dir))
 
     class_rows = []
+    calibration_metric_rows = []
+    calibration_curve_rows = []
     diagnostic_rows = []
     for item in summaries:
         summary = item["summary"]
@@ -102,6 +105,9 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
                 continue
             predictions = pd.read_csv(predictions_path)
             class_rows.extend(_class_level_rows(summary, split, predictions))
+            calibration = _calibration_report_rows(summary, split, predictions)
+            calibration_metric_rows.extend(calibration["metrics"])
+            calibration_curve_rows.extend(calibration["curves"])
             diagnostic_rows.extend(
                 _write_prediction_diagnostics(summary, split, predictions, reports_dir)
             )
@@ -109,6 +115,14 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
     class_metrics = pd.DataFrame(class_rows)
     class_metrics_path = reports_dir / "class_level_metrics.csv"
     class_metrics.to_csv(class_metrics_path, index=False)
+
+    calibration_metrics = pd.DataFrame(calibration_metric_rows)
+    calibration_metrics_path = reports_dir / "calibration_metrics.csv"
+    calibration_metrics.to_csv(calibration_metrics_path, index=False)
+
+    calibration_curves = pd.DataFrame(calibration_curve_rows)
+    calibration_curves_path = reports_dir / "calibration_curves.csv"
+    calibration_curves.to_csv(calibration_curves_path, index=False)
 
     diagnostics = pd.DataFrame(diagnostic_rows)
     diagnostics_path = reports_dir / "diagnostic_artifacts.csv"
@@ -122,6 +136,8 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
             "job_comparison": str(comparison_path),
             "model_rankings": str(rankings_path),
             "class_level_metrics": str(class_metrics_path),
+            "calibration_metrics": str(calibration_metrics_path),
+            "calibration_curves": str(calibration_curves_path),
             "diagnostic_artifacts": str(diagnostics_path),
             "plots": plot_files,
         },
@@ -395,7 +411,190 @@ def _write_prediction_diagnostics(
             rows.append(_artifact_row(summary, split, "pr_curve_ovr", pr_path))
         plt.close(fig_roc)
         plt.close(fig_pr)
+
+        calibration_path = job_report_dir / f"{split}_calibration_curve.png"
+        fig, ax = plt.subplots(figsize=(6, 5))
+        calibration_plotted = False
+        for proba_col in sorted(proba_columns):
+            class_label = proba_col.removeprefix("proba_")
+            y_binary = (y_true_str == class_label).astype(int)
+            if y_binary.nunique() < 2:
+                continue
+            prob_true, prob_pred = calibration_curve(
+                y_binary,
+                predictions[proba_col],
+                n_bins=10,
+                strategy="uniform",
+            )
+            ax.plot(prob_pred, prob_true, marker="o", label=str(class_label))
+            calibration_plotted = True
+        if calibration_plotted:
+            ax.plot([0, 1], [0, 1], "--", color="gray", label="perfect")
+            ax.set_xlabel("Mean predicted probability")
+            ax.set_ylabel("Observed fraction positive")
+            ax.set_title(f"{split.title()} OvR Calibration\n{job_slug}")
+            ax.legend(fontsize=7)
+            fig.tight_layout()
+            fig.savefig(calibration_path, dpi=160)
+            rows.append(
+                _artifact_row(summary, split, "calibration_curve_ovr", calibration_path)
+            )
+        plt.close(fig)
     return rows
+
+
+def _calibration_report_rows(
+    summary: dict[str, Any],
+    split: str,
+    predictions: pd.DataFrame,
+    *,
+    n_bins: int = 10,
+) -> dict[str, list[dict[str, Any]]]:
+    proba_columns = [
+        column for column in predictions.columns if column.startswith("proba_")
+    ]
+    if not proba_columns:
+        return {"metrics": [], "curves": []}
+
+    metric_rows = []
+    curve_rows = []
+    y_true = predictions["y_true"].astype(str)
+    for proba_column in sorted(proba_columns):
+        class_label = proba_column.removeprefix("proba_")
+        y_binary = (y_true == class_label).astype(int)
+        if y_binary.nunique() < 2:
+            continue
+        y_score = predictions[proba_column].astype(float)
+        ece, bins = _expected_calibration_error(
+            y_binary.to_numpy(),
+            y_score.to_numpy(),
+            n_bins=n_bins,
+        )
+        metric_rows.append(
+            {
+                **_calibration_base_row(summary, split),
+                "calibration_type": "one_vs_rest",
+                "class": class_label,
+                "brier_score": float(brier_score_loss(y_binary, y_score)),
+                "ece": ece,
+                "n_bins": n_bins,
+                "support": int(y_binary.sum()),
+                "prevalence": float(y_binary.mean()),
+            }
+        )
+        for bin_row in bins:
+            curve_rows.append(
+                {
+                    **_calibration_base_row(summary, split),
+                    "calibration_type": "one_vs_rest",
+                    "class": class_label,
+                    **bin_row,
+                }
+            )
+
+    top_label = _top_label_calibration(summary, split, predictions, n_bins=n_bins)
+    metric_rows.extend(top_label["metrics"])
+    curve_rows.extend(top_label["curves"])
+    return {"metrics": metric_rows, "curves": curve_rows}
+
+
+def _top_label_calibration(
+    summary: dict[str, Any],
+    split: str,
+    predictions: pd.DataFrame,
+    *,
+    n_bins: int,
+) -> dict[str, list[dict[str, Any]]]:
+    proba_columns = [
+        column for column in predictions.columns if column.startswith("proba_")
+    ]
+    if len(proba_columns) < 2:
+        return {"metrics": [], "curves": []}
+    proba = predictions[proba_columns].astype(float)
+    class_labels = [column.removeprefix("proba_") for column in proba_columns]
+    top_indices = proba.to_numpy().argmax(axis=1)
+    top_scores = proba.to_numpy()[np.arange(len(proba)), top_indices]
+    predicted_labels = pd.Series([class_labels[idx] for idx in top_indices])
+    correct = (
+        predicted_labels.astype(str).to_numpy()
+        == predictions["y_true"].astype(str).to_numpy()
+    ).astype(int)
+    ece, bins = _expected_calibration_error(correct, top_scores, n_bins=n_bins)
+    metric_rows = [
+        {
+            **_calibration_base_row(summary, split),
+            "calibration_type": "top_label",
+            "class": "__top_label__",
+            "brier_score": float(np.mean((top_scores - correct) ** 2)),
+            "ece": ece,
+            "n_bins": n_bins,
+            "support": int(correct.sum()),
+            "prevalence": float(correct.mean()),
+        }
+    ]
+    curve_rows = [
+        {
+            **_calibration_base_row(summary, split),
+            "calibration_type": "top_label",
+            "class": "__top_label__",
+            **bin_row,
+        }
+        for bin_row in bins
+    ]
+    return {"metrics": metric_rows, "curves": curve_rows}
+
+
+def _expected_calibration_error(
+    y_true_binary: np.ndarray,
+    y_score: np.ndarray,
+    *,
+    n_bins: int,
+) -> tuple[float, list[dict[str, Any]]]:
+    edges = np.linspace(0.0, 1.0, n_bins + 1)
+    rows = []
+    ece = 0.0
+    total = len(y_score)
+    for bin_idx in range(n_bins):
+        lower = edges[bin_idx]
+        upper = edges[bin_idx + 1]
+        if bin_idx == n_bins - 1:
+            mask = (y_score >= lower) & (y_score <= upper)
+        else:
+            mask = (y_score >= lower) & (y_score < upper)
+        count = int(mask.sum())
+        if count:
+            mean_predicted = float(y_score[mask].mean())
+            observed_fraction = float(y_true_binary[mask].mean())
+            bin_error = abs(observed_fraction - mean_predicted)
+            ece += (count / total) * bin_error
+        else:
+            mean_predicted = np.nan
+            observed_fraction = np.nan
+            bin_error = np.nan
+        rows.append(
+            {
+                "bin": bin_idx,
+                "bin_lower": float(lower),
+                "bin_upper": float(upper),
+                "n": count,
+                "mean_predicted": mean_predicted,
+                "observed_fraction": observed_fraction,
+                "absolute_error": bin_error,
+            }
+        )
+    return float(ece), rows
+
+
+def _calibration_base_row(summary: dict[str, Any], split: str) -> dict[str, Any]:
+    return {
+        "job_slug": _job_slug(summary),
+        "target": summary.get("target", {}).get("name"),
+        "task_type": summary.get("target", {}).get("task_type"),
+        "model": summary.get("model"),
+        "feature_view": summary.get("feature_view", {}).get("name"),
+        "feature_set": summary.get("feature_set", {}).get("name"),
+        "split": split,
+    }
 
 
 def _class_level_rows(

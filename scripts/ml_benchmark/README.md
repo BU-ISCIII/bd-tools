@@ -139,6 +139,8 @@ and writes aggregate artifacts under `outputs/ml_benchmark/.../reports/`:
 - `job_comparison.csv`: one row per completed job with validation/test metrics.
 - `model_rankings.csv`: per-target ranks using each target's main metric.
 - `class_level_metrics.csv`: precision, recall, F1, and support by class.
+- `calibration_metrics.csv`: Brier score and ECE by class and top-label.
+- `calibration_curves.csv`: binned reliability data behind calibration plots.
 - `diagnostic_artifacts.csv`: index of generated diagnostic plots.
 - `validation_vs_test__<target>.png` and `validation_test_bars__<target>.png`.
 - per-job confusion matrices, calibration curves, ROC curves, and PR curves
