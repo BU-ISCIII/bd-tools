@@ -83,12 +83,18 @@ models:
     feature_policy: tree_default
   - name: logistic
     feature_policy: logistic_default
+  - name: logistic_calibrated
+    feature_policy: logistic_calibrated
   - name: random_forest
     feature_policy: tree_default
   - name: catboost
     feature_policy: catboost_default
+  - name: catboost_calibrated
+    feature_policy: catboost_calibrated
   - name: lightgbm
     feature_policy: tree_default
+  - name: lightgbm_calibrated
+    feature_policy: tree_calibrated
   - name: xgboost
     feature_policy: tree_default
 
@@ -108,6 +114,29 @@ feature_policies:
       threshold: 0.80
       mode: report_then_drop
       manual_groups_first: true
+    calibration:
+      enabled: false
+
+  logistic_calibrated:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
 
   tree_default:
     require_numeric: true
@@ -124,6 +153,29 @@ feature_policies:
       threshold: 0.90
       mode: report_only
       manual_groups_first: true
+    calibration:
+      enabled: false
+
+  tree_calibrated:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
 
   catboost_default:
     require_numeric: false
@@ -140,6 +192,29 @@ feature_policies:
       threshold: 0.90
       mode: report_only
       manual_groups_first: true
+    calibration:
+      enabled: false
+
+  catboost_calibrated:
+    require_numeric: false
+    categorical_handling: native
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
 
 feature_groups:
   temperature:
@@ -245,8 +320,11 @@ tuning:
   storage: sqlite
   models:
     - logistic
+    - logistic_calibrated
     - catboost
+    - catboost_calibrated
     - lightgbm
+    - lightgbm_calibrated
 
 compute:
   default_n_jobs: 1

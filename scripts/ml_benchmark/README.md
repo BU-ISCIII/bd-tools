@@ -432,6 +432,26 @@ feature_policies:
       threshold: 0.80
       mode: report_then_drop
       manual_groups_first: true
+    calibration:
+      enabled: false
+
+  logistic_calibrated:
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: optional
+    iqr_outlier_handling: train_fit
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
 
   tree_default:
     categorical_handling: one_hot
@@ -447,6 +467,8 @@ feature_policies:
 models:
   - name: logistic
     feature_policy: logistic_default
+  - name: logistic_calibrated
+    feature_policy: logistic_calibrated
   - name: lightgbm
     feature_policy: tree_default
 ```
@@ -466,6 +488,13 @@ controls the requested number of bins.
 `iqr_outlier_handling: train_fit` learns IQR bounds on the training fold and
 sets values outside those bounds to missing before imputation. Use
 `iqr_multiplier` to change the bound width.
+
+`calibration.enabled: true` wraps the final model in sklearn
+`CalibratedClassifierCV`. The calibration model is fitted inside the same
+training fold as the rest of the pipeline, then validation/test rows are only
+transformed and scored through the fitted pipeline. Use separate model names and
+feature policies, such as `logistic` vs `logistic_calibrated`, when calibration
+should be a benchmark comparison rather than the default behavior.
 
 ## Split Strategy
 

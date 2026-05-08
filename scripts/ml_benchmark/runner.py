@@ -32,8 +32,11 @@ SUPPORTED_TRAINING_MODELS = {
     "dummy_stratified",
     "dummy_prior",
     "logistic",
+    "logistic_calibrated",
     "catboost",
+    "catboost_calibrated",
     "lightgbm",
+    "lightgbm_calibrated",
 }
 
 
@@ -128,8 +131,9 @@ def build_pipeline_contract(
         ).n_jobs,
         model_params=model_params,
         feature_selection=shap_rfecv,
-        feature_selection_estimator_params=shap_rfecv.selector_estimator_params.get(
-            job.model_name, {}
+        feature_selection_estimator_params=_selector_params_for_model(
+            shap_rfecv.selector_estimator_params,
+            job.model_name,
         ),
         feature_selection_cache_dir=(
             _feature_selection_cache_dir(config)
@@ -138,6 +142,16 @@ def build_pipeline_contract(
         ),
         feature_selection_cache_key=_feature_selection_cache_key(job),
     )
+
+
+def _selector_params_for_model(
+    selector_estimator_params: dict[str, dict[str, Any]],
+    model_name: str,
+) -> dict[str, Any]:
+    if model_name in selector_estimator_params:
+        return selector_estimator_params[model_name]
+    base_name = model_name.removesuffix("_calibrated")
+    return selector_estimator_params.get(base_name, {})
 
 
 def _tune_hyperparameters(
@@ -1127,6 +1141,12 @@ def _build_and_write_audit(
                 "created_columns": qcut_created,
             },
             "categorical_encoding": _categorical_encoding_summary(preprocess),
+            "calibration": {
+                "enabled": job.feature_policy.calibration.enabled,
+                "method": job.feature_policy.calibration.method,
+                "cv": job.feature_policy.calibration.cv,
+                "ensemble": job.feature_policy.calibration.ensemble,
+            },
             "correlation": {
                 "enabled": job.feature_policy.correlation_filter.enabled,
                 "mode": job.feature_policy.correlation_filter.mode,

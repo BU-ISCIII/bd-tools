@@ -15,6 +15,7 @@ from typing import List, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin, clone
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import f1_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
@@ -711,11 +712,18 @@ def build_benchmark_pipeline(
         iqr_outlier_handling=job.feature_policy.iqr_outlier_handling,
         iqr_multiplier=job.feature_policy.iqr_multiplier,
     )
-    estimator = model_spec.build_estimator(
+    base_estimator = model_spec.build_estimator(
         task_type=job.target.task_type,
         random_state=random_state,
         n_jobs=n_jobs,
         **(model_params or {}),
+    )
+    final_estimator = _maybe_calibrated_estimator(
+        base_estimator,
+        method=job.feature_policy.calibration.method,
+        cv=job.feature_policy.calibration.cv,
+        ensemble=job.feature_policy.calibration.ensemble,
+        enabled=job.feature_policy.calibration.enabled,
     )
     corr = job.feature_policy.correlation_filter
     if corr.manual_groups_first:
@@ -729,6 +737,11 @@ def build_benchmark_pipeline(
         notes.append("SHAP-RFECV feature selection is fitted inside each split.")
     elif job.feature_set.strategy != "none":
         notes.append(f"Feature-selection strategy '{job.feature_set.strategy}' is unsupported.")
+    if job.feature_policy.calibration.enabled:
+        notes.append(
+            "CalibratedClassifierCV wraps the final estimator and is fitted inside "
+            "each training split."
+        )
 
     pipeline = Pipeline(
         steps=[
@@ -746,7 +759,7 @@ def build_benchmark_pipeline(
                 ShapRFECVSelector(
                     strategy=job.feature_set.strategy,
                     max_features=job.feature_set.max_features,
-                    estimator=estimator,
+                    estimator=base_estimator,
                     task_type=job.target.task_type,
                     cv_splits=shap_rfecv.cv_splits,
                     step_fraction=shap_rfecv.step_fraction,
@@ -759,7 +772,7 @@ def build_benchmark_pipeline(
                     cache_key=feature_selection_cache_key,
                 ),
             ),
-            ("model", estimator),
+            ("model", final_estimator),
         ]
     )
     return PipelineBuildResult(
@@ -768,6 +781,28 @@ def build_benchmark_pipeline(
         categorical_columns=categorical_columns,
         notes=notes,
     )
+
+
+def _maybe_calibrated_estimator(
+    estimator,
+    *,
+    enabled: bool,
+    method: str,
+    cv: int,
+    ensemble: bool,
+):
+    if not enabled:
+        return estimator
+    kwargs = {
+        "method": method,
+        "cv": int(cv),
+        "ensemble": bool(ensemble),
+    }
+    try:
+        return CalibratedClassifierCV(estimator=estimator, **kwargs)
+    except TypeError:
+        kwargs.pop("ensemble", None)
+        return CalibratedClassifierCV(base_estimator=estimator, **kwargs)
 
 
 def build_preprocessor(

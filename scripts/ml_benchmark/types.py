@@ -62,6 +62,14 @@ class CorrelationFilterSpec:
 
 
 @dataclass(frozen=True)
+class CalibrationSpec:
+    enabled: bool = False
+    method: str = "sigmoid"
+    cv: int = 3
+    ensemble: bool = True
+
+
+@dataclass(frozen=True)
 class FeaturePolicySpec:
     name: str
     require_numeric: bool = True
@@ -76,6 +84,7 @@ class FeaturePolicySpec:
     correlation_filter: CorrelationFilterSpec = field(
         default_factory=CorrelationFilterSpec
     )
+    calibration: CalibrationSpec = field(default_factory=CalibrationSpec)
     drop_columns: List[str] = field(default_factory=list)
     drop_patterns: List[str] = field(default_factory=list)
 

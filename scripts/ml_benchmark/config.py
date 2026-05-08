@@ -9,6 +9,7 @@ import yaml
 
 from .types import (
     BenchmarkConfig,
+    CalibrationSpec,
     CorrelationFilterSpec,
     CohortFilterRuleSpec,
     FeatureSelectionSpec,
@@ -131,6 +132,7 @@ def _load_feature_policies(config: Dict[str, Any]) -> Dict[str, FeaturePolicySpe
     policies = {}
     for name, item in raw_policies.items():
         corr = item.get("correlation_filter", {})
+        calibration = item.get("calibration", {})
         policies[name] = FeaturePolicySpec(
             name=name,
             require_numeric=item.get("require_numeric", True),
@@ -147,6 +149,12 @@ def _load_feature_policies(config: Dict[str, Any]) -> Dict[str, FeaturePolicySpe
                 threshold=float(corr.get("threshold", 0.90)),
                 mode=corr.get("mode", "report_only"),
                 manual_groups_first=corr.get("manual_groups_first", True),
+            ),
+            calibration=CalibrationSpec(
+                enabled=bool(calibration.get("enabled", False)),
+                method=calibration.get("method", "sigmoid"),
+                cv=int(calibration.get("cv", 3)),
+                ensemble=bool(calibration.get("ensemble", True)),
             ),
             drop_columns=list(item.get("drop_columns", [])),
             drop_patterns=list(item.get("drop_patterns", [])),
