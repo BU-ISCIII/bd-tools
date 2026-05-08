@@ -276,15 +276,8 @@ feature_sets:
 
   - name: shap_rfecv_top_20
     strategy: shap_rfecv
-    max_features: 20
+    max_features: 30
 
-  - name: shap_rfecv_top_50
-    strategy: shap_rfecv
-    max_features: 50
-
-  - name: shap_rfecv_top_100
-    strategy: shap_rfecv
-    max_features: 100
 
 feature_selection:
   cache_enabled: true

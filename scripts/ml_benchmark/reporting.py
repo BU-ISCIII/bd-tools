@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -75,6 +76,9 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
     """Aggregate completed benchmark job outputs into comparison artifacts."""
     reports_dir = base_output_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
+    legacy_job_reports_dir = reports_dir / "jobs"
+    if legacy_job_reports_dir.exists():
+        shutil.rmtree(legacy_job_reports_dir)
 
     summaries = _load_job_summaries(base_output_dir)
     comparison = _comparison_table(summaries)
@@ -111,7 +115,12 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
             calibration_curve_rows.extend(calibration["curves"])
             threshold_metric_rows.extend(_threshold_metric_rows(summary, split, predictions))
             diagnostic_rows.extend(
-                _write_prediction_diagnostics(summary, split, predictions, reports_dir)
+                _write_prediction_diagnostics(
+                    summary,
+                    split,
+                    predictions,
+                    job_report_dir=job_dir / "reports",
+                )
             )
 
     class_metrics = pd.DataFrame(class_rows)
@@ -138,10 +147,25 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
     diagnostics_path = reports_dir / "diagnostic_artifacts.csv"
     diagnostics.to_csv(diagnostics_path, index=False)
 
+    target_dirs = _write_target_report_tables(
+        reports_dir,
+        {
+            "job_comparison": comparison,
+            "model_rankings": rankings,
+            "class_level_metrics": class_metrics,
+            "calibration_metrics": calibration_metrics,
+            "calibration_curves": calibration_curves,
+            "threshold_metrics": threshold_metrics,
+            "threshold_summary": threshold_summary,
+            "diagnostic_artifacts": diagnostics,
+        },
+    )
+
     manifest = {
         "base_output_dir": str(base_output_dir),
         "reports_dir": str(reports_dir),
         "n_jobs": int(len(summaries)),
+        "target_dirs": target_dirs,
         "files": {
             "job_comparison": str(comparison_path),
             "model_rankings": str(rankings_path),
@@ -243,6 +267,8 @@ def _write_validation_test_plots(
 
     files = []
     for target, target_df in comparison.groupby("target", dropna=False):
+        target_dir = _target_report_dir(reports_dir, str(target))
+        target_dir.mkdir(parents=True, exist_ok=True)
         metric = target_df["main_metric"].dropna().iloc[0]
         plot_df = target_df.dropna(
             subset=["validation_main_metric", "test_main_metric"]
@@ -272,7 +298,7 @@ def _write_validation_test_plots(
         ax.set_ylabel(f"Test {metric}")
         ax.set_title(f"Validation vs Test: {target}")
         fig.tight_layout()
-        path = reports_dir / f"validation_vs_test__{safe_target}.png"
+        path = target_dir / f"validation_vs_test__{safe_target}.png"
         fig.savefig(path, dpi=160)
         plt.close(fig)
         files.append(str(path))
@@ -296,7 +322,7 @@ def _write_validation_test_plots(
         ax.set_title(f"Validation/Test {metric}: {target}")
         ax.legend()
         fig.tight_layout()
-        path = reports_dir / f"validation_test_bars__{safe_target}.png"
+        path = target_dir / f"validation_test_bars__{safe_target}.png"
         fig.savefig(path, dpi=160)
         plt.close(fig)
         files.append(str(path))
@@ -307,17 +333,15 @@ def _write_prediction_diagnostics(
     summary: dict[str, Any],
     split: str,
     predictions: pd.DataFrame,
-    reports_dir: Path,
+    job_report_dir: Path,
 ) -> list[dict[str, str]]:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    target_name = summary.get("target", {}).get("name", "target")
     task_type = summary.get("target", {}).get("task_type")
     job_slug = _job_slug(summary)
-    job_report_dir = reports_dir / "jobs" / job_slug
     job_report_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
@@ -843,6 +867,31 @@ def _artifact_row(
     }
 
 
+def _write_target_report_tables(
+    reports_dir: Path,
+    tables: dict[str, pd.DataFrame],
+) -> dict[str, str]:
+    targets = sorted(
+        {
+            str(target)
+            for table in tables.values()
+            if "target" in table.columns
+            for target in table["target"].dropna().unique().tolist()
+        }
+    )
+    target_dirs = {}
+    for target in targets:
+        target_dir = _target_report_dir(reports_dir, target)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target_dirs[target] = str(target_dir)
+        for name, table in tables.items():
+            if "target" not in table.columns:
+                continue
+            target_table = table.loc[table["target"].astype(str) == target].copy()
+            target_table.to_csv(target_dir / f"{name}.csv", index=False)
+    return target_dirs
+
+
 def _job_slug(summary: dict[str, Any]) -> str:
     return "__".join(
         [
@@ -852,6 +901,10 @@ def _job_slug(summary: dict[str, Any]) -> str:
             str(summary.get("feature_set", {}).get("name")),
         ]
     )
+
+
+def _target_report_dir(reports_dir: Path, target: str) -> Path:
+    return reports_dir / _safe_name(target)
 
 
 def _safe_name(value: str) -> str:

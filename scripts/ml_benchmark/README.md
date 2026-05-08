@@ -134,7 +134,9 @@ should live.
 ## Aggregate Reports
 
 `--build-report` scans completed job folders under the configured `output_dir`
-and writes aggregate artifacts under `outputs/ml_benchmark/.../reports/`:
+and writes aggregate artifacts under `outputs/ml_benchmark/.../reports/`.
+Root-level report files are reserved for tables and plots that compare more
+than one job or target:
 
 - `job_comparison.csv`: one row per completed job with validation/test metrics.
 - `model_rankings.csv`: per-target ranks using each target's main metric.
@@ -145,9 +147,23 @@ and writes aggregate artifacts under `outputs/ml_benchmark/.../reports/`:
 - `threshold_summary.csv`: best binary thresholds by F1, F-beta, balanced
   accuracy, and Youden's J.
 - `diagnostic_artifacts.csv`: index of generated diagnostic plots.
-- `validation_vs_test__<target>.png` and `validation_test_bars__<target>.png`.
-- per-job confusion matrices, calibration curves, ROC curves, and PR curves
-  under `reports/jobs/<job_slug>/`.
+
+The same aggregate tables are also split into one folder per clinical question:
+`outputs/ml_benchmark/.../reports/<target>/`. Target folders also contain
+target-specific validation-vs-test plots:
+
+- `reports/<target>/job_comparison.csv`
+- `reports/<target>/model_rankings.csv`
+- `reports/<target>/validation_vs_test__<target>.png`
+- `reports/<target>/validation_test_bars__<target>.png`
+
+Per-job diagnostic plots are stored with the job itself under
+`outputs/ml_benchmark/.../jobs/<job_slug>/reports/`:
+
+- `<split>_confusion_matrix.png`
+- `<split>_calibration_curve.png`
+- `<split>_roc_curve.png`
+- `<split>_pr_curve.png`
 
 Binary jobs get ROC, PR, and calibration plots using the positive-class
 probability. Multiclass jobs get confusion matrices, class-level metrics, and
