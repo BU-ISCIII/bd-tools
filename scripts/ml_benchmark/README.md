@@ -141,6 +141,9 @@ and writes aggregate artifacts under `outputs/ml_benchmark/.../reports/`:
 - `class_level_metrics.csv`: precision, recall, F1, and support by class.
 - `calibration_metrics.csv`: Brier score and ECE by class and top-label.
 - `calibration_curves.csv`: binned reliability data behind calibration plots.
+- `threshold_metrics.csv`: binary-target metrics across probability thresholds.
+- `threshold_summary.csv`: best binary thresholds by F1, F-beta, balanced
+  accuracy, and Youden's J.
 - `diagnostic_artifacts.csv`: index of generated diagnostic plots.
 - `validation_vs_test__<target>.png` and `validation_test_bars__<target>.png`.
 - per-job confusion matrices, calibration curves, ROC curves, and PR curves

@@ -91,6 +91,7 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
     class_rows = []
     calibration_metric_rows = []
     calibration_curve_rows = []
+    threshold_metric_rows = []
     diagnostic_rows = []
     for item in summaries:
         summary = item["summary"]
@@ -108,6 +109,7 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
             calibration = _calibration_report_rows(summary, split, predictions)
             calibration_metric_rows.extend(calibration["metrics"])
             calibration_curve_rows.extend(calibration["curves"])
+            threshold_metric_rows.extend(_threshold_metric_rows(summary, split, predictions))
             diagnostic_rows.extend(
                 _write_prediction_diagnostics(summary, split, predictions, reports_dir)
             )
@@ -124,6 +126,14 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
     calibration_curves_path = reports_dir / "calibration_curves.csv"
     calibration_curves.to_csv(calibration_curves_path, index=False)
 
+    threshold_metrics = pd.DataFrame(threshold_metric_rows)
+    threshold_metrics_path = reports_dir / "threshold_metrics.csv"
+    threshold_metrics.to_csv(threshold_metrics_path, index=False)
+
+    threshold_summary = _threshold_summary_table(threshold_metrics)
+    threshold_summary_path = reports_dir / "threshold_summary.csv"
+    threshold_summary.to_csv(threshold_summary_path, index=False)
+
     diagnostics = pd.DataFrame(diagnostic_rows)
     diagnostics_path = reports_dir / "diagnostic_artifacts.csv"
     diagnostics.to_csv(diagnostics_path, index=False)
@@ -138,6 +148,8 @@ def build_aggregate_report(base_output_dir: Path) -> Dict[str, Any]:
             "class_level_metrics": str(class_metrics_path),
             "calibration_metrics": str(calibration_metrics_path),
             "calibration_curves": str(calibration_curves_path),
+            "threshold_metrics": str(threshold_metrics_path),
+            "threshold_summary": str(threshold_summary_path),
             "diagnostic_artifacts": str(diagnostics_path),
             "plots": plot_files,
         },
@@ -496,6 +508,139 @@ def _calibration_report_rows(
     metric_rows.extend(top_label["metrics"])
     curve_rows.extend(top_label["curves"])
     return {"metrics": metric_rows, "curves": curve_rows}
+
+
+def _threshold_metric_rows(
+    summary: dict[str, Any],
+    split: str,
+    predictions: pd.DataFrame,
+    thresholds: np.ndarray | None = None,
+) -> list[dict[str, Any]]:
+    if summary.get("target", {}).get("task_type") != "binary":
+        return []
+    proba_columns = [
+        column for column in predictions.columns if column.startswith("proba_")
+    ]
+    if not proba_columns:
+        return []
+    thresholds = thresholds if thresholds is not None else np.linspace(0.0, 1.0, 101)
+    positive_label = _positive_label(summary, predictions["y_true"])
+    proba_column = _positive_probability_column(summary, proba_columns)
+    y_true = (predictions["y_true"].astype(str) == str(positive_label)).astype(int)
+    y_score = predictions[proba_column].astype(float)
+
+    rows = []
+    for threshold in thresholds:
+        y_pred = (y_score >= threshold).astype(int)
+        tp = int(((y_true == 1) & (y_pred == 1)).sum())
+        fp = int(((y_true == 0) & (y_pred == 1)).sum())
+        tn = int(((y_true == 0) & (y_pred == 0)).sum())
+        fn = int(((y_true == 1) & (y_pred == 0)).sum())
+        precision = _safe_divide(tp, tp + fp)
+        recall = _safe_divide(tp, tp + fn)
+        specificity = _safe_divide(tn, tn + fp)
+        npv = _safe_divide(tn, tn + fn)
+        f1 = _fbeta(precision, recall, beta=1.0)
+        f2 = _fbeta(precision, recall, beta=2.0)
+        f05 = _fbeta(precision, recall, beta=0.5)
+        rows.append(
+            {
+                "job_slug": _job_slug(summary),
+                "target": summary.get("target", {}).get("name"),
+                "model": summary.get("model"),
+                "feature_view": summary.get("feature_view", {}).get("name"),
+                "feature_set": summary.get("feature_set", {}).get("name"),
+                "split": split,
+                "positive_label": positive_label,
+                "threshold": float(threshold),
+                "tp": tp,
+                "fp": fp,
+                "tn": tn,
+                "fn": fn,
+                "sensitivity": recall,
+                "recall": recall,
+                "specificity": specificity,
+                "precision": precision,
+                "npv": npv,
+                "f1": f1,
+                "f2": f2,
+                "f0_5": f05,
+                "balanced_accuracy": (
+                    (recall + specificity) / 2
+                    if pd.notna(recall) and pd.notna(specificity)
+                    else np.nan
+                ),
+                "predicted_positive_rate": float(y_pred.mean()),
+                "true_prevalence": float(y_true.mean()),
+            }
+        )
+    return rows
+
+
+def _threshold_summary_table(threshold_metrics: pd.DataFrame) -> pd.DataFrame:
+    if threshold_metrics.empty:
+        return threshold_metrics
+    rows = []
+    criteria = {
+        "best_f1": "f1",
+        "best_f2": "f2",
+        "best_f0_5": "f0_5",
+        "best_balanced_accuracy": "balanced_accuracy",
+        "youden_j": "youden_j",
+    }
+    metrics = threshold_metrics.copy()
+    metrics["youden_j"] = metrics["sensitivity"] + metrics["specificity"] - 1
+    group_columns = ["job_slug", "target", "model", "feature_view", "feature_set", "split"]
+    for group_key, group in metrics.groupby(group_columns, dropna=False):
+        group_values = dict(zip(group_columns, group_key))
+        for criterion, metric_column in criteria.items():
+            ranked = group.dropna(subset=[metric_column])
+            if ranked.empty:
+                continue
+            best = ranked.sort_values(
+                [metric_column, "threshold"],
+                ascending=[False, True],
+            ).iloc[0]
+            rows.append(
+                {
+                    **group_values,
+                    "criterion": criterion,
+                    "optimized_metric": metric_column,
+                    "optimized_value": best[metric_column],
+                    "threshold": best["threshold"],
+                    "sensitivity": best["sensitivity"],
+                    "specificity": best["specificity"],
+                    "precision": best["precision"],
+                    "npv": best["npv"],
+                    "f1": best["f1"],
+                    "f2": best["f2"],
+                    "f0_5": best["f0_5"],
+                    "balanced_accuracy": best["balanced_accuracy"],
+                    "tp": int(best["tp"]),
+                    "fp": int(best["fp"]),
+                    "tn": int(best["tn"]),
+                    "fn": int(best["fn"]),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _safe_divide(numerator: float, denominator: float) -> float:
+    return float(numerator / denominator) if denominator else np.nan
+
+
+def _fbeta(precision: float, recall: float, beta: float) -> float:
+    if pd.isna(precision) or pd.isna(recall):
+        return np.nan
+    if precision == 0 and recall == 0:
+        return 0.0
+    beta_squared = beta**2
+    denominator = beta_squared * precision + recall
+    return (
+        float((1 + beta_squared) * precision * recall / denominator)
+        if denominator
+        else np.nan
+    )
 
 
 def _top_label_calibration(
