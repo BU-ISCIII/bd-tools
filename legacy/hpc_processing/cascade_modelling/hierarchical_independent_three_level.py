@@ -141,7 +141,7 @@ def load_model_filters(config_path: Optional[Path]) -> List[Dict]:
 def apply_model_filters(
     df: pd.DataFrame, filters: List[Dict]
 ) -> Tuple[pd.DataFrame, List[Dict]]:
-    """Apply row-level cohort filters defined in config/model_filters.yml."""
+    """Apply row-level cohort filters defined in mepram/config/model_filters.yml."""
     filtered = df
     applied: List[Dict] = []
     for spec in filters:

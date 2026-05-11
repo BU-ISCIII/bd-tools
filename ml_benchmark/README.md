@@ -3,7 +3,7 @@
 Reusable benchmark package for comparing predictive models across targets,
 model families, and feature-selection strategies.
 
-The package is intentionally outside `scripts/hpc_processing` so the existing
+The package is intentionally outside `legacy/hpc_processing` so the existing
 HPC scripts can remain as historical/project-specific workflows while this
 package becomes the reusable implementation.
 
@@ -58,39 +58,39 @@ full training subset and evaluated once on the held-out test set.
 
 ## Helper Commands
 
-The benchmark is launched through `scripts/run_benchmark.py`. The script reads
+The benchmark is launched through `ml_benchmark/run_benchmark.py`. The script reads
 one YAML config, expands the configured job matrix, selects either one job or a
 filtered subset, and then runs each selected job.
 
 Print the job matrix:
 
 ```bash
-python scripts/run_benchmark.py \
-  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+python ml_benchmark/run_benchmark.py \
+  --config mepram/config/benchmark_mepram.yml \
   --print-job-matrix
 ```
 
 Print the Slurm array line:
 
 ```bash
-python scripts/run_benchmark.py \
-  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+python ml_benchmark/run_benchmark.py \
+  --config mepram/config/benchmark_mepram.yml \
   --print-slurm-array
 ```
 
 Print a full Slurm script:
 
 ```bash
-python scripts/run_benchmark.py \
-  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+python ml_benchmark/run_benchmark.py \
+  --config mepram/config/benchmark_mepram.yml \
   --print-slurm-script
 ```
 
 Run one matrix entry in dry-run mode:
 
 ```bash
-python scripts/run_benchmark.py \
-  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+python ml_benchmark/run_benchmark.py \
+  --config mepram/config/benchmark_mepram.yml \
   --array-index 15 \
   --dry-run
 ```
@@ -98,8 +98,8 @@ python scripts/run_benchmark.py \
 Run one train/evaluate job:
 
 ```bash
-python scripts/run_benchmark.py \
-  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+python ml_benchmark/run_benchmark.py \
+  --config mepram/config/benchmark_mepram.yml \
   --target sepsis \
   --model logistic \
   --feature-view raw_vitals \
@@ -109,8 +109,8 @@ python scripts/run_benchmark.py \
 Build aggregate comparison reports after jobs have completed:
 
 ```bash
-python scripts/run_benchmark.py \
-  --config scripts/ml_benchmark/configs/benchmark_mepram.yml \
+python ml_benchmark/run_benchmark.py \
+  --config mepram/config/benchmark_mepram.yml \
   --build-report
 ```
 
@@ -226,7 +226,7 @@ policies, split strategy, and output location.
 
 ```mermaid
 flowchart TD
-    A["CLI: scripts/run_benchmark.py"] --> B["Load YAML config"]
+    A["CLI: ml_benchmark/run_benchmark.py"] --> B["Load YAML config"]
     B --> C["Build job matrix<br/>target x model x feature_view x feature_set"]
     C --> D{"Select jobs"}
     D -->|array-index| E["One Slurm/local job"]

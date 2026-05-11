@@ -10,7 +10,7 @@ from .types import BenchmarkConfig
 
 def render_slurm_script(config: BenchmarkConfig, n_jobs: int) -> str:
     slurm = config.raw.get("slurm", {})
-    script_path = slurm.get("script_path", "scripts/run_benchmark.py")
+    script_path = slurm.get("script_path", "ml_benchmark/run_benchmark.py")
     config_path = str(config.path)
     return dedent(
         f"""\
@@ -36,4 +36,3 @@ def write_slurm_script(config: BenchmarkConfig, n_jobs: int, output_path: Path) 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(render_slurm_script(config, n_jobs), encoding="utf-8")
     return output_path
-

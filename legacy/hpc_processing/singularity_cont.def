@@ -2,7 +2,7 @@ Bootstrap: docker
 From: python:3.12.9-slim
 
 %files
-    /home/pmata/mepram_data/bd-tools/scripts/hpc_processing/requirements.txt /root/requirements.txt
+    /home/pmata/mepram_data/bd-tools/legacy/hpc_processing/requirements.txt /root/requirements.txt
 
 %post
     set -e

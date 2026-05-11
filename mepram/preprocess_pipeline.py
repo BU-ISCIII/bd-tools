@@ -17,10 +17,10 @@ import pandas as pd
 
 ROOT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT_DIR.parent
-DEFAULT_DB_PATH = ROOT_DIR / "database" / "db_mepram_sepsis.sqlite3"
-DEFAULT_OUTPUT_PATH = ROOT_DIR / "outputs" / "preprocessed_output.csv"
-DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config" / "preprocess_config.py"
-DEFAULT_DROP_COLUMNS_PATH = PROJECT_ROOT / "data" / "preprocess_columns_to_drop.txt"
+DEFAULT_DB_PATH = PROJECT_ROOT / "db_mepram_sepsis_vf.sqlite3"
+DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "preprocess_test.csv"
+DEFAULT_CONFIG_PATH = ROOT_DIR / "config" / "preprocess_config.py"
+DEFAULT_DROP_COLUMNS_PATH = ROOT_DIR / "config" / "preprocess_columns_to_drop.txt"
 
 
 # Dataclasses define the structured objects passed through the pipeline.
@@ -430,17 +430,17 @@ def git_output(args: list[str]) -> str:
 
 def preprocessing_git_metadata() -> dict[str, str]:
     tracked_inputs = [
-        "scripts/preprocess_pipeline.py",
-        "config/preprocess_config.py",
-        "data/preprocess_columns_to_drop.txt",
+        "mepram/preprocess_pipeline.py",
+        "mepram/config/preprocess_config.py",
+        "mepram/config/preprocess_columns_to_drop.txt",
     ]
     dirty_status = git_output(["status", "--porcelain", "--", *tracked_inputs])
     return {
         "GIT_HEAD_COMMIT": git_output(["rev-parse", "HEAD"]),
         "PREPROCESS_SCRIPT_COMMIT": git_output(
-            ["log", "-1", "--format=%H", "--", "scripts/preprocess_pipeline.py"]
+            ["log", "-1", "--format=%H", "--", "mepram/preprocess_pipeline.py"]
         ),
-        "PREPROCESS_SCRIPT_BLOB": git_output(["hash-object", "scripts/preprocess_pipeline.py"]),
+        "PREPROCESS_SCRIPT_BLOB": git_output(["hash-object", "mepram/preprocess_pipeline.py"]),
         "PREPROCESS_CODE_DIRTY": "yes" if dirty_status else "no",
     }
 

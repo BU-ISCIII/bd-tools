@@ -773,9 +773,9 @@ compute:
   max_diagnostic_rows: 1000
 
 # Slurm script rendering options. These are used when printing a Slurm script
-# from scripts/run_benchmark.py; they do not affect local execution directly.
+# from ml_benchmark/run_benchmark.py; they do not affect local execution directly.
 slurm:
-  script_path: scripts/run_benchmark.py
+  script_path: ml_benchmark/run_benchmark.py
   job_name: ml_benchmark
   # Passed to Slurm and read back by the runner to set n_jobs.
   cpus_per_task: 8

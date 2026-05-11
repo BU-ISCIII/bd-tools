@@ -3,6 +3,14 @@
 
 from __future__ import annotations
 
+import sys
+
+if __package__ in {None, ""}:
+    script_dir = sys.path[0]
+    if script_dir.endswith("ml_benchmark"):
+        sys.path.pop(0)
+        sys.path.insert(0, script_dir.rsplit("/", 1)[0] or ".")
+
 import argparse
 import json
 from pathlib import Path

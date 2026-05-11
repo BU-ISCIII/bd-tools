@@ -1,0 +1,4 @@
+source_column,normalized_name,expected_repo_column
+colonizacion_total_cat,colonizacion_total_grouped,colonizacion_total_grouped
+fecha_ingreso_urgencias_x,fecha_ingreso_urgencias_x,
+ultima_fecha,ultima_fecha,

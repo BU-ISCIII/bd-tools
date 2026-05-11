@@ -38,7 +38,7 @@ Settled table-level behavior:
 | `tbl_tratamiento_antibiotico_previo` | Missing or non-positive `dias_trat_antimicrobiano` rows are removed before antibiotic features are built; absent patient/admissions are later filled with `0` for exposure/count columns. Absence after this filtering is interpreted as no valid recorded prior antibiotic exposure. |
 | `tbl_hemocultivo_de_urgencias` | Negative/missing microorganism codes become `NEGATIVE`; BMR/phenotype information is aggregated only when culture organisms are present. |
 | `tbl_otros_cultivos_en_urgencias` | Missing culture type is filled with `0` before duplicate removal; missing/unmapped organisms become `NEGATIVE`; counts are pivoted by grouped organism. |
-| Final filtered dataset | Columns listed in `data/preprocess_columns_to_drop.txt` are dropped; remaining missing feature values are generally left for model-side imputation. |
+| Final filtered dataset | Columns listed in `mepram/config/preprocess_columns_to_drop.txt` are dropped; remaining missing feature values are generally left for model-side imputation. |
 
 ### Microorganism target grouping
 

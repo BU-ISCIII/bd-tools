@@ -17,12 +17,14 @@ from build_clinician_variable_dictionary import (
 )
 
 
+ROOT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = ROOT_DIR.parent
 DEFAULT_SUMMARY_LOG_PATH = Path("preprocess_test_log_summary.csv")
 DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
-DEFAULT_SQLITE_PATH = Path("db_mepram_sepsis_vf.sqlite3")
-DEFAULT_OUTPUT_DIR = Path("preprocess_report")
+DEFAULT_SQLITE_PATH = PROJECT_ROOT / "db_mepram_sepsis_vf.sqlite3"
+DEFAULT_OUTPUT_DIR = ROOT_DIR / "preprocessing_report"
 
 COLORS = {
     "input": "#0072B2",

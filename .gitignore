@@ -68,6 +68,8 @@ preprocess_test_filtered.csv
 preprocess_test_log_detailed.json
 preprocess_test_log_summary.csv
 outputs/
+playground/*
+!playground/.gitignore
 
 # Flask stuff:
 instance/
@@ -132,7 +134,6 @@ celerybeat.pid
 # Environments
 .env
 .venv
-env/
 venv/
 ENV/
 env.bak/

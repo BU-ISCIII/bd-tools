@@ -6,4 +6,4 @@ dependencies:
   - pip
   - ipykernel
   - pip:
-      - -r ../scripts/hpc_processing/requirements.txt
+      - -r ../legacy/hpc_processing/requirements.txt

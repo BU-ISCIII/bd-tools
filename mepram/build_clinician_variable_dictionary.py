@@ -372,7 +372,7 @@ def build_rows(
 
     for column in final_dropped:
         descriptions[column].append(
-            "Removed from the clinician/model-compatible filtered dataset by the final drop list in data/preprocess_columns_to_drop.txt."
+            "Removed from the clinician/model-compatible filtered dataset by the final drop list in mepram/config/preprocess_columns_to_drop.txt."
         )
 
     column_positions = {column: index for index, column in enumerate(full_columns)}
