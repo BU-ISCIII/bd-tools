@@ -76,7 +76,6 @@ MICROORGANISM_BROAD_GROUP_MAP = {
     "Pseudomonas aeruginosa": "Bacilo gram-",
     "Staphylococcus aureus": "Coco gram+",
     "Streptococcus pneumoniae": "Coco gram+",
-    "Enterococcus": "Coco gram+"
 }
 
 FENOTYPE_DRUG_TRANSLATIONS = {
