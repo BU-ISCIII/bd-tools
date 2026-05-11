@@ -20,10 +20,12 @@ def get_model_registry():
     lightgbm = get_lightgbm_spec()
     specs.append(logistic)
     specs.append(replace(logistic, name="logistic_calibrated"))
+    specs.append(replace(logistic, name="logistic_qcut_only"))
     specs.append(get_random_forest_spec())
     specs.append(catboost)
     specs.append(replace(catboost, name="catboost_calibrated"))
     specs.append(lightgbm)
     specs.append(replace(lightgbm, name="lightgbm_calibrated"))
+    specs.append(replace(lightgbm, name="lightgbm_qcut_only"))
     specs.append(get_xgboost_spec())
     return {spec.name: spec for spec in specs}

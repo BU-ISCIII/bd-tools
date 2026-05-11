@@ -440,7 +440,23 @@ feature_policies:
     scale: standard
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  logistic_qcut_only:
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: replace
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     correlation_filter:
@@ -456,7 +472,7 @@ feature_policies:
     scale: standard
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
     iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: true
@@ -474,7 +490,7 @@ feature_policies:
     scale: none
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
     iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: false
@@ -483,6 +499,8 @@ feature_policies:
 models:
   - name: logistic
     feature_policy: logistic_default
+  - name: logistic_qcut_only
+    feature_policy: logistic_qcut_only
   - name: logistic_calibrated
     feature_policy: logistic_calibrated
   - name: lightgbm
@@ -498,9 +516,12 @@ tree policies normally keep `scale: none`.
 
 Numeric and categorical imputation are also policy-specific. `impute_numeric:
 median` and `impute_categorical: most_frequent` are the current defaults.
-`qcut_numeric: optional` appends train-fitted quartile-style columns named
-`<variable>_qcut` only when enough distinct numeric values exist; `qcut_bins`
-controls the requested number of bins.
+`qcut_numeric: none` keeps raw numeric variables without generated qcut
+features. `qcut_numeric: append` adds train-fitted qcut columns named
+`<variable>_qcut` beside the raw numeric source. `qcut_numeric: replace`
+creates `<variable>_qcut` and removes the raw source for variables with enough
+distinct numeric values; low-cardinality variables that cannot be binned remain
+unchanged. `qcut_bins` controls the requested number of bins.
 `iqr_outlier_handling: train_fit` learns IQR bounds on the training fold and
 sets values outside those bounds to missing before imputation. Use
 `iqr_multiplier` to change the bound width.

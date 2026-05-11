@@ -75,28 +75,32 @@ targets:
     main_metric: average_precision
 
 models:
-  - name: dummy_uniform
-    feature_policy: tree_default
-  - name: dummy_stratified
-    feature_policy: tree_default
+  #- name: dummy_uniform
+  #   feature_policy: tree_default
+  # - name: dummy_stratified
+  #   feature_policy: tree_default
   - name: dummy_prior
     feature_policy: tree_default
   - name: logistic
     feature_policy: logistic_default
+  - name: logistic_qcut_only
+    feature_policy: logistic_qcut_only
   - name: logistic_calibrated
     feature_policy: logistic_calibrated
-  - name: random_forest
-    feature_policy: tree_default
+  # - name: random_forest
+  #   feature_policy: tree_default
   - name: catboost
     feature_policy: catboost_default
   - name: catboost_calibrated
     feature_policy: catboost_calibrated
   - name: lightgbm
     feature_policy: tree_default
+  - name: lightgbm_qcut_only
+    feature_policy: tree_qcut_only
   - name: lightgbm_calibrated
     feature_policy: tree_calibrated
-  - name: xgboost
-    feature_policy: tree_default
+  # - name: xgboost
+  #   feature_policy: tree_default
 
 feature_policies:
   logistic_default:
@@ -105,7 +109,25 @@ feature_policies:
     scale: standard
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  logistic_qcut_only:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: replace
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     iqr_multiplier: 3.0
@@ -123,7 +145,7 @@ feature_policies:
     scale: standard
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     iqr_multiplier: 3.0
@@ -144,7 +166,25 @@ feature_policies:
     scale: none
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  tree_qcut_only:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: replace
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     iqr_multiplier: 3.0
@@ -162,7 +202,7 @@ feature_policies:
     scale: none
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     iqr_multiplier: 3.0
@@ -183,7 +223,7 @@ feature_policies:
     scale: none
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     iqr_multiplier: 3.0
@@ -201,7 +241,7 @@ feature_policies:
     scale: none
     impute_numeric: median
     impute_categorical: most_frequent
-    qcut_numeric: optional
+    qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
     iqr_multiplier: 3.0
@@ -218,31 +258,193 @@ feature_policies:
 
 feature_groups:
   temperature:
-    description: Alternative temperature/fever representations available after preprocessing.
+    description: Alternative temperature/fever representations, including sources that can generate temperatura_qcut.
     alternatives:
       raw:
         include:
           - temperatura
         exclude:
-          - temperatura_recoded
+          - temperatura_qcut
+          - hipotermia_hipertermia
           - sintoma_fiebre
           - sintoma_fiebre_categorico
 
       binary_flags:
         include:
+          - hipotermia_hipertermia
           - sintoma_fiebre
         exclude:
           - temperatura
-          - temperatura_recoded
+          - temperatura_qcut
           - sintoma_fiebre_categorico
 
       category:
         include:
-          - temperatura_recoded
           - sintoma_fiebre_categorico
         exclude:
           - temperatura
+          - temperatura_qcut
+          - hipotermia_hipertermia
           - sintoma_fiebre
+
+      qcut_source:
+        include:
+          - temperatura
+        exclude:
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+          - sintoma_fiebre_categorico
+
+  heart_rate:
+    description: Alternative heart-rate representations, including sources that can generate frec_cardiaca_qcut.
+    alternatives:
+      raw:
+        include:
+          - frec_cardiaca
+        exclude:
+          - frec_cardiaca_qcut
+          - taquicardia
+      binary_flags:
+        include:
+          - taquicardia
+        exclude:
+          - frec_cardiaca
+          - frec_cardiaca_qcut
+      qcut_source:
+        include:
+          - frec_cardiaca
+        exclude:
+          - taquicardia
+
+  respiratory_rate:
+    description: Alternative respiratory-rate representations, including sources that can generate frec_respiratoria_qcut.
+    alternatives:
+      raw:
+        include:
+          - frec_respiratoria
+        exclude:
+          - frec_respiratoria_qcut
+          - taquipnea
+      binary_flags:
+        include:
+          - taquipnea
+        exclude:
+          - frec_respiratoria
+          - frec_respiratoria_qcut
+      qcut_source:
+        include:
+          - frec_respiratoria
+        exclude:
+          - taquipnea
+
+  oxygen_saturation:
+    description: Alternative oxygen-saturation representations, including sources that can generate saturacion_o2_qcut.
+    alternatives:
+      raw:
+        include:
+          - saturacion_o2
+        exclude:
+          - saturacion_o2_qcut
+          - hipoxemia
+      binary_flags:
+        include:
+          - hipoxemia
+        exclude:
+          - saturacion_o2
+          - saturacion_o2_qcut
+      qcut_source:
+        include:
+          - saturacion_o2
+        exclude:
+          - hipoxemia
+
+  lactate:
+    description: Lactate source variable that can generate lactato_serico_qcut in model preprocessing.
+    alternatives:
+      raw:
+        include:
+          - lactato_serico
+        exclude:
+          - lactato_serico_qcut
+      qcut_source:
+        include:
+          - lactato_serico
+
+  blood_pressure:
+    description: Blood-pressure source variable that can generate tension_arterial_qcut in model preprocessing.
+    alternatives:
+      raw:
+        include:
+          - tension_arterial
+        exclude:
+          - tension_arterial_qcut
+      qcut_source:
+        include:
+          - tension_arterial
+
+  inflammatory_markers:
+    description: Continuous analytical markers that can generate model-fitted qcut variables.
+    alternatives:
+      raw:
+        include:
+          - proteina_c_reactiva
+          - bilirrubina
+          - plaquetas
+          - creatinina
+        exclude:
+          - proteina_c_reactiva_qcut
+          - bilirrubina_qcut
+          - plaquetas_qcut
+          - creatinina_qcut
+      qcut_source:
+        include:
+          - proteina_c_reactiva
+          - bilirrubina
+          - plaquetas
+          - creatinina
+
+  symptoms:
+    description: Symptom alternatives where preprocessing keeps both binary and categorical codifications.
+    alternatives:
+      binary_flags:
+        include_patterns:
+          - "sintoma_*"
+        exclude_patterns:
+          - "sintoma_*_categorico"
+      category:
+        include_patterns:
+          - "sintoma_*_categorico"
+        exclude:
+          - sintoma_abdominal
+          - sintoma_articular
+          - sintoma_cefalea
+          - sintoma_costal
+          - sintoma_diarrea
+          - sintoma_disuria
+          - sintoma_fiebre
+          - sintoma_mucosa
+          - sintoma_náuseas
+          - sintoma_piel
+          - sintoma_polaquiuria
+          - sintoma_recto
+          - sintoma_renal
+          - sintoma_respirar
+          - sintoma_tos
+          - sintoma_vómitos
+
+  previous_antibiotic_families:
+    description: Previous-antibiotic family alternatives with count and binary codifications.
+    alternatives:
+      counts:
+        include_patterns:
+          - "antib_previo_*_counts"
+        exclude_patterns:
+          - "antib_previo_*_binary"
+      binary_flags:
+        include_patterns:
+          - "antib_previo_*_binary"
+        exclude_patterns:
+          - "antib_previo_*_counts"
 
 feature_views:
   - name: raw_vitals
@@ -251,6 +453,14 @@ feature_views:
       - "*"
     groups:
       temperature: raw
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      lactate: raw
+      blood_pressure: raw
+      inflammatory_markers: raw
+      symptoms: binary_flags
+      previous_antibiotic_families: counts
 
   - name: binary_vitals
     description: Prefer clinically thresholded vital-sign flags.
@@ -258,6 +468,14 @@ feature_views:
       - "*"
     groups:
       temperature: binary_flags
+      heart_rate: binary_flags
+      respiratory_rate: binary_flags
+      oxygen_saturation: binary_flags
+      lactate: raw
+      blood_pressure: raw
+      inflammatory_markers: raw
+      symptoms: binary_flags
+      previous_antibiotic_families: binary_flags
 
   - name: categorical_vitals
     description: Prefer ordinal/categorical vital-sign representations.
@@ -265,6 +483,14 @@ feature_views:
       - "*"
     groups:
       temperature: category
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      lactate: raw
+      blood_pressure: raw
+      inflammatory_markers: raw
+      symptoms: category
+      previous_antibiotic_families: counts
 
 feature_sets:
   - name: all_features
@@ -313,10 +539,12 @@ tuning:
   storage: sqlite
   models:
     - logistic
+    - logistic_qcut_only
     - logistic_calibrated
     - catboost
     - catboost_calibrated
     - lightgbm
+    - lightgbm_qcut_only
     - lightgbm_calibrated
 
 compute:

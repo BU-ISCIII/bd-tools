@@ -605,7 +605,7 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
 
         cleaned = self._apply_iqr(X)
         self.qcut_bins_ = {}
-        if self.qcut_numeric in {"optional", "append", "quartile"}:
+        if self.qcut_numeric in {"append", "replace"}:
             for column in self.feature_names_in_:
                 series = cleaned[column].dropna()
                 if series.empty or series.nunique(dropna=True) < self.qcut_bins:
@@ -625,7 +625,7 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
         elif self.qcut_numeric != "none":
             raise ValueError(
                 f"Unsupported qcut_numeric='{self.qcut_numeric}'. "
-                "Use 'none', 'optional', 'append', or 'quartile'."
+                "Use one of: none, append, replace."
             )
 
         expanded = self._append_qcut(cleaned)
@@ -677,7 +677,13 @@ class NumericFeatureBuilder(BaseEstimator, TransformerMixin):
             qcut_columns[qcut_column] = encoded.astype(float)
         if not qcut_columns:
             return X.copy()
-        return pd.concat([X.copy(), pd.DataFrame(qcut_columns, index=X.index)], axis=1)
+        qcut_frame = pd.DataFrame(qcut_columns, index=X.index)
+        if self.qcut_numeric == "replace":
+            source_columns = {
+                column for column, bins in self.qcut_bins_.items() if len(bins) >= 2
+            }
+            return pd.concat([X.drop(columns=source_columns), qcut_frame], axis=1)
+        return pd.concat([X.copy(), qcut_frame], axis=1)
 
 
 def build_benchmark_pipeline(

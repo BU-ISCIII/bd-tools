@@ -33,10 +33,12 @@ SUPPORTED_TRAINING_MODELS = {
     "dummy_prior",
     "logistic",
     "logistic_calibrated",
+    "logistic_qcut_only",
     "catboost",
     "catboost_calibrated",
     "lightgbm",
     "lightgbm_calibrated",
+    "lightgbm_qcut_only",
 }
 
 
@@ -150,8 +152,10 @@ def _selector_params_for_model(
 ) -> dict[str, Any]:
     if model_name in selector_estimator_params:
         return selector_estimator_params[model_name]
-    base_name = model_name.removesuffix("_calibrated")
-    return selector_estimator_params.get(base_name, {})
+    for base_name in ("logistic", "catboost", "lightgbm", "random_forest", "xgboost"):
+        if model_name.startswith(base_name):
+            return selector_estimator_params.get(base_name, {})
+    return {}
 
 
 def _tune_hyperparameters(
