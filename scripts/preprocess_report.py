@@ -22,7 +22,7 @@ DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
 DEFAULT_SQLITE_PATH = Path("db_mepram_sepsis_vf.sqlite3")
-DEFAULT_OUTPUT_DIR = Path("report")
+DEFAULT_OUTPUT_DIR = Path("preprocess_report")
 
 COLORS = {
     "input": "#0072B2",

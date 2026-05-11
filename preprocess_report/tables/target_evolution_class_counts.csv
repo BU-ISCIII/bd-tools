@@ -110,9 +110,9 @@ Etiology,Clinical organism grouping,resultado_hemo,Streptococcus pneumoniae,106,
 Etiology,Clinical organism grouping,resultado_hemo,Pseudomonas aeruginosa,84,2.1
 Etiology,Clinical organism grouping,resultado_hemo,Enterococcus,39,1.0
 Etiology,Clinical organism grouping,resultado_hemo,_Fungi,7,0.2
-Etiology,Gram grouped,resultado_hemo_grouped,NEGATIVE,2277,58.2
+Etiology,Gram grouped,resultado_hemo_grouped,NEGATIVE,2316,59.2
 Etiology,Gram grouped,resultado_hemo_grouped,Bacilo gram-,1320,33.7
-Etiology,Gram grouped,resultado_hemo_grouped,Coco gram+,316,8.1
+Etiology,Gram grouped,resultado_hemo_grouped,Coco gram+,277,7.1
 Resistance,Individual phenotype labels,fenotipo_resistencia_individual,NEGATIVE,3152,80.6
 Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico,438,11.2
 Resistance,Individual phenotype labels,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino,315,8.1

@@ -3,9 +3,9 @@ _pipeline_run,0,0,0,0,0,9
 tbl_paciente,2,3,0,0,0,0
 tbl_comorbilidad,2,0,86,2,0,0
 tbl_factores_riesgo_bmr,0,0,0,0,0,1
-tbl_sintomas,32,1,0,2,0,0
+tbl_sintomas,16,1,0,18,0,0
 tbl_signos,5,5,5,0,0,0
-tbl_sepsis,13,2,9,0,0,0
+tbl_sepsis,1,2,9,0,0,0
 tbl_infecciones_previas,34,1,34,5,0,0
 tbl_tratamiento_antibiotico_previo,48,3,50,4,0,2
 tbl_hemocultivo_de_urgencias,34,1,3,4,1,1

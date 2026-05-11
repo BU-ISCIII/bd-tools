@@ -1,10 +1,10 @@
 group,variables,0%,>0-10%,10-40%,40-80%,80-100%,max_missing_percent
-Patient/admission,8,8,0,0,0,0,0.0
+Patient/admission,6,6,0,0,0,0,0.0
 Comorbidities,21,19,0,1,1,0,75.5
 BMR risk factors,14,13,0,0,0,1,100.0
-Symptoms,32,0,32,0,0,0,0.5
-Vital signs,15,7,6,0,2,0,42.2
-Sepsis and infection focus,16,6,5,5,0,0,19.6
+Symptoms,16,0,16,0,0,0,0.5
+Vital signs,9,5,3,0,1,0,42.2
+Sepsis and infection focus,12,4,4,4,0,0,19.6
 Previous infections,14,14,0,0,0,0,0.0
 Previous antibiotic treatment,48,47,0,0,1,0,64.6
 Emergency blood cultures,5,5,0,0,0,0,0.0

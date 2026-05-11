@@ -1,10 +1,10 @@
 group,unfiltered_variables,filtered_variables,removed_by_filter
-Patient/admission,13,8,5
+Patient/admission,13,6,7
 Comorbidities,107,21,86
 BMR risk factors,14,14,0
-Symptoms,32,32,0
-Vital signs,15,15,0
-Sepsis and infection focus,28,16,12
+Symptoms,16,16,0
+Vital signs,15,9,6
+Sepsis and infection focus,16,12,4
 Previous infections,34,14,20
 Previous antibiotic treatment,48,48,0
 Emergency blood cultures,35,5,30
