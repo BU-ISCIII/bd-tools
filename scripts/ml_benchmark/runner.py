@@ -1046,6 +1046,8 @@ def _build_and_write_audit(
     corr_pairs = _top_correlation_pairs(
         corr_matrix,
         threshold=job.feature_policy.correlation_filter.threshold,
+        variances=corr_numeric.var(),
+        dropped_features=set(correlation_filter.dropped_features_),
     )
     corr_pairs_path = output_dir / "correlation_pairs.csv"
     corr_pairs.to_csv(corr_pairs_path, index=False)
@@ -1300,23 +1302,51 @@ def _iqr_report(X_train: pd.DataFrame, numeric_builder) -> pd.DataFrame:
     )
 
 
-def _top_correlation_pairs(corr: pd.DataFrame, threshold: float) -> pd.DataFrame:
+def _top_correlation_pairs(
+    corr: pd.DataFrame,
+    threshold: float,
+    variances: pd.Series,
+    dropped_features: set[str],
+) -> pd.DataFrame:
     rows = []
     columns = list(corr.columns)
     for left_idx, left in enumerate(columns):
         for right in columns[left_idx + 1 :]:
             value = float(abs(corr.loc[left, right]))
             if value > threshold:
+                left_variance = float(variances.get(left, np.nan))
+                right_variance = float(variances.get(right, np.nan))
+                higher_variance_feature = (
+                    left if left_variance >= right_variance else right
+                )
                 rows.append(
                     {
                         "feature_1": left,
                         "feature_2": right,
                         "abs_spearman": value,
+                        "feature_1_variance": left_variance,
+                        "feature_2_variance": right_variance,
+                        "higher_variance_feature": higher_variance_feature,
+                        "feature_1_status": (
+                            "dropped" if left in dropped_features else "kept"
+                        ),
+                        "feature_2_status": (
+                            "dropped" if right in dropped_features else "kept"
+                        ),
                     }
                 )
     return pd.DataFrame(
         rows,
-        columns=["feature_1", "feature_2", "abs_spearman"],
+        columns=[
+            "feature_1",
+            "feature_2",
+            "abs_spearman",
+            "feature_1_variance",
+            "feature_2_variance",
+            "higher_variance_feature",
+            "feature_1_status",
+            "feature_2_status",
+        ],
     ).sort_values("abs_spearman", ascending=False)
 
 

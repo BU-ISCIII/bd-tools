@@ -60,9 +60,9 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
 
         frame = _as_frame(X, self.feature_names_in_)
         corr = frame.corr(method="spearman").abs().fillna(0.0)
+        variances = frame.var()
         self.correlation_matrix_ = corr
-        self.correlation_pairs_ = _correlation_pairs(corr, self.threshold)
-        col_order = frame.var().sort_values(ascending=False).index.tolist()
+        col_order = variances.sort_values(ascending=False).index.tolist()
 
         dropped = set()
         kept_ordered: List[str] = []
@@ -76,6 +76,12 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
                     dropped.add(partner)
 
         self.dropped_features_ = [c for c in self.feature_names_in_ if c in dropped]
+        self.correlation_pairs_ = _correlation_pairs(
+            corr,
+            self.threshold,
+            variances,
+            set(self.dropped_features_),
+        )
         if self.mode in {"report_then_drop", "auto_drop"}:
             kept_set = set(kept_ordered)
             self.kept_indices_ = [
@@ -94,18 +100,37 @@ class CorrelationFilter(BaseEstimator, TransformerMixin):
         return np.asarray([self.feature_names_in_[idx] for idx in self.kept_indices_])
 
 
-def _correlation_pairs(corr: pd.DataFrame, threshold: float) -> list[dict[str, object]]:
+def _correlation_pairs(
+    corr: pd.DataFrame,
+    threshold: float,
+    variances: pd.Series,
+    dropped_features: set[str],
+) -> list[dict[str, object]]:
     pairs: list[dict[str, object]] = []
     columns = list(corr.columns)
     for left_idx, left in enumerate(columns):
         for right in columns[left_idx + 1 :]:
             value = float(corr.loc[left, right])
             if value > threshold:
+                left_variance = float(variances.get(left, np.nan))
+                right_variance = float(variances.get(right, np.nan))
+                higher_variance_feature = (
+                    left if left_variance >= right_variance else right
+                )
                 pairs.append(
                     {
                         "feature_1": left,
                         "feature_2": right,
                         "abs_spearman": value,
+                        "feature_1_variance": left_variance,
+                        "feature_2_variance": right_variance,
+                        "higher_variance_feature": higher_variance_feature,
+                        "feature_1_status": (
+                            "dropped" if left in dropped_features else "kept"
+                        ),
+                        "feature_2_status": (
+                            "dropped" if right in dropped_features else "kept"
+                        ),
                     }
                 )
     return sorted(pairs, key=lambda item: item["abs_spearman"], reverse=True)
