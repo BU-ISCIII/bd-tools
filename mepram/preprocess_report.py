@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import sqlite3
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -23,7 +22,6 @@ DEFAULT_SUMMARY_LOG_PATH = Path("preprocess_test_log_summary.csv")
 DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
-DEFAULT_SQLITE_PATH = PROJECT_ROOT / "db_mepram_sepsis_vf.sqlite3"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "preprocessing_report"
 
 COLORS = {
@@ -629,69 +627,8 @@ def series_balance_records(
     return summary, class_records
 
 
-def raw_phenotype_target_from_sqlite(
-    filtered_df: pd.DataFrame,
-    sqlite_path: Path | None,
-) -> pd.Series | None:
-    if sqlite_path is None or not sqlite_path.exists():
-        return None
-
-    with sqlite3.connect(sqlite_path) as connection:
-        raw = pd.read_sql_query(
-            """
-            SELECT person_id, fecha_ingreso_urgencias, fenotipo_resistencia
-            FROM tbl_hemocultivo_de_urgencias
-            """,
-            connection,
-        )
-        code_names = pd.read_sql_query(
-            """
-            SELECT value, name
-            FROM tbl_codes2names
-            WHERE variable = 'fenotipo_resistencia'
-            """,
-            connection,
-        )
-
-    phenotype_name_map = {
-        str(row.value): str(row.name)
-        for row in code_names.itertuples(index=False)
-        if pd.notna(row.value) and pd.notna(row.name)
-    }
-
-    def decode_codes(values: pd.Series) -> str:
-        labels = []
-        for value in values.dropna():
-            try:
-                key = str(int(float(value)))
-            except (TypeError, ValueError):
-                key = str(value)
-            if key in phenotype_name_map:
-                labels.append(phenotype_name_map[key])
-        labels = sorted(set(labels))
-        if not labels:
-            return "NEGATIVE"
-        return " + ".join(labels)
-
-    grouped = (
-        raw.groupby(["person_id", "fecha_ingreso_urgencias"], dropna=False)[
-            "fenotipo_resistencia"
-        ]
-        .apply(decode_codes)
-        .reset_index(name="raw_fenotipo_resistencia")
-    )
-    merged = filtered_df[["person_id", "fecha_ingreso_urgencias"]].merge(
-        grouped,
-        on=["person_id", "fecha_ingreso_urgencias"],
-        how="left",
-    )
-    return merged["raw_fenotipo_resistencia"].fillna("NEGATIVE")
-
-
 def target_evolution_summary(
     filtered_df: pd.DataFrame,
-    *,
-    sqlite_path: Path | None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     required_columns = {
         "resultado_hemo",
@@ -762,18 +699,6 @@ def target_evolution_summary(
         )
         summaries.append(summary)
         class_records.extend(records)
-    else:
-        raw_phenotype = raw_phenotype_target_from_sqlite(filtered_df, sqlite_path)
-        if raw_phenotype is not None:
-            summary, records = series_balance_records(
-                domain="Resistance",
-                target_version="Individual phenotype combinations",
-                target_column="raw_fenotipo_resistencia",
-                values=raw_phenotype,
-                notes="Derived from SQLite hemoculture phenotype codes and decoded with tbl_codes2names.",
-            )
-            summaries.append(summary)
-            class_records.extend(records)
 
     summary, records = multilabel_balance_records(
         domain="Resistance",
@@ -1288,7 +1213,6 @@ def build_report(
     detailed_log_path: Path,
     full_dataset_path: Path | None,
     filtered_dataset_path: Path | None,
-    sqlite_path: Path | None,
     output_dir: Path,
     build_dictionary: bool = True,
 ) -> None:
@@ -1379,8 +1303,7 @@ def build_report(
             index=False,
         )
         evolution_summary, evolution_class_counts = target_evolution_summary(
-            filtered_df,
-            sqlite_path=sqlite_path,
+            filtered_df
         )
         evolution_summary.to_csv(tables_dir / "target_evolution_summary.csv", index=False)
         evolution_class_counts.to_csv(
@@ -1439,7 +1362,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--detailed-log-path", type=Path, default=DEFAULT_DETAILED_LOG_PATH)
     parser.add_argument("--full-dataset-path", type=Path, default=DEFAULT_FULL_DATASET_PATH)
     parser.add_argument("--filtered-dataset-path", type=Path, default=DEFAULT_FILTERED_DATASET_PATH)
-    parser.add_argument("--sqlite-path", type=Path, default=DEFAULT_SQLITE_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument(
         "--skip-variable-dictionary",
@@ -1456,7 +1378,6 @@ def main() -> None:
         detailed_log_path=args.detailed_log_path,
         full_dataset_path=args.full_dataset_path,
         filtered_dataset_path=args.filtered_dataset_path,
-        sqlite_path=args.sqlite_path,
         output_dir=args.output_dir,
         build_dictionary=not args.skip_variable_dictionary,
     )

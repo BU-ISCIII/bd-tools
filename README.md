@@ -92,7 +92,6 @@ The report entry point is:
   --detailed-log-path preprocess_test_log_detailed.json \
   --full-dataset-path preprocess_test.csv \
   --filtered-dataset-path preprocess_test_filtered.csv \
-  --sqlite-path db_mepram_sepsis_vf.sqlite3 \
   --output-dir mepram/preprocessing_report
 ```
 
@@ -104,7 +103,6 @@ For a versioned run folder, use the matching run files:
   --detailed-log-path "${RUN_DIR}/${RUN_ID}_full_log_detailed.json" \
   --full-dataset-path "${RUN_DIR}/${RUN_ID}_full.csv" \
   --filtered-dataset-path "${RUN_DIR}/${RUN_ID}_full_filtered.csv" \
-  --sqlite-path db_mepram_sepsis_vf.sqlite3 \
   --output-dir "${RUN_DIR}/preprocessing_report"
 ```
 

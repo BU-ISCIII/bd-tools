@@ -38,6 +38,5 @@ From the repository root:
   --detailed-log-path preprocess_test_log_detailed.json \
   --full-dataset-path preprocess_test.csv \
   --filtered-dataset-path preprocess_test_filtered.csv \
-  --sqlite-path db_mepram_sepsis_vf.sqlite3 \
   --output-dir mepram/preprocessing_report
 ```
