@@ -41,9 +41,3 @@ From the repository root:
   --sqlite-path db_mepram_sepsis_vf.sqlite3 \
   --output-dir mepram/preprocessing_report
 ```
-
-```bash
-./.venv/bin/python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
-  --target sepsis
-```
