@@ -1297,13 +1297,17 @@ def build_report(
     tables_dir = output_dir / "tables"
     graphs_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
-    summary = pd.read_csv(summary_log_path)
+    summary = pd.read_csv(summary_log_path, low_memory=False)
     detailed_logs = json.loads(detailed_log_path.read_text(encoding="utf-8"))
     change_counts = summarize_change_counts(detailed_logs)
 
-    full_df = pd.read_csv(full_dataset_path) if full_dataset_path and full_dataset_path.exists() else None
+    full_df = (
+        pd.read_csv(full_dataset_path, low_memory=False)
+        if full_dataset_path and full_dataset_path.exists()
+        else None
+    )
     filtered_df = (
-        pd.read_csv(filtered_dataset_path)
+        pd.read_csv(filtered_dataset_path, low_memory=False)
         if filtered_dataset_path and filtered_dataset_path.exists()
         else None
     )

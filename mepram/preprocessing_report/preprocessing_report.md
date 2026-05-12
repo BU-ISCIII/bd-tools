@@ -119,41 +119,41 @@ Original microorganism target before clinical grouping; shown as top 50 classes 
 | _Enterobacteria | 17 | 0.4% |
 | Enterococcus faecium | 13 | 0.3% |
 | Salmonella enterica | 12 | 0.3% |
-| Serratia marcescens | 10 | 0.3% |
 | Klebsiella aerogenes | 10 | 0.3% |
-| Streptococcus agalactiae | 8 | 0.2% |
+| Serratia marcescens | 10 | 0.3% |
 | Haemophilus influenzae | 8 | 0.2% |
+| Streptococcus agalactiae | 8 | 0.2% |
 | Streptococcus gallolyticus | 7 | 0.2% |
 | Citrobacter koseri | 7 | 0.2% |
 | Streptococcus anginosus | 6 | 0.2% |
 | _Other bacteria | 6 | 0.2% |
 | Bacteroides fragilis | 6 | 0.2% |
-| Citrobacter freundii | 5 | 0.1% |
-| Staphylococcus haemolyticus | 5 | 0.1% |
 | Streptococcus mitis | 5 | 0.1% |
-| Listeria monocytogenes | 4 | 0.1% |
-| Streptococcus parasanguinis | 4 | 0.1% |
-| Staphylococcus capitis | 4 | 0.1% |
-| género Salmonella | 4 | 0.1% |
-| género Streptococcus | 4 | 0.1% |
+| Staphylococcus haemolyticus | 5 | 0.1% |
+| Citrobacter freundii | 5 | 0.1% |
 | Morganella morganii | 4 | 0.1% |
+| género Salmonella | 4 | 0.1% |
+| Listeria monocytogenes | 4 | 0.1% |
+| género Streptococcus | 4 | 0.1% |
+| Staphylococcus capitis | 4 | 0.1% |
 | Streptococcus oralis | 4 | 0.1% |
-| Providencia stuartii | 3 | 0.1% |
-| Streptococcus dysgalactiae | 3 | 0.1% |
+| Streptococcus parasanguinis | 4 | 0.1% |
 | Brevibacterium epidermidis | 3 | 0.1% |
-| Micrococcus luteus | 2 | 0.1% |
-| Bacteroides thetaiotaomicron | 2 | 0.1% |
-| Candida glabrata | 2 | 0.1% |
-| Streptococcus equi | 2 | 0.1% |
-| Peptoniphilus harei | 2 | 0.1% |
-| Streptococcus beta - hemolítico | 2 | 0.1% |
-| _Fungi | 2 | 0.1% |
-| género Elizabethkingia | 2 | 0.1% |
+| Streptococcus dysgalactiae | 3 | 0.1% |
+| Providencia stuartii | 3 | 0.1% |
 | Corynebacterium afermentans | 2 | 0.1% |
-| género Brevibacillus | 2 | 0.1% |
-| Fusobacterium nucleatum | 2 | 0.1% |
 | Candida parapsilosis | 2 | 0.1% |
+| género Elizabethkingia | 2 | 0.1% |
+| Fusobacterium nucleatum | 2 | 0.1% |
+| género Brevibacillus | 2 | 0.1% |
+| Streptococcus pyogenes | 2 | 0.1% |
+| Streptococcus beta - hemolítico | 2 | 0.1% |
 | Streptococcus sanguinis | 2 | 0.1% |
+| Peptoniphilus harei | 2 | 0.1% |
+| _Fungi | 2 | 0.1% |
+| Candida glabrata | 2 | 0.1% |
+| Bacteroides thetaiotaomicron | 2 | 0.1% |
+| Micrococcus luteus | 2 | 0.1% |
 | Other | 52 | 1.3% |
 | Total | 3,913 | 100.0% |
 

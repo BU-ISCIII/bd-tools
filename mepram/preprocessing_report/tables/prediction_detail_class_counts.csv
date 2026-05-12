@@ -17,41 +17,41 @@ Etiology - microorganisms,resultado_hemo_mo,Enterococcus faecalis,24,0.6
 Etiology - microorganisms,resultado_hemo_mo,_Enterobacteria,17,0.4
 Etiology - microorganisms,resultado_hemo_mo,Enterococcus faecium,13,0.3
 Etiology - microorganisms,resultado_hemo_mo,Salmonella enterica,12,0.3
-Etiology - microorganisms,resultado_hemo_mo,Serratia marcescens,10,0.3
 Etiology - microorganisms,resultado_hemo_mo,Klebsiella aerogenes,10,0.3
-Etiology - microorganisms,resultado_hemo_mo,Streptococcus agalactiae,8,0.2
+Etiology - microorganisms,resultado_hemo_mo,Serratia marcescens,10,0.3
 Etiology - microorganisms,resultado_hemo_mo,Haemophilus influenzae,8,0.2
+Etiology - microorganisms,resultado_hemo_mo,Streptococcus agalactiae,8,0.2
 Etiology - microorganisms,resultado_hemo_mo,Streptococcus gallolyticus,7,0.2
 Etiology - microorganisms,resultado_hemo_mo,Citrobacter koseri,7,0.2
 Etiology - microorganisms,resultado_hemo_mo,Streptococcus anginosus,6,0.2
 Etiology - microorganisms,resultado_hemo_mo,_Other bacteria,6,0.2
 Etiology - microorganisms,resultado_hemo_mo,Bacteroides fragilis,6,0.2
-Etiology - microorganisms,resultado_hemo_mo,Citrobacter freundii,5,0.1
-Etiology - microorganisms,resultado_hemo_mo,Staphylococcus haemolyticus,5,0.1
 Etiology - microorganisms,resultado_hemo_mo,Streptococcus mitis,5,0.1
-Etiology - microorganisms,resultado_hemo_mo,Listeria monocytogenes,4,0.1
-Etiology - microorganisms,resultado_hemo_mo,Streptococcus parasanguinis,4,0.1
-Etiology - microorganisms,resultado_hemo_mo,Staphylococcus capitis,4,0.1
-Etiology - microorganisms,resultado_hemo_mo,género Salmonella,4,0.1
-Etiology - microorganisms,resultado_hemo_mo,género Streptococcus,4,0.1
+Etiology - microorganisms,resultado_hemo_mo,Staphylococcus haemolyticus,5,0.1
+Etiology - microorganisms,resultado_hemo_mo,Citrobacter freundii,5,0.1
 Etiology - microorganisms,resultado_hemo_mo,Morganella morganii,4,0.1
+Etiology - microorganisms,resultado_hemo_mo,género Salmonella,4,0.1
+Etiology - microorganisms,resultado_hemo_mo,Listeria monocytogenes,4,0.1
+Etiology - microorganisms,resultado_hemo_mo,género Streptococcus,4,0.1
+Etiology - microorganisms,resultado_hemo_mo,Staphylococcus capitis,4,0.1
 Etiology - microorganisms,resultado_hemo_mo,Streptococcus oralis,4,0.1
-Etiology - microorganisms,resultado_hemo_mo,Providencia stuartii,3,0.1
-Etiology - microorganisms,resultado_hemo_mo,Streptococcus dysgalactiae,3,0.1
+Etiology - microorganisms,resultado_hemo_mo,Streptococcus parasanguinis,4,0.1
 Etiology - microorganisms,resultado_hemo_mo,Brevibacterium epidermidis,3,0.1
-Etiology - microorganisms,resultado_hemo_mo,Micrococcus luteus,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,Bacteroides thetaiotaomicron,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,Candida glabrata,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,Streptococcus equi,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,Peptoniphilus harei,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,Streptococcus beta - hemolítico,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,_Fungi,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,género Elizabethkingia,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Streptococcus dysgalactiae,3,0.1
+Etiology - microorganisms,resultado_hemo_mo,Providencia stuartii,3,0.1
 Etiology - microorganisms,resultado_hemo_mo,Corynebacterium afermentans,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,género Brevibacillus,2,0.1
-Etiology - microorganisms,resultado_hemo_mo,Fusobacterium nucleatum,2,0.1
 Etiology - microorganisms,resultado_hemo_mo,Candida parapsilosis,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,género Elizabethkingia,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Fusobacterium nucleatum,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,género Brevibacillus,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Streptococcus pyogenes,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Streptococcus beta - hemolítico,2,0.1
 Etiology - microorganisms,resultado_hemo_mo,Streptococcus sanguinis,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Peptoniphilus harei,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,_Fungi,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Candida glabrata,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Bacteroides thetaiotaomicron,2,0.1
+Etiology - microorganisms,resultado_hemo_mo,Micrococcus luteus,2,0.1
 Etiology - microorganisms,resultado_hemo_mo,Other,52,1.3
 Etiology - microorganisms,resultado_hemo_mo,Total,3913,100.0
 Etiology - clinical grouping,resultado_hemo,NEGATIVE,2072,53.0
