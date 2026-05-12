@@ -41,7 +41,7 @@ HEADERS = [
 ]
 
 
-DOMAIN_BY_STAGE = {
+DEFAULT_DOMAIN_BY_STAGE = {
     "tbl_paciente": "Patient/admission",
     "tbl_comorbilidad": "Comorbidities",
     "tbl_factores_riesgo_bmr": "BMR risk factors",
@@ -56,6 +56,9 @@ DOMAIN_BY_STAGE = {
     "cross_table_features": "Cross-table culture features",
     "target_building": "Predictive targets",
 }
+
+# Backward-compatible alias for older imports.
+DOMAIN_BY_STAGE = DEFAULT_DOMAIN_BY_STAGE
 
 
 def read_header(path: Path) -> list[str]:
@@ -322,10 +325,14 @@ def infer_description(column: str, stage_name: str | None) -> str:
     return "Variable present in the full preprocessed dataset; no variable-level transformation was recorded in the preprocessing log."
 
 
-def infer_source_domain(stage_name: str | None) -> str:
+def infer_source_domain(
+    stage_name: str | None,
+    domain_by_stage: dict[str, str] | None = None,
+) -> str:
     if not stage_name:
         return "Unmapped"
-    return DOMAIN_BY_STAGE.get(stage_name, stage_name.replace("_", " "))
+    mapping = domain_by_stage or DEFAULT_DOMAIN_BY_STAGE
+    return mapping.get(stage_name, stage_name.replace("_", " "))
 
 
 def build_rows(
@@ -333,6 +340,7 @@ def build_rows(
     full_dataset_path: Path = FULL_DATASET,
     filtered_dataset_path: Path = FILTERED_DATASET,
     detailed_log_path: Path = DETAILED_LOG,
+    domain_by_stage: dict[str, str] | None = None,
 ) -> list[list[str]]:
     full_columns, full_values = read_csv_columns(full_dataset_path)
     filtered_columns = set(read_header(filtered_dataset_path))
@@ -398,7 +406,10 @@ def build_rows(
         )
         rows.append([
             column,
-            infer_source_domain(first_stage_by_column.get(column)),
+            infer_source_domain(
+                first_stage_by_column.get(column),
+                domain_by_stage=domain_by_stage,
+            ),
             first_stage_by_column.get(column, ""),
             variable_type,
             class_count,
@@ -524,11 +535,13 @@ def build_variable_dictionary(
     filtered_dataset_path: Path = FILTERED_DATASET,
     detailed_log_path: Path = DETAILED_LOG,
     output_path: Path = OUTPUT_XLSX,
+    domain_by_stage: dict[str, str] | None = None,
 ) -> tuple[int, int, int]:
     rows = build_rows(
         full_dataset_path=full_dataset_path,
         filtered_dataset_path=filtered_dataset_path,
         detailed_log_path=detailed_log_path,
+        domain_by_stage=domain_by_stage,
     )
     write_xlsx(rows, output_path)
     dropped_col = HEADERS.index("dropped (yes/no)")

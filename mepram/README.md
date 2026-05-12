@@ -14,6 +14,7 @@ infrastructure should live in `ml_benchmark/` instead.
 - `build_clinician_variable_dictionary.py`: helper used by the report script.
 - `compare_preprocessed_csvs.py`: local comparison helper for preprocessing QA.
 - `config/preprocess_config.py`: clinical/domain preprocessing configuration.
+- `config/preprocess_report.yml`: preprocessing report configuration for MEPRAM-specific domains and target sections.
 - `config/preprocess_columns_to_drop.txt`: final filtered-output drop list.
 - `config/model_filters.yml`: MEPRAM cohort/model row filters.
 - `config/benchmark_mepram.yml`: MEPRAM benchmark matrix configuration.
@@ -38,5 +39,6 @@ From the repository root:
   --detailed-log-path preprocess_test_log_detailed.json \
   --full-dataset-path preprocess_test.csv \
   --filtered-dataset-path preprocess_test_filtered.csv \
+  --report-config-path mepram/config/preprocess_report.yml \
   --output-dir mepram/preprocessing_report
 ```

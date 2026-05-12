@@ -8,11 +8,11 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+import yaml
 
 from build_clinician_variable_dictionary import (
-    DOMAIN_BY_STAGE,
+    DEFAULT_DOMAIN_BY_STAGE,
     build_variable_dictionary,
-    infer_source_domain,
 )
 
 
@@ -23,8 +23,9 @@ DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "preprocessing_report"
+DEFAULT_REPORT_CONFIG_PATH = ROOT_DIR / "config" / "preprocess_report.yml"
 
-COLORS = {
+DEFAULT_COLORS = {
     "input": "#0072B2",
     "output": "#009E73",
     "created": "#009E73",
@@ -32,7 +33,6 @@ COLORS = {
     "transformed": "#CC79A7",
     "dropped": "#D55E00",
 }
-VARIABLE_GROUP_LABELS = list(dict.fromkeys(DOMAIN_BY_STAGE.values()))
 
 CHART_FONT_SIZES = {
     "title": 18,
@@ -42,6 +42,191 @@ CHART_FONT_SIZES = {
     "value": 11,
 }
 EXCLUDE_FROM_PLOTS = {"_pipeline_run"}
+
+DEFAULT_REPORT_CONFIG = {
+    "report_title": "Preprocessing Report",
+    "report_description": (
+        "This report summarizes the preprocessing audit logs. "
+        "It is intended for clinician review and pipeline QA."
+    ),
+    "exclude_plot_stages": ["_pipeline_run"],
+    "domain_by_stage": DEFAULT_DOMAIN_BY_STAGE,
+    "predictive_targets": [
+        {
+            "model": "Model 1 - Sepsis",
+            "target_column": "sepsis",
+            "notes": "No exclusions; binary target over the full cohort.",
+            "class_labels": {0: "Sepsis (-)", 1: "Sepsis (+)", "0": "Sepsis (-)", "1": "Sepsis (+)"},
+        },
+        {
+            "model": "Model 2 - Etiology",
+            "target_column": "resultado_hemo_grouped",
+            "notes": (
+                "Grouped hemoculture target. NEGATIVE includes negative blood "
+                "cultures and non-target or unmapped detected organisms."
+            ),
+            "class_labels": {
+                "NEGATIVE": "Negative blood culture",
+                "Bacilo gram-": "Gram-negative bacillus",
+                "Coco gram+": "Gram-positive coccus",
+            },
+        },
+        {
+            "model": "Model 3 - Resistance",
+            "target_column": "resistente_cefalosporina",
+            "notes": (
+                "Restricted to grouped positive blood cultures "
+                "(resultado_hemo_grouped != NEGATIVE); grouped as binary "
+                "cephalosporin 3a/4a resistance."
+            ),
+            "subset": {"column": "resultado_hemo_grouped", "exclude_values": ["NEGATIVE"]},
+            "class_labels": {
+                "NEGATIVE": "Not resistant",
+                "RESIST_CEFALOSPORINAS_3a_4a": "Resistant to cephalosporins 3a/4a",
+            },
+        },
+    ],
+    "target_evolution": [
+        {
+            "domain": "Etiology",
+            "target_version": "Microorganism target",
+            "target_columns": ["resultado_hemo_mo", "resultado_hemo"],
+            "count_mode": "single",
+            "notes": "Hemoculture microorganism target after clinician coinfection resolution.",
+        },
+        {
+            "domain": "Etiology",
+            "target_version": "Clinical organism grouping",
+            "target_columns": ["resultado_hemo"],
+            "count_mode": "single",
+            "notes": "Configured clinical organism grouping from the preprocessing pipeline.",
+        },
+        {
+            "domain": "Etiology",
+            "target_version": "Gram grouped",
+            "target_columns": ["resultado_hemo_grouped"],
+            "count_mode": "single",
+            "notes": "Pipeline target grouped into negative, Gram-negative bacillus, and Gram-positive coccus.",
+        },
+        {
+            "domain": "Resistance",
+            "target_version": "Individual phenotype labels",
+            "target_columns": ["fenotipo_resistencia_individual"],
+            "count_mode": "multilabel",
+            "notes": (
+                "Individual resistance phenotype labels before antibiotic-family "
+                "grouping; multilabel rows are counted once for each phenotype present."
+            ),
+        },
+        {
+            "domain": "Resistance",
+            "target_version": "Antibiotic family labels",
+            "target_columns": ["fenotipo_resistencia"],
+            "count_mode": "multilabel",
+            "notes": (
+                "Pipeline target after mapping raw resistance phenotypes to antibiotic "
+                "families; multilabel rows are counted once for each family present."
+            ),
+        },
+        {
+            "domain": "Resistance",
+            "target_version": "Cephalosporin yes/no",
+            "target_columns": ["resistente_cefalosporina"],
+            "count_mode": "single",
+            "notes": "Final binary target: any cephalosporin 3a/4a resistance versus negative.",
+        },
+    ],
+    "prediction_detail_sections": [
+        {
+            "section": "Sepsis",
+            "description": "Binary sepsis prediction target.",
+            "target_column": "sepsis",
+            "class_labels": {0: "Sepsis (-)", 1: "Sepsis (+)", "0": "Sepsis (-)", "1": "Sepsis (+)"},
+        },
+        {
+            "section": "Etiology - microorganisms",
+            "description": "Original microorganism target before clinical grouping; shown as top 50 classes plus Other.",
+            "target_column": "resultado_hemo_mo",
+            "top_n": 50,
+        },
+        {
+            "section": "Etiology - clinical grouping",
+            "description": "Clinician-configured microorganism grouping used by the etiology model.",
+            "target_column": "resultado_hemo",
+        },
+        {
+            "section": "Resistance - individual phenotypes",
+            "description": "Individual resistance phenotype labels before antibiotic-family grouping; multilabel rows are counted once for each phenotype present.",
+            "target_column": "fenotipo_resistencia_individual",
+            "count_mode": "multilabel",
+        },
+        {
+            "section": "Resistance - antibiotic families",
+            "description": "Resistance phenotypes grouped into antibiotic-family labels; multilabel rows are counted once for each family present.",
+            "target_column": "fenotipo_resistencia",
+            "count_mode": "multilabel",
+        },
+        {
+            "section": "Resistance - cephalosporins",
+            "description": "Final binary cephalosporin resistance target.",
+            "target_column": "resistente_cefalosporina",
+            "class_labels": {
+                "NEGATIVE": "Not resistant",
+                "RESIST_CEFALOSPORINAS_3a_4a": "Resistant to cephalosporins 3a/4a",
+            },
+        },
+    ],
+}
+
+
+def merge_config(base: dict[str, object], override: dict[str, object]) -> dict[str, object]:
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = merge_config(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_report_config(config_path: Path) -> dict[str, object]:
+    if not config_path.exists():
+        return dict(DEFAULT_REPORT_CONFIG)
+    with config_path.open("r", encoding="utf-8") as handle:
+        loaded = yaml.safe_load(handle) or {}
+    return merge_config(DEFAULT_REPORT_CONFIG, loaded)
+
+
+def infer_source_domain(stage_name: str | None, domain_by_stage: dict[str, str]) -> str:
+    if not stage_name:
+        return "Unmapped"
+    return domain_by_stage.get(stage_name, stage_name.replace("_", " "))
+
+
+def ordered_group_labels(domain_by_stage: dict[str, str]) -> list[str]:
+    return list(dict.fromkeys(domain_by_stage.values()))
+
+
+def resolve_subset(df: pd.DataFrame, subset_config: dict[str, object] | None) -> pd.DataFrame:
+    if not subset_config:
+        return df
+    column = str(subset_config.get("column", "")).strip()
+    if not column:
+        return df
+    subset = df
+    if "include_values" in subset_config:
+        subset = subset.loc[subset[column].isin(list(subset_config["include_values"]))]
+    if "exclude_values" in subset_config:
+        subset = subset.loc[~subset[column].isin(list(subset_config["exclude_values"]))]
+    return subset
+
+
+def first_available_column(df: pd.DataFrame, candidates: list[object]) -> str | None:
+    for candidate in candidates:
+        name = str(candidate)
+        if name in df.columns:
+            return name
+    return None
 
 
 def filter_plot_stages(df: pd.DataFrame) -> pd.DataFrame:
@@ -59,6 +244,7 @@ def write_before_after_chart_png(
     output_path: Path,
     title: str,
     x_label: str,
+    colors: dict[str, str],
 ) -> None:
     plot_df = (
         filter_plot_stages(df)[[label_column, before_column, after_column]]
@@ -76,14 +262,14 @@ def write_before_after_chart_png(
         plot_df[before_column],
         height=bar_height,
         label="Before",
-        color=COLORS["input"],
+        color=colors["input"],
     )
     ax.barh(
         [position + bar_height / 2 for position in y_positions],
         plot_df[after_column],
         height=bar_height,
         label="After",
-        color=COLORS["output"],
+        color=colors["output"],
     )
     ax.set_yticks(y_positions)
     ax.set_yticklabels(plot_df[label_column], fontsize=CHART_FONT_SIZES["tick"])
@@ -120,6 +306,7 @@ def write_stacked_change_chart_png(
     change_counts: pd.DataFrame,
     *,
     output_path: Path,
+    colors: dict[str, str],
 ) -> None:
     columns = ["created", "recoded", "transformed", "dropped"]
     plot_df = filter_plot_stages(change_counts)[["table_name"] + columns].copy()
@@ -133,7 +320,7 @@ def write_stacked_change_chart_png(
             values,
             left=left,
             label=column.capitalize(),
-            color=COLORS[column],
+            color=colors[column],
         )
         left = left + values
     ax.invert_yaxis()
@@ -158,6 +345,7 @@ def write_missingness_chart_png(
     df: pd.DataFrame,
     *,
     output_path: Path,
+    colors: dict[str, str],
 ) -> None:
     missing_percent = df.isna().mean().mul(100).sort_values(ascending=False)
     plot_df = missing_percent.reset_index()
@@ -167,7 +355,7 @@ def write_missingness_chart_png(
     ax.bar(
         range(len(plot_df)),
         plot_df["missing_percent"],
-        color=COLORS["input"],
+        color=colors["input"],
         width=0.85,
     )
     ax.set_title("Missing Values in Filtered Dataset", fontsize=24, pad=18)
@@ -209,12 +397,14 @@ def first_stage_by_column(
 def grouped_slide_missingness(
     df: pd.DataFrame,
     detailed_logs: list[dict[str, object]],
+    domain_by_stage: dict[str, str],
+    variable_group_labels: list[str],
 ) -> pd.DataFrame:
     missing_percent = df.isna().mean().mul(100)
     first_stage = first_stage_by_column(df.columns.tolist(), detailed_logs)
     groups: dict[str, list[str]] = defaultdict(list)
     for column in df.columns:
-        groups[infer_source_domain(first_stage.get(column))].append(column)
+        groups[infer_source_domain(first_stage.get(column), domain_by_stage)].append(column)
 
     bands = [
         ("0%", lambda values: values == 0),
@@ -225,7 +415,7 @@ def grouped_slide_missingness(
     ]
     rows = []
     ordered_groups = [
-        group for group in VARIABLE_GROUP_LABELS
+        group for group in variable_group_labels
         if groups.get(group)
     ]
     ordered_groups.extend(
@@ -252,8 +442,15 @@ def write_grouped_missingness_chart_png(
     *,
     detailed_logs: list[dict[str, object]],
     output_path: Path,
+    domain_by_stage: dict[str, str],
+    variable_group_labels: list[str],
 ) -> pd.DataFrame:
-    plot_df = grouped_slide_missingness(df, detailed_logs)
+    plot_df = grouped_slide_missingness(
+        df,
+        detailed_logs,
+        domain_by_stage,
+        variable_group_labels,
+    )
     band_columns = ["0%", ">0-10%", "10-40%", "40-80%", "80-100%"]
     band_colors = {
         "0%": "#009E73",
@@ -304,6 +501,8 @@ def write_grouped_missingness_chart_png(
 def variable_distribution_by_group(
     columns: list[str],
     detailed_logs: list[dict[str, object]],
+    domain_by_stage: dict[str, str],
+    variable_group_labels: list[str],
 ) -> pd.DataFrame:
     available_columns = set(columns)
     first_stage_by_column: dict[str, str] = {}
@@ -317,13 +516,13 @@ def variable_distribution_by_group(
                 first_stage_by_column.setdefault(column, stage_name)
 
     counts = Counter(
-        infer_source_domain(first_stage_by_column.get(column))
+        infer_source_domain(first_stage_by_column.get(column), domain_by_stage)
         for column in columns
     )
 
     records = []
     ordered_groups = [
-        group for group in VARIABLE_GROUP_LABELS
+        group for group in variable_group_labels
         if counts.get(group, 0) > 0
     ]
     ordered_groups.extend(
@@ -340,11 +539,20 @@ def variable_distribution_filtered_vs_unfiltered(
     full_df: pd.DataFrame,
     filtered_df: pd.DataFrame,
     detailed_logs: list[dict[str, object]],
+    domain_by_stage: dict[str, str],
+    variable_group_labels: list[str],
 ) -> pd.DataFrame:
-    full_distribution = variable_distribution_by_group(full_df.columns.tolist(), detailed_logs)
+    full_distribution = variable_distribution_by_group(
+        full_df.columns.tolist(),
+        detailed_logs,
+        domain_by_stage,
+        variable_group_labels,
+    )
     filtered_distribution = variable_distribution_by_group(
         filtered_df.columns.tolist(),
         detailed_logs,
+        domain_by_stage,
+        variable_group_labels,
     )
     result = full_distribution.rename(columns={"variables": "unfiltered_variables"}).merge(
         filtered_distribution.rename(columns={"variables": "filtered_variables"}),
@@ -362,6 +570,7 @@ def write_variable_distribution_chart_png(
     distribution: pd.DataFrame,
     *,
     output_path: Path,
+    colors: dict[str, str],
 ) -> None:
     plot_df = distribution.copy()
     x_positions = list(range(len(plot_df)))
@@ -373,14 +582,14 @@ def write_variable_distribution_chart_png(
         plot_df["unfiltered_variables"],
         width=bar_width,
         label=f"Unfiltered (n={int(plot_df['unfiltered_variables'].sum()):,})",
-        color=COLORS["input"],
+        color=colors["input"],
     )
     ax.bar(
         [position + bar_width / 2 for position in x_positions],
         plot_df["filtered_variables"],
         width=bar_width,
         label=f"Filtered (n={int(plot_df['filtered_variables'].sum()):,})",
-        color=COLORS["output"],
+        color=colors["output"],
     )
     ax.set_title("Variable Distribution by Group", fontsize=24, pad=18)
     ax.set_ylabel("Number of variables", fontsize=18)
@@ -419,57 +628,15 @@ def write_variable_distribution_chart_png(
     plt.close(fig)
 
 
-def predictive_target_summary(filtered_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    target_specs = [
-        {
-            "model": "Model 1 - Sepsis",
-            "target_column": "sepsis",
-            "subset": filtered_df,
-            "class_labels": {
-                0: "Sepsis (-)",
-                1: "Sepsis (+)",
-                "0": "Sepsis (-)",
-                "1": "Sepsis (+)",
-            },
-            "notes": "No exclusions; binary target over the full cohort.",
-        },
-        {
-            "model": "Model 2 - Etiology",
-            "target_column": "resultado_hemo_grouped",
-            "subset": filtered_df,
-            "class_labels": {
-                "NEGATIVE": "Negative blood culture",
-                "Bacilo gram-": "Gram-negative bacillus",
-                "Coco gram+": "Gram-positive coccus",
-            },
-            "notes": (
-                "Grouped hemoculture target. NEGATIVE includes negative blood "
-                "cultures and non-target or unmapped detected organisms."
-            ),
-        },
-        {
-            "model": "Model 3 - Resistance",
-            "target_column": "resistente_cefalosporina",
-            "subset": filtered_df.loc[
-                filtered_df["resultado_hemo_grouped"] != "NEGATIVE"
-            ],
-            "class_labels": {
-                "NEGATIVE": "Not resistant",
-                "RESIST_CEFALOSPORINAS_3a_4a": "Resistant to cephalosporins 3a/4a",
-            },
-            "notes": (
-                "Restricted to grouped positive blood cultures "
-                "(resultado_hemo_grouped != NEGATIVE); grouped as binary "
-                "cephalosporin 3a/4a resistance."
-            ),
-        },
-    ]
-
+def predictive_target_summary(
+    filtered_df: pd.DataFrame,
+    target_specs: list[dict[str, object]],
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     summary_records = []
     class_records = []
     for spec in target_specs:
-        target_column = spec["target_column"]
-        subset = spec["subset"]
+        target_column = str(spec["target_column"])
+        subset = resolve_subset(filtered_df, spec.get("subset"))
         if target_column not in subset.columns:
             raise ValueError(f"Missing target column: {target_column}")
         target = subset[target_column].dropna()
@@ -477,28 +644,29 @@ def predictive_target_summary(filtered_df: pd.DataFrame) -> tuple[pd.DataFrame, 
         sample_count = int(target.shape[0])
         majority_count = int(counts.max()) if sample_count else 0
         majority_raw = counts.idxmax() if sample_count else ""
-        majority_label = spec["class_labels"].get(majority_raw, str(majority_raw))
+        class_labels = dict(spec.get("class_labels", {}))
+        majority_label = class_labels.get(majority_raw, str(majority_raw))
         class_count = int(target.nunique(dropna=True))
         majority_percent = round((majority_count / sample_count) * 100, 1) if sample_count else 0
 
         summary_records.append(
             {
-                "model": spec["model"],
+                "model": str(spec["model"]),
                 "target_column": target_column,
                 "samples": sample_count,
                 "classes": class_count,
                 "majority_class": majority_label,
                 "majority_class_percent": majority_percent,
-                "exclusions_or_grouping": spec["notes"],
+                "exclusions_or_grouping": str(spec.get("notes", "")),
             }
         )
 
         for raw_value, count in counts.sort_index().items():
             class_records.append(
                 {
-                    "model": spec["model"],
+                    "model": str(spec["model"]),
                     "target_column": target_column,
-                    "class": spec["class_labels"].get(raw_value, str(raw_value)),
+                    "class": class_labels.get(raw_value, str(raw_value)),
                     "raw_value": raw_value,
                     "samples": int(count),
                     "percent": round((int(count) / sample_count) * 100, 1)
@@ -629,99 +797,34 @@ def series_balance_records(
 
 def target_evolution_summary(
     filtered_df: pd.DataFrame,
+    target_specs: list[dict[str, object]],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    required_columns = {
-        "resultado_hemo",
-        "resultado_hemo_grouped",
-        "fenotipo_resistencia",
-        "resistente_cefalosporina",
-    }
-    missing_columns = sorted(required_columns - set(filtered_df.columns))
-    if missing_columns:
-        raise ValueError(
-            "Missing columns for target evolution summary: "
-            + ", ".join(missing_columns)
-        )
-
     summaries: list[dict[str, object]] = []
     class_records: list[dict[str, object]] = []
-
-    microorganism_column = (
-        "resultado_hemo_mo"
-        if "resultado_hemo_mo" in filtered_df.columns
-        else "resultado_hemo"
-    )
-    target_series = [
-        (
-            "Etiology",
-            "Microorganism target",
-            microorganism_column,
-            filtered_df[microorganism_column],
-            "Hemoculture microorganism target after clinician coinfection resolution.",
-        ),
-        (
-            "Etiology",
-            "Clinical organism grouping",
-            "resultado_hemo",
-            filtered_df["resultado_hemo"],
-            "Configured clinical organism grouping from the preprocessing pipeline.",
-        ),
-        (
-            "Etiology",
-            "Gram grouped",
-            "resultado_hemo_grouped",
-            filtered_df["resultado_hemo_grouped"],
-            "Pipeline target grouped into negative, Gram-negative bacillus, and Gram-positive coccus.",
-        ),
-    ]
-
-    for domain, version, column, series, notes in target_series:
-        summary, records = series_balance_records(
-            domain=domain,
-            target_version=version,
-            target_column=column,
-            values=series,
-            notes=notes,
-        )
+    for spec in target_specs:
+        candidates = spec.get("target_columns") or [spec.get("target_column")]
+        target_column = first_available_column(filtered_df, list(candidates))
+        if target_column is None:
+            continue
+        count_mode = str(spec.get("count_mode", "single"))
+        if count_mode == "multilabel":
+            summary, records = multilabel_balance_records(
+                domain=str(spec["domain"]),
+                target_version=str(spec["target_version"]),
+                target_column=target_column,
+                values=filtered_df[target_column],
+                notes=str(spec.get("notes", "")),
+            )
+        else:
+            summary, records = series_balance_records(
+                domain=str(spec["domain"]),
+                target_version=str(spec["target_version"]),
+                target_column=target_column,
+                values=filtered_df[target_column],
+                notes=str(spec.get("notes", "")),
+            )
         summaries.append(summary)
         class_records.extend(records)
-
-    if "fenotipo_resistencia_individual" in filtered_df.columns:
-        summary, records = multilabel_balance_records(
-            domain="Resistance",
-            target_version="Individual phenotype labels",
-            target_column="fenotipo_resistencia_individual",
-            values=filtered_df["fenotipo_resistencia_individual"],
-            notes=(
-                "Individual resistance phenotype labels before antibiotic-family "
-                "grouping; multilabel rows are counted once for each phenotype present."
-            ),
-        )
-        summaries.append(summary)
-        class_records.extend(records)
-
-    summary, records = multilabel_balance_records(
-        domain="Resistance",
-        target_version="Antibiotic family labels",
-        target_column="fenotipo_resistencia",
-        values=filtered_df["fenotipo_resistencia"],
-        notes=(
-            "Pipeline target after mapping raw resistance phenotypes to antibiotic "
-            "families; multilabel rows are counted once for each family present."
-        ),
-    )
-    summaries.append(summary)
-    class_records.extend(records)
-
-    summary, records = series_balance_records(
-        domain="Resistance",
-        target_version="Cephalosporin yes/no",
-        target_column="resistente_cefalosporina",
-        values=filtered_df["resistente_cefalosporina"],
-        notes="Final binary target: any cephalosporin 3a/4a resistance versus negative.",
-    )
-    summaries.append(summary)
-    class_records.extend(records)
 
     return pd.DataFrame.from_records(summaries), pd.DataFrame.from_records(class_records)
 
@@ -825,89 +928,18 @@ def multilabel_class_count_records(
 
 def prediction_detail_tables(
     filtered_df: pd.DataFrame,
+    section_specs: list[dict[str, object]],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     row_count = len(filtered_df)
     column_count = len(filtered_df.columns)
-    required_columns = {
-        "sepsis",
-        "resultado_hemo_mo",
-        "resultado_hemo",
-        "fenotipo_resistencia_individual",
-        "fenotipo_resistencia",
-        "resistente_cefalosporina",
-    }
-    missing_columns = sorted(required_columns - set(filtered_df.columns))
-    if missing_columns:
-        raise ValueError(
-            "Missing columns for prediction detail tables: "
-            + ", ".join(missing_columns)
-        )
-
-    specs = [
-        {
-            "section": "Sepsis",
-            "description": "Binary sepsis prediction target.",
-            "target_column": "sepsis",
-            "values": filtered_df["sepsis"],
-            "class_labels": {
-                0: "Sepsis (-)",
-                1: "Sepsis (+)",
-                "0": "Sepsis (-)",
-                "1": "Sepsis (+)",
-            },
-            "top_n": None,
-        },
-        {
-            "section": "Etiology - microorganisms",
-            "description": "Original microorganism target before clinical grouping; shown as top 50 classes plus Other.",
-            "target_column": "resultado_hemo_mo",
-            "values": filtered_df["resultado_hemo_mo"],
-            "class_labels": None,
-            "top_n": 50,
-        },
-        {
-            "section": "Etiology - clinical grouping",
-            "description": "Clinician-configured microorganism grouping used by the etiology model.",
-            "target_column": "resultado_hemo",
-            "values": filtered_df["resultado_hemo"],
-            "class_labels": None,
-            "top_n": None,
-        },
-        {
-            "section": "Resistance - individual phenotypes",
-            "description": "Individual resistance phenotype labels before antibiotic-family grouping; multilabel rows are counted once for each phenotype present.",
-            "target_column": "fenotipo_resistencia_individual",
-            "values": filtered_df["fenotipo_resistencia_individual"],
-            "class_labels": None,
-            "top_n": None,
-            "count_mode": "multilabel",
-        },
-        {
-            "section": "Resistance - antibiotic families",
-            "description": "Resistance phenotypes grouped into antibiotic-family labels; multilabel rows are counted once for each family present.",
-            "target_column": "fenotipo_resistencia",
-            "values": filtered_df["fenotipo_resistencia"],
-            "class_labels": None,
-            "top_n": None,
-            "count_mode": "multilabel",
-        },
-        {
-            "section": "Resistance - cephalosporins",
-            "description": "Final binary cephalosporin resistance target.",
-            "target_column": "resistente_cefalosporina",
-            "values": filtered_df["resistente_cefalosporina"],
-            "class_labels": {
-                "NEGATIVE": "Not resistant",
-                "RESIST_CEFALOSPORINAS_3a_4a": "Resistant to cephalosporins 3a/4a",
-            },
-            "top_n": None,
-        },
-    ]
 
     summary_records = []
     class_records = []
-    for spec in specs:
-        values = spec["values"].dropna()
+    for spec in section_specs:
+        target_column = str(spec["target_column"])
+        if target_column not in filtered_df.columns:
+            continue
+        values = filtered_df[target_column].dropna()
         if spec.get("count_mode") == "multilabel":
             labels = values.map(parse_list_target)
             class_count = int(
@@ -919,9 +951,9 @@ def prediction_detail_tables(
             class_count = int(values.nunique(dropna=True))
         summary_records.append(
             {
-                "section": spec["section"],
-                "description": spec["description"],
-                "target_column": spec["target_column"],
+                "section": str(spec["section"]),
+                "description": str(spec["description"]),
+                "target_column": target_column,
                 "rows": row_count,
                 "columns": column_count,
                 "classes": class_count,
@@ -930,19 +962,19 @@ def prediction_detail_tables(
         if spec.get("count_mode") == "multilabel":
             class_records.extend(
                 multilabel_class_count_records(
-                    section=spec["section"],
-                    target_column=spec["target_column"],
+                    section=str(spec["section"]),
+                    target_column=target_column,
                     values=values,
                 )
             )
         else:
             class_records.extend(
                 class_count_records(
-                    section=spec["section"],
-                    target_column=spec["target_column"],
+                    section=str(spec["section"]),
+                    target_column=target_column,
                     values=values,
-                    class_labels=spec["class_labels"],
-                    top_n=spec["top_n"],
+                    class_labels=dict(spec.get("class_labels", {})) or None,
+                    top_n=spec.get("top_n"),
                 )
             )
 
@@ -998,6 +1030,8 @@ def top_missingness(df: pd.DataFrame, *, top_n: int = 15) -> pd.DataFrame:
 def write_markdown_report(
     *,
     output_path: Path,
+    report_title: str,
+    report_description: str,
     summary: pd.DataFrame,
     change_counts: pd.DataFrame,
     detailed_logs: list[dict[str, Any]],
@@ -1040,9 +1074,9 @@ def write_markdown_report(
     )
 
     lines = [
-        "# Preprocessing Report",
+        f"# {report_title}",
         "",
-        "This report summarizes the preprocessing audit logs. It is intended for clinician review and pipeline QA.",
+        report_description,
         "",
         "## Dataset Shapes",
         "",
@@ -1214,8 +1248,15 @@ def build_report(
     full_dataset_path: Path | None,
     filtered_dataset_path: Path | None,
     output_dir: Path,
+    report_config_path: Path = DEFAULT_REPORT_CONFIG_PATH,
     build_dictionary: bool = True,
 ) -> None:
+    report_config = load_report_config(report_config_path)
+    domain_by_stage = dict(report_config["domain_by_stage"])
+    variable_group_labels = ordered_group_labels(domain_by_stage)
+    colors = merge_config(DEFAULT_COLORS, dict(report_config.get("colors", {})))
+    global EXCLUDE_FROM_PLOTS
+    EXCLUDE_FROM_PLOTS = set(report_config.get("exclude_plot_stages", ["_pipeline_run"]))
     output_dir.mkdir(parents=True, exist_ok=True)
     graphs_dir = output_dir / "graphs"
     tables_dir = output_dir / "tables"
@@ -1253,6 +1294,7 @@ def build_report(
         output_path=rows_chart,
         title="Rows Before and After Each Preprocessing Stage",
         x_label="Rows",
+        colors=colors,
     )
     write_before_after_chart_png(
         summary,
@@ -1262,14 +1304,25 @@ def build_report(
         output_path=columns_chart,
         title="Columns Before and After Each Preprocessing Stage",
         x_label="Columns",
+        colors=colors,
     )
-    write_stacked_change_chart_png(change_counts, output_path=changes_chart)
+    write_stacked_change_chart_png(
+        change_counts,
+        output_path=changes_chart,
+        colors=colors,
+    )
     if filtered_df is not None:
-        write_missingness_chart_png(filtered_df, output_path=missingness_chart)
+        write_missingness_chart_png(
+            filtered_df,
+            output_path=missingness_chart,
+            colors=colors,
+        )
         grouped_missingness = write_grouped_missingness_chart_png(
             filtered_df,
             detailed_logs=detailed_logs,
             output_path=grouped_missingness_chart,
+            domain_by_stage=domain_by_stage,
+            variable_group_labels=variable_group_labels,
         )
         grouped_missingness.to_csv(
             tables_dir / "grouped_missingness_for_slides.csv",
@@ -1280,10 +1333,13 @@ def build_report(
             full_df=full_df,
             filtered_df=filtered_df,
             detailed_logs=detailed_logs,
+            domain_by_stage=domain_by_stage,
+            variable_group_labels=variable_group_labels,
         )
         write_variable_distribution_chart_png(
             variable_distribution,
             output_path=variable_distribution_chart,
+            colors=colors,
         )
         variable_distribution.to_csv(
             tables_dir / "variable_distribution_filtered_vs_unfiltered.csv",
@@ -1296,14 +1352,18 @@ def build_report(
     prediction_detail_summary = None
     prediction_detail_class_counts = None
     if filtered_df is not None:
-        target_summary, target_class_counts = predictive_target_summary(filtered_df)
+        target_summary, target_class_counts = predictive_target_summary(
+            filtered_df,
+            list(report_config.get("predictive_targets", [])),
+        )
         target_summary.to_csv(tables_dir / "predictive_targets_summary.csv", index=False)
         target_class_counts.to_csv(
             tables_dir / "predictive_targets_class_counts.csv",
             index=False,
         )
         evolution_summary, evolution_class_counts = target_evolution_summary(
-            filtered_df
+            filtered_df,
+            list(report_config.get("target_evolution", [])),
         )
         evolution_summary.to_csv(tables_dir / "target_evolution_summary.csv", index=False)
         evolution_class_counts.to_csv(
@@ -1311,7 +1371,10 @@ def build_report(
             index=False,
         )
         prediction_detail_summary, prediction_detail_class_counts = (
-            prediction_detail_tables(filtered_df)
+            prediction_detail_tables(
+                filtered_df,
+                list(report_config.get("prediction_detail_sections", [])),
+            )
         )
         prediction_detail_summary.to_csv(
             tables_dir / "prediction_detail_summary.csv",
@@ -1325,6 +1388,8 @@ def build_report(
     change_counts.to_csv(tables_dir / "change_counts_by_stage.csv", index=False)
     write_markdown_report(
         output_path=output_dir / "preprocessing_report.md",
+        report_title=str(report_config.get("report_title", "Preprocessing Report")),
+        report_description=str(report_config.get("report_description", "")),
         summary=summary,
         change_counts=change_counts,
         detailed_logs=detailed_logs,
@@ -1351,6 +1416,7 @@ def build_report(
             filtered_dataset_path=filtered_dataset_path,
             detailed_log_path=detailed_log_path,
             output_path=tables_dir / "clinician_variable_dictionary.xlsx",
+            domain_by_stage=domain_by_stage,
         )
 
 
@@ -1363,6 +1429,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--full-dataset-path", type=Path, default=DEFAULT_FULL_DATASET_PATH)
     parser.add_argument("--filtered-dataset-path", type=Path, default=DEFAULT_FILTERED_DATASET_PATH)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument(
+        "--report-config-path",
+        type=Path,
+        default=DEFAULT_REPORT_CONFIG_PATH,
+    )
     parser.add_argument(
         "--skip-variable-dictionary",
         action="store_true",
@@ -1379,6 +1450,7 @@ def main() -> None:
         full_dataset_path=args.full_dataset_path,
         filtered_dataset_path=args.filtered_dataset_path,
         output_dir=args.output_dir,
+        report_config_path=args.report_config_path,
         build_dictionary=not args.skip_variable_dictionary,
     )
 

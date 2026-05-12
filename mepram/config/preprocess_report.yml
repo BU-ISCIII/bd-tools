@@ -1,0 +1,149 @@
+report_title: Preprocessing Report
+report_description: >-
+  This report summarizes the preprocessing audit logs. It is intended for
+  clinician review and pipeline QA.
+
+exclude_plot_stages:
+  - _pipeline_run
+
+domain_by_stage:
+  tbl_paciente: Patient/admission
+  tbl_comorbilidad: Comorbidities
+  tbl_factores_riesgo_bmr: BMR risk factors
+  tbl_sintomas: Symptoms
+  tbl_signos: Vital signs
+  tbl_sepsis: Sepsis and infection focus
+  tbl_infecciones_previas: Previous infections
+  tbl_tratamiento_antibiotico_previo: Previous antibiotic treatment
+  tbl_hemocultivo_de_urgencias: Emergency blood cultures
+  tbl_colonizaciones_previas: Previous colonizations
+  tbl_otros_cultivos_en_urgencias: Other emergency cultures
+  cross_table_features: Cross-table culture features
+  target_building: Predictive targets
+
+predictive_targets:
+  - model: Model 1 - Sepsis
+    target_column: sepsis
+    notes: No exclusions; binary target over the full cohort.
+    class_labels:
+      0: Sepsis (-)
+      1: Sepsis (+)
+      "0": Sepsis (-)
+      "1": Sepsis (+)
+
+  - model: Model 2 - Etiology
+    target_column: resultado_hemo_grouped
+    notes: >-
+      Grouped hemoculture target. NEGATIVE includes negative blood cultures and
+      non-target or unmapped detected organisms.
+    class_labels:
+      NEGATIVE: Negative blood culture
+      Bacilo gram-: Gram-negative bacillus
+      Coco gram+: Gram-positive coccus
+
+  - model: Model 3 - Resistance
+    target_column: resistente_cefalosporina
+    notes: >-
+      Restricted to grouped positive blood cultures
+      (resultado_hemo_grouped != NEGATIVE); grouped as binary cephalosporin
+      3a/4a resistance.
+    subset:
+      column: resultado_hemo_grouped
+      exclude_values:
+        - NEGATIVE
+    class_labels:
+      NEGATIVE: Not resistant
+      RESIST_CEFALOSPORINAS_3a_4a: Resistant to cephalosporins 3a/4a
+
+target_evolution:
+  - domain: Etiology
+    target_version: Microorganism target
+    target_columns:
+      - resultado_hemo_mo
+      - resultado_hemo
+    count_mode: single
+    notes: Hemoculture microorganism target after clinician coinfection resolution.
+
+  - domain: Etiology
+    target_version: Clinical organism grouping
+    target_columns:
+      - resultado_hemo
+    count_mode: single
+    notes: Configured clinical organism grouping from the preprocessing pipeline.
+
+  - domain: Etiology
+    target_version: Gram grouped
+    target_columns:
+      - resultado_hemo_grouped
+    count_mode: single
+    notes: >-
+      Pipeline target grouped into negative, Gram-negative bacillus, and
+      Gram-positive coccus.
+
+  - domain: Resistance
+    target_version: Individual phenotype labels
+    target_columns:
+      - fenotipo_resistencia_individual
+    count_mode: multilabel
+    notes: >-
+      Individual resistance phenotype labels before antibiotic-family grouping;
+      multilabel rows are counted once for each phenotype present.
+
+  - domain: Resistance
+    target_version: Antibiotic family labels
+    target_columns:
+      - fenotipo_resistencia
+    count_mode: multilabel
+    notes: >-
+      Pipeline target after mapping raw resistance phenotypes to antibiotic
+      families; multilabel rows are counted once for each family present.
+
+  - domain: Resistance
+    target_version: Cephalosporin yes/no
+    target_columns:
+      - resistente_cefalosporina
+    count_mode: single
+    notes: >-
+      Final binary target: any cephalosporin 3a/4a resistance versus negative.
+
+prediction_detail_sections:
+  - section: Sepsis
+    description: Binary sepsis prediction target.
+    target_column: sepsis
+    class_labels:
+      0: Sepsis (-)
+      1: Sepsis (+)
+      "0": Sepsis (-)
+      "1": Sepsis (+)
+
+  - section: Etiology - microorganisms
+    description: >-
+      Original microorganism target before clinical grouping; shown as top 50
+      classes plus Other.
+    target_column: resultado_hemo_mo
+    top_n: 50
+
+  - section: Etiology - clinical grouping
+    description: Clinician-configured microorganism grouping used by the etiology model.
+    target_column: resultado_hemo
+
+  - section: Resistance - individual phenotypes
+    description: >-
+      Individual resistance phenotype labels before antibiotic-family grouping;
+      multilabel rows are counted once for each phenotype present.
+    target_column: fenotipo_resistencia_individual
+    count_mode: multilabel
+
+  - section: Resistance - antibiotic families
+    description: >-
+      Resistance phenotypes grouped into antibiotic-family labels; multilabel
+      rows are counted once for each family present.
+    target_column: fenotipo_resistencia
+    count_mode: multilabel
+
+  - section: Resistance - cephalosporins
+    description: Final binary cephalosporin resistance target.
+    target_column: resistente_cefalosporina
+    class_labels:
+      NEGATIVE: Not resistant
+      RESIST_CEFALOSPORINAS_3a_4a: Resistant to cephalosporins 3a/4a

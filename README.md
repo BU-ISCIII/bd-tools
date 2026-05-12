@@ -92,6 +92,7 @@ The report entry point is:
   --detailed-log-path preprocess_test_log_detailed.json \
   --full-dataset-path preprocess_test.csv \
   --filtered-dataset-path preprocess_test_filtered.csv \
+  --report-config-path mepram/config/preprocess_report.yml \
   --output-dir mepram/preprocessing_report
 ```
 
@@ -103,6 +104,7 @@ For a versioned run folder, use the matching run files:
   --detailed-log-path "${RUN_DIR}/${RUN_ID}_full_log_detailed.json" \
   --full-dataset-path "${RUN_DIR}/${RUN_ID}_full.csv" \
   --filtered-dataset-path "${RUN_DIR}/${RUN_ID}_full_filtered.csv" \
+  --report-config-path mepram/config/preprocess_report.yml \
   --output-dir "${RUN_DIR}/preprocessing_report"
 ```
 
@@ -163,6 +165,7 @@ and graphs without rebuilding the Excel workbook.
 | File | Purpose |
 |---|---|
 | `mepram/config/preprocess_config.py` | Versioned clinical/domain configuration: recoding thresholds, organism groups, antimicrobial families, phenotype mappings. |
+| `mepram/config/preprocess_report.yml` | Project-specific preprocessing report configuration: stage/domain mapping, target summary sections, and detailed target report sections. |
 | `mepram/config/model_filters.yml` | Row-level cohort filters used by HPC modelling scripts. |
 | `mepram/config/preprocess_columns_to_drop.txt` | Explicit column names and glob patterns removed from the filtered output. The full output keeps these columns. |
 | `QUESTIONS_AND_ASSUMPTIONS.md` | Clinical assumptions and questions that need review before locking behavior. |
