@@ -48,6 +48,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import KNNImputer, SimpleImputer
 from sklearn.base import BaseEstimator
 from sklearn.metrics import (
+    average_precision_score,
     classification_report,
     confusion_matrix,
     f1_score,
@@ -440,6 +441,14 @@ def build_multiclass_model(model_type: str, params: Dict, num_classes: int) -> o
     elif model_type == "rf":
         params.setdefault("class_weight", "balanced")
         return RandomForestClassifier(**params)
+    elif model_type == "catb":
+        params.setdefault("loss_function", "MultiClass")
+        params.setdefault("auto_class_weights", "Balanced")
+        params.setdefault("verbose", False)
+        params.setdefault("eval_metric", "PRAUC")
+        params.setdefault("thread_count", N_CPUS)
+        params.setdefault("random_state", 42)
+        return CatBoostClassifier(**params)
     else:
         raise ValueError(f"Unsupported model type for multiclass: '{model_type}'.")
 
@@ -493,7 +502,7 @@ def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_wei
     elif model_type == "xgb":
         return {
             "objective": "binary:logistic",
-            "eval_metric": "logloss",
+            "eval_metric": "aucpr",  # PR-AUC for imbalanced optimization
             "tree_method": "hist",
             "n_estimators": trial.suggest_int("n_estimators", 300, 3000),
             "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
@@ -511,6 +520,7 @@ def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_wei
     elif model_type == "lgbm":
         return {
             "objective": "binary",
+            "metric": "prauc",  # PRAUC for imbalanced optimization (LGBM uses 'metric' not 'eval_metric')
             "boosting_type": "gbdt",
             "n_estimators": trial.suggest_int("n_estimators", 300, 4000),
             "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
@@ -530,6 +540,7 @@ def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_wei
     elif model_type == "catb":
         return {
             "iterations": trial.suggest_int("iterations", 300, 2000),
+            "eval_metric": "PRAUC",
             "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
             "depth": trial.suggest_int("depth", 3, 10),
             "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1e-3, 10.0, log=True),
@@ -555,7 +566,7 @@ def optimise_binary_model(
     sample_weight: Optional[pd.Series],
     model_type: str,
 ) -> Tuple[Dict, float, optuna.Study]:
-    """Tune a binary classifier with Optuna maximising ROC-AUC.
+    """Tune a binary classifier with Optuna maximising PR-AUC (Average Precision).
 
     Returns best_params, best_threshold (Youden's J on OOF), study.
     The threshold is found after Optuna by re-running a single OOF pass with
@@ -585,7 +596,7 @@ def optimise_binary_model(
             model = build_binary_model(model_type, params.copy())
             _fit_model(model, model_type, X_tr, y_tr, X_va, y_va, sample_weight=w_tr)
             proba = model.predict_proba(X_va)[:, 1]
-            scores.append(roc_auc_score(y_va, proba))
+            scores.append(average_precision_score(y_va, proba))
         if trial.number % 100 == 0:
             print(f"Trial {trial.number}: score={float(np.mean(scores))}")
         return float(np.mean(scores))
@@ -616,7 +627,7 @@ def _multiclass_params_for_trial(
     if model_type == "xgb":
         return {
             "objective": "multi:softprob",
-            "eval_metric": "mlogloss",
+            "eval_metric": "prauc_mu",  # XGB's multiclass PR-AUC (macro-averaged)
             "tree_method": "hist",
             "num_class": num_classes,
             "n_estimators": trial.suggest_int("n_estimators", 300, 2000),
@@ -634,6 +645,7 @@ def _multiclass_params_for_trial(
         return {
             "objective": "multiclass",
             "boosting_type": "gbdt",
+            "eval_metric": "prauc_mu",  # LGBM's multiclass PR-AUC (macro-averaged)
             "num_class": num_classes,
             "n_estimators": trial.suggest_int("n_estimators", 300, 3000),
             "learning_rate": trial.suggest_float("learning_rate", 1e-3, 0.3, log=True),
@@ -660,6 +672,22 @@ def _multiclass_params_for_trial(
             "class_weight": "balanced",
             "n_jobs": N_CPUS,
             "random_state": random_state,
+        }
+    elif model_type == "catb":
+        return {
+            "loss_function": "MultiClass",
+            "iterations": trial.suggest_int("iterations", 300, 2000),
+            "eval_metric": "PRAUC",
+            "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+            "depth": trial.suggest_int("depth", 3, 10),
+            "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1e-3, 10.0, log=True),
+            "bagging_temperature": trial.suggest_float("bagging_temperature", 0.0, 1.0),
+            "border_count": trial.suggest_int("border_count", 32, 255),
+            "random_strength": trial.suggest_float("random_strength", 0.0, 2.0),
+            "auto_class_weights": "Balanced",
+            "verbose": False,
+            "thread_count": N_CPUS,
+            "random_state": 42,
         }
     else:
         raise ValueError(f"Unsupported multiclass model_type: '{model_type}'")
@@ -694,14 +722,23 @@ def optimise_multiclass_model(
         for tr_idx, va_idx in skf.split(X, y):
             X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
             y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
+            if y_tr.nunique() < 2:
+                # Skip fold with only one class in training
+                continue
             w_tr = weight_series.iloc[tr_idx].to_numpy() if weight_series is not None else None
             model = build_multiclass_model(model_type, params.copy(), num_classes)
-            if w_tr is not None:
-                model.fit(X_tr, y_tr, sample_weight=w_tr)
-            else:
-                model.fit(X_tr, y_tr)
-            y_pred = model.predict(X_va)
-            scores.append(f1_score(y_va, y_pred, average="macro", zero_division=0))
+            try:
+                if w_tr is not None:
+                    model.fit(X_tr, y_tr, sample_weight=w_tr)
+                else:
+                    model.fit(X_tr, y_tr)
+                y_pred = model.predict(X_va)
+                scores.append(f1_score(y_va, y_pred, average="macro", zero_division=0))
+            except Exception as e:
+                print(f"Skipping fold due to error: {e}")
+                continue
+        if not scores:
+            return 0.0
         if trial.number % 100 == 0:
             print(f"Trial {trial.number}: score={float(np.mean(scores))}")
         return float(np.mean(scores))
@@ -800,9 +837,9 @@ def shap_rfecv(
 
     def _cv_metrics(features: List[str]) -> Dict[str, float]:
         """Return mean CV metrics for *features* using the current skf splits."""
-        if scoring != "roc_auc":
-            raise ValueError("Only roc_auc is supported for shap_rfecv")
-        auc_scores: List[float] = []
+        if scoring not in ["roc_auc", "pr_auc"]:
+            raise ValueError("Only roc_auc and pr_auc are supported for shap_rfecv")
+        primary_scores: List[float] = []
         f1_scores: List[float] = []
         precision_scores: List[float] = []
         recall_scores: List[float] = []
@@ -810,31 +847,46 @@ def shap_rfecv(
             X_tr = X.iloc[train_idx][features]
             X_va = X.iloc[val_idx][features]
             y_tr, y_va = y[train_idx], y[val_idx]
+            
+            # Skip folds where training set has only one unique class (common in imbalanced data)
+            if len(np.unique(y_tr)) < 2:
+                print(f"    Skipping fold with single class in training set: {np.unique(y_tr)}")
+                continue
+            
             est = copy.deepcopy(model)
-            est.fit(X_tr, y_tr)
             try:
+                est.fit(X_tr, y_tr)
                 if is_multiclass:
                     proba = est.predict_proba(X_va)
-                    auc = roc_auc_score(y_va, proba, multi_class="ovr", average="macro")
+                    if scoring == "pr_auc":
+                        # For multiclass, use macro average precision
+                        primary = np.mean([average_precision_score((y_va == i).astype(int), proba[:, i]) for i in range(n_classes)])
+                    else:
+                        primary = roc_auc_score(y_va, proba, multi_class="ovr", average="macro")
                     y_pred = np.argmax(proba, axis=1)
                 else:
                     proba = est.predict_proba(X_va)[:, 1]
-                    auc = roc_auc_score(y_va, proba)
+                    if scoring == "pr_auc":
+                        primary = average_precision_score(y_va, proba)
+                    else:
+                        primary = roc_auc_score(y_va, proba)
                     y_pred = (proba >= 0.5).astype(int)
                 f1 = f1_score(y_va, y_pred, average="macro", zero_division=0)
                 precision = precision_score(y_va, y_pred, average="macro", zero_division=0)
                 recall = recall_score(y_va, y_pred, average="macro", zero_division=0)
-            except Exception:
-                auc = 0.0
+            except Exception as e:
+                print(f"    Exception during fold fit/eval: {type(e).__name__}: {str(e)[:100]}")
+                primary = 0.0
                 f1 = 0.0
                 precision = 0.0
                 recall = 0.0
-            auc_scores.append(float(auc))
+            primary_scores.append(float(primary))
             f1_scores.append(float(f1))
             precision_scores.append(float(precision))
             recall_scores.append(float(recall))
+        primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
         return {
-            "roc_auc": float(np.mean(auc_scores)),
+            primary_metric: float(np.mean(primary_scores)),
             "f1_macro": float(np.mean(f1_scores)),
             "precision_macro": float(np.mean(precision_scores)),
             "recall_macro": float(np.mean(recall_scores)),
@@ -867,9 +919,11 @@ def shap_rfecv(
             "metrics": metrics,
             "features": remaining_features.copy(),
         }
+        primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
+        primary_val = metrics.get(primary_metric, 0.0)
         print(
             f"Features: {len(remaining_features)} | "
-            f"AUC: {metrics['roc_auc']:.4f} | F1: {metrics['f1_macro']:.4f} | "
+            f"{primary_metric.upper()}: {primary_val:.4f} | F1: {metrics['f1_macro']:.4f} | "
             f"Precision: {metrics['precision_macro']:.4f} | Recall: {metrics['recall_macro']:.4f}"
         )
 
@@ -884,22 +938,25 @@ def shap_rfecv(
         "metrics": final_metrics,
         "features": remaining_features.copy(),
     }
+    primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
+    primary_val = final_metrics.get(primary_metric, 0.0)
     print(
         f"Features: {len(remaining_features)} | "
-        f"AUC: {final_metrics['roc_auc']:.4f} | F1: {final_metrics['f1_macro']:.4f} | "
+        f"{primary_metric.upper()}: {primary_val:.4f} | F1: {final_metrics['f1_macro']:.4f} | "
         f"Precision: {final_metrics['precision_macro']:.4f} | Recall: {final_metrics['recall_macro']:.4f}"
     )
 
     # Return the feature set whose CV score was highest (true RFECV selection),
     # constrained to at most max_features.  Keys are strings; cast before comparing.
+    primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
     best_n = max(
         history,
-        key=lambda k: history[k]["metrics"]["roc_auc"] if int(k) <= max_features else 0.0,
+        key=lambda k: history[k]["metrics"][primary_metric] if int(k) <= max_features else 0.0,
     )
-    best_score = history[best_n]["metrics"]["roc_auc"]
+    best_score = history[best_n]["metrics"][primary_metric]
     best_features = history[best_n]["features"]
     print(
-        f"Best CV score: {best_score:.4f} at {best_n} features → "
+        f"Best CV score ({primary_metric}): {best_score:.4f} at {best_n} features → "
         f"Selected {len(best_features)} features."
     )
     return best_features, history
@@ -1036,7 +1093,13 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 1. Load & preprocess
     # ------------------------------------------------------------------
-    all_targets = {args.sepsis_target, args.hemo_target, args.cef_target, args.weight_column}
+    all_targets = {
+        args.sepsis_target,
+        args.hemo_target,
+        args.cef_target,
+        args.bmr_target,
+        args.weight_column,
+    }
     cols_to_delete = list(DELETE_COLUMNS)
     cols_to_delete.extend([x for x in TARGET_REMOVE if x not in all_targets])
 
@@ -1067,6 +1130,7 @@ def run_training(args: argparse.Namespace) -> None:
     y_sepsis = working_df.loc[feature_df_raw.index, args.sepsis_target]
     y_hemo = working_df.loc[feature_df_raw.index, args.hemo_target]
     y_cef = working_df.loc[feature_df_raw.index, args.cef_target]
+    y_bmr = working_df.loc[feature_df_raw.index, args.bmr_target]
     w = working_df.loc[feature_df_raw.index, args.weight_column]
 
     (
@@ -1074,9 +1138,10 @@ def run_training(args: argparse.Namespace) -> None:
         y_sep_train, y_sep_test,
         y_hemo_train, y_hemo_test,
         y_cef_train, y_cef_test,
+        y_bmr_train, y_bmr_test,
         w_train, w_test,
     ) = train_test_split(
-        feature_df_raw, y_sepsis, y_hemo, y_cef, w,
+        feature_df_raw, y_sepsis, y_hemo, y_cef, y_bmr, w,
         test_size=args.test_size,
         random_state=args.random_state,
         stratify=y_sepsis,
@@ -1093,16 +1158,18 @@ def run_training(args: argparse.Namespace) -> None:
         categorical_for_dummies=cat_cols,
     )
     # Align targets/weights after row filtering caused by no-impute mode
-    y_sep_train, y_hemo_train, y_cef_train, w_train = (
+    y_sep_train, y_hemo_train, y_cef_train, y_bmr_train, w_train = (
         y_sep_train.loc[X_train.index],
         y_hemo_train.loc[X_train.index],
         y_cef_train.loc[X_train.index],
+        y_bmr_train.loc[X_train.index],
         w_train.loc[X_train.index],
     )
-    y_sep_test, y_hemo_test, y_cef_test, w_test = (
+    y_sep_test, y_hemo_test, y_cef_test, y_bmr_test, w_test = (
         y_sep_test.loc[X_test.index],
         y_hemo_test.loc[X_test.index],
         y_cef_test.loc[X_test.index],
+        y_bmr_test.loc[X_test.index],
         w_test.loc[X_test.index],
     )
     print(f"Train: {len(X_train)} rows  |  Test: {len(X_test)} rows")
@@ -1123,7 +1190,7 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 3. Output directory
     # ------------------------------------------------------------------
-    output_dir = Path(str(args.output_dir) + "_" + TODAY + "_" + JOB_ID)
+    output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_summaries: Dict = {"args": {str(k): str(v) for k,v in args.__dict__.items()}}
@@ -1159,7 +1226,7 @@ def run_training(args: argparse.Namespace) -> None:
     else:
         print("  Selecting Level 1 features by SHAP importance …")
         selected_features, l1_rfecv_history = shap_rfecv(
-            rank_model_l1, X_train, y_sep_train_enc, min_features=2, max_features=args.max_features
+            rank_model_l1, X_train, y_sep_train_enc, min_features=2, max_features=args.max_features, scoring="pr_auc"
         )
     l1_features = cap_features(
         selected_features, X_train, y_sep_train_enc,
@@ -1224,216 +1291,264 @@ def run_training(args: argparse.Namespace) -> None:
     all_summaries["level1_sepsis"] = {"macro_f1": l1_f1, "roc_auc": l1_auc}
 
     # ==================================================================
-    # LEVEL 2 – resultado_hemo_grouped
+    # LEVEL 2 – two-stage binary hemo model
     # ==================================================================
     print("\n" + "=" * 60)
-    print("LEVEL 2: resultado_hemo_grouped")
+    print("LEVEL 2: two-stage hemo (positive gate -> subtype)")
     print("=" * 60)
     l2_dir = output_dir / "level2_hemo"
     l2_dir.mkdir(exist_ok=True)
 
-    # Drop rare hemo classes (< 2 % of hemo-valid training samples)
     hemo_valid_train = y_hemo_train.notna()
-    hemo_counts = y_hemo_train[hemo_valid_train].value_counts()
-    rare_thresh = max(5, hemo_valid_train.sum() / 50)
-    rare_classes = hemo_counts[hemo_counts < rare_thresh].index.tolist()
-    if rare_classes:
-        print(f"  Dropping rare hemo classes: {rare_classes}")
+    hemo_valid_test = y_hemo_test.notna()
+    if not hemo_valid_train.any():
+        raise ValueError("No non-null hemo labels in train.")
 
-    l2_train_mask = hemo_valid_train & ~y_hemo_train.isin(rare_classes)
-    l2_test_mask = y_hemo_test.notna() & ~y_hemo_test.isin(rare_classes)
+    # Stage 1: binary gate (NEGATIVE vs positive)
+    y2_gate_train = (y_hemo_train.loc[hemo_valid_train].astype(str) != args.hemo_negative_label).astype(int)
+    gate_test_mask = hemo_valid_test
+    y2_gate_test = (y_hemo_test.loc[gate_test_mask].astype(str) != args.hemo_negative_label).astype(int)
 
-    # Encode hemo labels on train first, then filter test to known classes
-    le_hemo = LabelEncoder()
-    y2_train_raw = y_hemo_train.loc[l2_train_mask]
-    le_hemo.fit(y2_train_raw)
-    l2_test_mask = l2_test_mask & y_hemo_test.isin(le_hemo.classes_)
+    X2_gate_train_base = X_train.loc[hemo_valid_train].copy()
+    X2_gate_test_base = X_test.loc[gate_test_mask].copy()
 
-    y2_test_raw = y_hemo_test.loc[l2_test_mask]
-    y2_train_enc = pd.Series(
-        le_hemo.transform(y2_train_raw), index=y2_train_raw.index, name="hemo_enc"
-    )
-    y2_test_enc = pd.Series(
-        le_hemo.transform(y2_test_raw), index=y2_test_raw.index, name="hemo_enc"
-    )
-    num_hemo_classes = len(le_hemo.classes_)
-    l2_is_binary = (num_hemo_classes == 2)
-    l2_type_label = "binary" if l2_is_binary else "multiclass"
-    print(f"  Hemo classes ({num_hemo_classes}): {le_hemo.classes_.tolist()} [{l2_type_label}]")
-
-    # CatBoost not supported for multiclass; for binary it is fine
-    _l2_model_type = args.model_type if (l2_is_binary or args.model_type != "catb") else "lgbm"
-
-    # Optional positive-culture gate for L2:
-    # remove NEGATIVE rows so subtype prediction is done only within positives.
-    if args.l2_positive_gate and "NEGATIVE" in le_hemo.classes_:
-        print("  L2 positive gate enabled: removing NEGATIVE samples before final L2 model …")
-        l2_train_mask = l2_train_mask & (y_hemo_train != "NEGATIVE")
-        l2_test_mask = l2_test_mask & (y_hemo_test != "NEGATIVE")
-        y2_train_raw = y_hemo_train.loc[l2_train_mask]
-        le_hemo = LabelEncoder()
-        le_hemo.fit(y2_train_raw)
-        l2_test_mask = l2_test_mask & y_hemo_test.isin(le_hemo.classes_)
-        y2_test_raw = y_hemo_test.loc[l2_test_mask]
-        y2_train_enc = pd.Series(
-            le_hemo.transform(y2_train_raw), index=y2_train_raw.index, name="hemo_enc"
-        )
-        y2_test_enc = pd.Series(
-            le_hemo.transform(y2_test_raw), index=y2_test_raw.index, name="hemo_enc"
-        )
-        num_hemo_classes = len(le_hemo.classes_)
-        l2_is_binary = (num_hemo_classes == 2)
-        if num_hemo_classes < 2:
-            raise ValueError(
-                f"After applying L2 positive gate, only {num_hemo_classes} class "
-                "remains. Cannot train a binary classifier. Check your data."
-            )
-        print(f"  Updated classes ({num_hemo_classes}): {le_hemo.classes_.tolist()}")
-
-    # Base feature matrices for this level
-    X2_train_base = X_train.loc[l2_train_mask].copy()
-    X2_test_base = X_test.loc[l2_test_mask].copy()
-
-    rank_model_l2 = _build_ranking_model(args.model_type, y2_train_enc, args.random_state)
+    rank_model_l2_gate = _build_ranking_model(args.model_type, y2_gate_train, args.random_state)
     if args.skip_rfecv:
-        print("  Skipping RFECV for Level 2 – using all features.")
-        l2_shap_feats = X2_train_base.columns.tolist()
+        print("  Skipping RFECV for Level 2 Stage-1 – using all features.")
+        l2_gate_shap_feats = X2_gate_train_base.columns.tolist()
+        l2_gate_rfecv_history = {}
+    else:
+        print("  Selecting Level 2 Stage-1 features by SHAP importance …")
+        l2_gate_shap_feats, l2_gate_rfecv_history = shap_rfecv(
+            rank_model_l2_gate, X2_gate_train_base, y2_gate_train, min_features=2, max_features=args.max_features, scoring="pr_auc"
+        )
+    l2_gate_features = cap_features(
+        l2_gate_shap_feats, X2_gate_train_base, y2_gate_train,
+        args.max_features, args.random_state, args.model_type, rank_model=rank_model_l2_gate
+    )
+
+    scaler_l2_gate = MinMaxScaler()
+    X2_gate_train_scaled = pd.DataFrame(
+        scaler_l2_gate.fit_transform(X2_gate_train_base[l2_gate_features]),
+        columns=l2_gate_features, index=X2_gate_train_base.index,
+    )
+    X2_gate_test_scaled = pd.DataFrame(
+        scaler_l2_gate.transform(X2_gate_test_base[l2_gate_features]),
+        columns=l2_gate_features, index=X2_gate_test_base.index,
+    )
+
+    sw_l2_gate = compute_balanced_sample_weight(y2_gate_train, w_train.reindex(y2_gate_train.index))
+    print("  Optimising Level 2 Stage-1 binary gate model …")
+    l2_gate_params, l2_gate_threshold, l2_gate_study = optimise_binary_model(
+        X2_gate_train_scaled, y2_gate_train,
+        n_splits=args.cv_splits,
+        n_trials=args.binary_trials,
+        random_state=args.random_state,
+        sample_weight=sw_l2_gate,
+        model_type=args.model_type,
+    )
+    l2_gate_base = build_binary_model(args.model_type, l2_gate_params.copy())
+    l2_gate_cal_cv = max(min(5, int(y2_gate_train.value_counts().min())), 2)
+    l2_gate_model = CalibratedClassifierCV(l2_gate_base, cv=l2_gate_cal_cv, method="isotonic")
+    l2_gate_model.fit(X2_gate_train_scaled, y2_gate_train)
+    l2_gate_test_proba = l2_gate_model.predict_proba(X2_gate_test_scaled)[:, 1]
+    l2_gate_test_pred = (l2_gate_test_proba >= l2_gate_threshold).astype(int)
+    l2_gate_f1 = f1_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
+    l2_gate_auc: Optional[float] = (
+        float(roc_auc_score(y2_gate_test, l2_gate_test_proba))
+        if y2_gate_test.nunique() > 1 else None
+    )
+
+    # Stage 2: subtype among positives only
+    subtype_train_mask = hemo_valid_train & (y_hemo_train.astype(str) != args.hemo_negative_label)
+    subtype_test_mask = hemo_valid_test & (y_hemo_test.astype(str) != args.hemo_negative_label)
+
+    X2_sub_train_base = X_train.loc[subtype_train_mask].copy()
+    X2_sub_test_base = X_test.loc[subtype_test_mask].copy()
+    y2_sub_train_raw = y_hemo_train.loc[subtype_train_mask].astype(str)
+    y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
+
+    if y2_sub_train_raw.empty:
+        raise ValueError(
+            "No train rows for Level 2 Stage-2 subtype after excluding NEGATIVE. "
+            "Check that the hemo target column contains positive labels."
+        )
+
+    le_l2 = LabelEncoder()
+    y2_sub_train = pd.Series(
+        le_l2.fit_transform(y2_sub_train_raw),
+        index=y2_sub_train_raw.index,
+        name="hemo_sub_enc",
+    )
+
+    subtype_test_mask = subtype_test_mask & y2_sub_test_raw.isin(le_l2.classes_)
+    X2_sub_test_base = X_test.loc[subtype_test_mask].copy()
+    y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
+    y2_sub_test = pd.Series(
+        le_l2.transform(y2_sub_test_raw),
+        index=y2_sub_test_raw.index,
+        name="hemo_sub_enc",
+    )
+
+    if X2_sub_test_base.empty:
+        raise ValueError(
+            "No test rows for Level 2 Stage-2 subtype after filtering to labels seen in training. "
+            "Verify the hemo target values and the train/test split."
+        )
+
+    l2_target_names = [str(c) for c in le_l2.classes_]
+    is_binary_subtype = len(le_l2.classes_) == 2
+
+    print(f"  Positive hemo classes: {l2_target_names}")
+    print(f"  Stage-2 train rows: {len(X2_sub_train_base)}  |  test rows: {len(X2_sub_test_base)}")
+
+    rank_model_l2_sub = _build_ranking_model(args.model_type, y2_sub_train, args.random_state)
+    if args.skip_rfecv:
+        print("  Skipping RFECV for Level 2 Stage-2 – using all features.")
+        l2_shap_feats = X2_sub_train_base.columns.tolist()
         l2_rfecv_history = {}
     else:
-        print("  Selecting Level 2 features by SHAP importance …")
+        print("  Selecting Level 2 Stage-2 features by SHAP importance …")
         l2_shap_feats, l2_rfecv_history = shap_rfecv(
-            rank_model_l2, X2_train_base, y2_train_enc, min_features=2, max_features=args.max_features
+            rank_model_l2_sub, X2_sub_train_base, y2_sub_train, min_features=2, max_features=args.max_features, scoring="pr_auc"
         )
     l2_features = cap_features(
-        l2_shap_feats, X2_train_base, y2_train_enc,
-        args.max_features, args.random_state, _l2_model_type, rank_model=rank_model_l2
+        l2_shap_feats, X2_sub_train_base, y2_sub_train,
+        args.max_features, args.random_state, args.model_type, rank_model=rank_model_l2_sub
     )
-    print(f"  SHAP selection kept {len(l2_features)} features.")
+    print(f"  Stage-2 SHAP selection kept {len(l2_features)} features.")
 
     scaler_l2 = MinMaxScaler()
     X2_train_scaled = pd.DataFrame(
-        scaler_l2.fit_transform(X2_train_base[l2_features]),
-        columns=l2_features, index=X2_train_base.index,
+        scaler_l2.fit_transform(X2_sub_train_base[l2_features]),
+        columns=l2_features, index=X2_sub_train_base.index,
     )
     X2_test_scaled = pd.DataFrame(
-        scaler_l2.transform(X2_test_base[l2_features]),
-        columns=l2_features, index=X2_test_base.index,
+        scaler_l2.transform(X2_sub_test_base[l2_features]),
+        columns=l2_features, index=X2_sub_test_base.index,
     )
 
-    sw_l2 = compute_balanced_sample_weight(y2_train_enc, w_train.reindex(y2_train_enc.index))
-
-    if l2_is_binary:
-        print("  Optimising Level 2 binary model …")
+    sw_l2 = compute_balanced_sample_weight(y2_sub_train, w_train.reindex(y2_sub_train.index))
+    print("  Optimising Level 2 Stage-2 subtype model …")
+    if is_binary_subtype:
         l2_params, l2_threshold, l2_study = optimise_binary_model(
-            X2_train_scaled, y2_train_enc,
+            X2_train_scaled, y2_sub_train,
             n_splits=args.cv_splits,
             n_trials=args.binary_trials,
             random_state=args.random_state,
             sample_weight=sw_l2,
-            model_type=_l2_model_type,
+            model_type=args.model_type,
         )
-        print(f"  Best threshold: {l2_threshold:.3f}")
-
-        l2_base = build_binary_model(_l2_model_type, l2_params.copy())
-        l2_cal_cv = max(min(5, int(y2_train_enc.value_counts().min())), 2)
-        l2_model = CalibratedClassifierCV(l2_base, cv=l2_cal_cv, method="isotonic")
-        l2_model.fit(X2_train_scaled, y2_train_enc)
-        l2_test_proba = l2_model.predict_proba(X2_test_scaled)[:, 1]  # 1D
-        l2_test_pred = (l2_test_proba >= l2_threshold).astype(int)
-
-        l2_f1 = f1_score(y2_test_enc, l2_test_pred, average="macro", zero_division=0)
-        l2_auc: Optional[float] = (
-            float(roc_auc_score(y2_test_enc, l2_test_proba))
-            if y2_test_enc.nunique() > 1 else None
-        )
-        l2_report = classification_report(
-            y2_test_enc, l2_test_pred,
-            target_names=[str(c) for c in le_hemo.classes_],
-            zero_division=0,
-        )
-        print(
-            f"  Level 2 – Macro F1: {l2_f1:.3f}"
-            + (f"  |  ROC-AUC: {l2_auc:.3f}" if l2_auc is not None else "")
-        )
-
-        (l2_dir / "report.txt").write_text(l2_report)
-        (l2_dir / "summary.json").write_text(json.dumps({
-            "params": l2_params, "threshold": l2_threshold,
-            "macro_f1": l2_f1, "roc_auc": l2_auc,
-            "hemo_classes": le_hemo.classes_.tolist(),
-            "shaprfecv_features": l2_shap_feats,
-            "features": l2_features, "is_binary": True,
-            "l2_positive_gate": args.l2_positive_gate,
-        }, indent=2))
-        l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials.csv", index=False)
-        pd.DataFrame({
-            "true": y2_test_enc.values,
-            "pred": l2_test_pred,
-            "proba": l2_test_proba,
-        }, index=X2_test_scaled.index).to_csv(l2_dir / "predictions.csv", index_label="row_index")
-
-        all_summaries["level2_hemo"] = {
-            "macro_f1": l2_f1, "roc_auc": l2_auc,
-            "hemo_classes": le_hemo.classes_.tolist(),
-            "is_binary": True, "threshold": l2_threshold,
-            "l2_positive_gate": args.l2_positive_gate,
-        }
-
+        l2_base = build_binary_model(args.model_type, l2_params.copy())
     else:
-        l2_threshold = None
-        print("  Optimising Level 2 multiclass model …")
         l2_params, l2_study = optimise_multiclass_model(
-            X2_train_scaled, y2_train_enc,
+            X2_train_scaled, y2_sub_train,
             n_splits=args.cv_splits,
             n_trials=args.binary_trials,
             random_state=args.random_state,
             sample_weight=sw_l2,
-            model_type=_l2_model_type,
-            num_classes=num_hemo_classes,
+            model_type=args.model_type,
+            num_classes=len(le_l2.classes_),
         )
+        l2_threshold = None
+        l2_base = build_multiclass_model(args.model_type, l2_params.copy(), len(le_l2.classes_))
 
-        # Final Level 2 model, calibrated
-        l2_base = build_multiclass_model(_l2_model_type, l2_params.copy(), num_hemo_classes)
-        l2_model = CalibratedClassifierCV(l2_base, cv=5, method="isotonic")
-        l2_model.fit(X2_train_scaled, y2_train_enc)
-        l2_test_proba = l2_model.predict_proba(X2_test_scaled)  # [n_l2_test, num_hemo_classes]
-        l2_test_pred = l2_model.predict(X2_test_scaled)
+    l2_cal_cv = max(min(5, int(y2_sub_train.value_counts().min())), 2)
+    l2_model = CalibratedClassifierCV(l2_base, cv=l2_cal_cv, method="isotonic")
+    l2_model.fit(X2_train_scaled, y2_sub_train)
+    l2_test_proba = l2_model.predict_proba(X2_test_scaled)
+    if is_binary_subtype:
+        l2_test_pred = (l2_test_proba[:, 1] >= l2_threshold).astype(int)
+    else:
+        l2_test_pred = np.argmax(l2_test_proba, axis=1)
 
-        l2_report = classification_report(
-            y2_test_enc, l2_test_pred,
-            target_names=[str(c) for c in le_hemo.classes_],
-#!/usr/bin/env python3
-            zero_division=0,
-        )
-        l2_f1 = f1_score(y2_test_enc, l2_test_pred, average="macro", zero_division=0)
-        l2_auc = roc_auc_score(
-            y2_test_enc, l2_test_proba, multi_class="ovr", average="macro"
-        )
-        print(f"  Level 2 – Macro F1: {l2_f1:.3f}")
+    l2_f1 = f1_score(y2_sub_test, l2_test_pred, average="macro", zero_division=0)
+    l2_auc: Optional[float] = None
+    if y2_sub_test.nunique() > 1:
+        if is_binary_subtype:
+            l2_auc = float(roc_auc_score(y2_sub_test, l2_test_proba[:, 1]))
+        else:
+            l2_auc = float(roc_auc_score(y2_sub_test, l2_test_proba, multi_class="ovr", average="macro"))
 
-        (l2_dir / "report.txt").write_text(l2_report)
-        (l2_dir / "summary.json").write_text(json.dumps({
-            "params": l2_params, "macro_f1": l2_f1,
-            "hemo_classes": le_hemo.classes_.tolist(),
-            "shaprfecv_features": l2_shap_feats,
-            "features": l2_features, "roc_auc": l2_auc, "is_binary": False,
-            "l2_positive_gate": args.l2_positive_gate,
-        }, indent=2))
-        l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials.csv", index=False)
-        pd.DataFrame(
-            l2_test_proba,
-            columns=[f"proba_{c}" for c in le_hemo.classes_],
-            index=X2_test_scaled.index,
-        ).assign(
-            true=y2_test_enc.values, pred=l2_test_pred
-        ).to_csv(l2_dir / "predictions.csv", index_label="row_index")
+    l2_report = classification_report(
+        y2_sub_test, l2_test_pred,
+        target_names=l2_target_names,
+        zero_division=0,
+    )
+    print(
+        f"  Level 2 Stage-1 gate – Macro F1: {l2_gate_f1:.3f}"
+        + (f"  |  ROC-AUC: {l2_gate_auc:.3f}" if l2_gate_auc is not None else "")
+    )
+    print(
+        f"  Level 2 Stage-2 subtype – Macro F1: {l2_f1:.3f}"
+        + (f"  |  ROC-AUC: {l2_auc:.3f}" if l2_auc is not None else "")
+    )
 
-        all_summaries["level2_hemo"] = {
-            "macro_f1": l2_f1, "roc_auc": l2_auc,
-            "hemo_classes": le_hemo.classes_.tolist(), "is_binary": False,
-            "l2_positive_gate": args.l2_positive_gate,
-        }
+    (l2_dir / "report.txt").write_text(l2_report)
+    stage2_summary = {
+        "mode": "binary" if is_binary_subtype else "multiclass",
+        "classes": l2_target_names,
+        "params": l2_params,
+        "threshold": l2_threshold,
+        "macro_f1": l2_f1,
+        "roc_auc": l2_auc,
+        "shaprfecv_features": l2_shap_feats,
+        "features": l2_features,
+    }
+    if is_binary_subtype:
+        stage2_summary["negative_label"] = l2_target_names[0]
+        stage2_summary["positive_label"] = l2_target_names[1]
 
+    (l2_dir / "summary.json").write_text(json.dumps({
+        "mode": "two_stage_multiclass" if not is_binary_subtype else "two_stage_binary",
+        "stage1_gate": {
+            "negative_label": args.hemo_negative_label,
+            "params": l2_gate_params,
+            "threshold": l2_gate_threshold,
+            "macro_f1": l2_gate_f1,
+            "roc_auc": l2_gate_auc,
+            "shaprfecv_features": l2_gate_shap_feats,
+            "features": l2_gate_features,
+        },
+        "stage2_subtype": stage2_summary,
+    }, indent=2))
+    l2_gate_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage1_gate.csv", index=False)
+    l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage2_subtype.csv", index=False)
+
+    stage2_pred_df = pd.DataFrame(index=X2_test_scaled.index)
+    stage2_pred_df["true"] = y2_sub_test.values
+    stage2_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_sub_test.values]
+    stage2_pred_df["pred"] = l2_test_pred
+    stage2_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
+    if is_binary_subtype:
+        stage2_pred_df["proba_positive"] = l2_test_proba[:, 1]
+    else:
+        for idx, class_name in enumerate(le_l2.classes_):
+            stage2_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
+
+    pd.DataFrame({
+        "true": y2_gate_test.values,
+        "pred": l2_gate_test_pred,
+        "proba": l2_gate_test_proba,
+    }, index=X2_gate_test_scaled.index).to_csv(l2_dir / "predictions_stage1_gate.csv", index_label="row_index")
+    stage2_pred_df.to_csv(l2_dir / "predictions_stage2_subtype.csv", index_label="row_index")
+
+    all_summaries["level2_hemo"] = {
+        "mode": "two_stage_binary" if is_binary_subtype else "two_stage_multiclass_positive_gate",
+        "stage1_gate": {
+            "macro_f1": l2_gate_f1,
+            "roc_auc": l2_gate_auc,
+            "negative_label": args.hemo_negative_label,
+            "threshold": l2_gate_threshold,
+        },
+        "stage2_subtype": {
+            "macro_f1": l2_f1,
+            "roc_auc": l2_auc,
+            "classes": l2_target_names,
+            "threshold": l2_threshold,
+        },
+    }
+    all_summaries["l2_gate_rfecv_scores"] = l2_gate_rfecv_history
     # ==================================================================
     # LEVEL 3 – resistente_cefalosporina
     # ==================================================================
@@ -1443,34 +1558,40 @@ def run_training(args: argparse.Namespace) -> None:
     l3_dir = output_dir / "level3_cefalosporina"
     l3_dir.mkdir(exist_ok=True)
 
-    # Level 3 is always scoped to positive blood culture rows for clinical consistency.
+    # Level 3 is normally scoped to positive blood culture rows.
     hemo_pos_train_mask = y_hemo_train.notna() & (y_hemo_train != "NEGATIVE")
     hemo_pos_test_mask = y_hemo_test.notna() & (y_hemo_test != "NEGATIVE")
+    if args.skip_l3_hemo_filter:
+        print("  Level 3: skipping resultado_hemo != NEGATIVE filter before BMR gating.")
+        hemo_pos_train_mask = y_hemo_train.notna()
+        hemo_pos_test_mask = y_hemo_test.notna()
+    else:
+        print("  Level 3: filtering to resultado_hemo != NEGATIVE before BMR gating.")
+
+    bmr_valid_train_mask = y_bmr_train.notna() & hemo_pos_train_mask
+    bmr_valid_test_mask = y_bmr_test.notna() & hemo_pos_test_mask
     cef_valid_train_mask = y_cef_train.notna() & hemo_pos_train_mask
     cef_valid_test_mask = y_cef_test.notna() & hemo_pos_test_mask
 
     if not cef_valid_train_mask.any():
         raise ValueError(
             "No training rows with positive blood culture and valid Level-3 label. "
-            "Check that 'resultado_hemo_grouped' and the chosen --cef-target are present."
+            "Check that 'resultado_hemo_grouped', 'bmr_etiologia', and the chosen --cef-target are present."
         )
 
     use_cef_multi_two_stage = (args.cef_target == "resistente_cefalosporina_multi")
 
     if use_cef_multi_two_stage:
         print("  Level 3 target is resistente_cefalosporina_multi: using two-stage clinical gate.")
-        print("  Stage 1: BMR gate (NEGATIVE vs non-NEGATIVE).")
+        print("  Stage 1: BMR gate (NEGATIVE vs non-NEGATIVE) on bmr_etiologia.")
         print("  Stage 2: among BMR-positive, cefalosporina vs other.")
 
-        # -------------------------------
-        # Stage 1: BMR gate on hemo-positive rows
-        # -------------------------------
-        gate_train_mask = cef_valid_train_mask
-        gate_test_mask = cef_valid_test_mask
+        gate_train_mask = bmr_valid_train_mask
+        gate_test_mask = bmr_valid_test_mask
         X3_gate_train_base = X_train.loc[gate_train_mask].copy()
         X3_gate_test_base = X_test.loc[gate_test_mask].copy()
-        y3_gate_train = (y_cef_train.loc[gate_train_mask].astype(str) != "NEGATIVE").astype(int)
-        y3_gate_test = (y_cef_test.loc[gate_test_mask].astype(str) != "NEGATIVE").astype(int)
+        y3_gate_train = (y_bmr_train.loc[gate_train_mask].astype(str) != args.bmr_negative_label).astype(int)
+        y3_gate_test = (y_bmr_test.loc[gate_test_mask].astype(str) != args.bmr_negative_label).astype(int)
 
         gate_minority = int(pd.Series(y3_gate_train).value_counts().min())
         gate_cv_splits = max(min(args.cv_splits, gate_minority), 2)
@@ -1485,7 +1606,7 @@ def run_training(args: argparse.Namespace) -> None:
         else:
             print("  Selecting L3 stage-1 gate features by SHAP importance …")
             l3_gate_feats, l3_gate_rfecv_history = shap_rfecv(
-                rank_model_l3_gate, X3_gate_train_base, y3_gate_train, min_features=2, max_features=args.max_features
+                rank_model_l3_gate, X3_gate_train_base, y3_gate_train, min_features=2, max_features=args.max_features, scoring="pr_auc"
             )
         l3_gate_features = cap_features(
             l3_gate_feats, X3_gate_train_base, pd.Series(y3_gate_train),
@@ -1520,11 +1641,8 @@ def run_training(args: argparse.Namespace) -> None:
         l3_gate_test_proba = l3_gate_model.predict_proba(X3_gate_test_scaled)[:, 1]
         l3_gate_test_pred = (l3_gate_test_proba >= l3_gate_threshold).astype(int)
 
-        # -------------------------------
-        # Stage 2: cefalosporina vs other among BMR-positive rows
-        # -------------------------------
-        stage2_train_mask = gate_train_mask & (y_cef_train.astype(str) != "NEGATIVE")
-        stage2_test_mask = gate_test_mask & (y_cef_test.astype(str) != "NEGATIVE")
+        stage2_train_mask = gate_train_mask & (y_bmr_train.astype(str) != args.bmr_negative_label) & y_cef_train.notna()
+        stage2_test_mask = gate_test_mask & (y_bmr_test.astype(str) != args.bmr_negative_label) & y_cef_test.notna()
         X3_train_base = X_train.loc[stage2_train_mask].copy()
         X3_test_base = X_test.loc[stage2_test_mask].copy()
         y3_train_raw = y_cef_train.loc[stage2_train_mask].astype(str)
@@ -1537,6 +1655,11 @@ def run_training(args: argparse.Namespace) -> None:
                 "Stage-2 Level-3 target has <2 classes. "
                 "Adjust --cef-multi-positive-label or verify resistente_cefalosporina_multi labels."
             )
+
+        y3_train_enc = y3_train_stage2
+        y3_test_enc = y3_test_stage2
+        is_l3_binary = True
+        l3_target_names = ["other", args.cef_multi_positive_label]
 
         print(
             f"  L3 stage-2 positive token: '{args.cef_multi_positive_label}' | "
@@ -1557,7 +1680,7 @@ def run_training(args: argparse.Namespace) -> None:
         else:
             print("  Selecting Level 3 stage-2 features by SHAP importance …")
             l3_shap_feats, l3_rfecv_history = shap_rfecv(
-                rank_model_l3, X3_train_base, y3_train_stage2, min_features=2, max_features=args.max_features
+                rank_model_l3, X3_train_base, y3_train_stage2, min_features=2, max_features=args.max_features, scoring="pr_auc"
             )
         l3_features = cap_features(
             l3_shap_feats, X3_train_base, y3_train_stage2,
@@ -1639,29 +1762,224 @@ def run_training(args: argparse.Namespace) -> None:
         all_summaries["l3_gate_rfecv_scores"] = l3_gate_rfecv_history
         all_summaries["l3_rfecv_scores"] = l3_rfecv_history
     else:
-        # Original binary behavior for resistente_cefalosporina
-        cef_train_mask = cef_valid_train_mask
-        cef_test_mask = cef_valid_test_mask
+        gate_train_mask = cef_valid_train_mask
+        gate_test_mask = cef_valid_test_mask
+        X3_gate_train_base = X_train.loc[gate_train_mask].copy()
+        X3_gate_test_base = X_test.loc[gate_test_mask].copy()
+        y3_gate_train = (y_cef_train.loc[gate_train_mask].astype(str) != "NEGATIVE").astype(int)
+        y3_gate_test = (y_cef_test.loc[gate_test_mask].astype(str) != "NEGATIVE").astype(int)
 
-        X3_train_base = X_train.loc[cef_train_mask].copy()
-        X3_test_base = X_test.loc[cef_test_mask].copy()
-        y3_train_raw = y_cef_train.loc[cef_train_mask]
-        y3_test_raw = y_cef_test.loc[cef_test_mask]
+        gate_minority = int(pd.Series(y3_gate_train).value_counts().min())
+        gate_cv_splits = max(min(args.cv_splits, gate_minority), 2)
+        if gate_cv_splits != args.cv_splits:
+            print(f"  Reducing cv_splits from {args.cv_splits} to {gate_cv_splits} for L3 stage-1 gate.")
+
+        rank_model_l3_gate = _build_ranking_model(args.model_type, pd.Series(y3_gate_train), args.random_state)
+        if args.skip_rfecv:
+            print("  Skipping L3 stage-1 gate RFECV – using all features.")
+            l3_gate_feats = X3_gate_train_base.columns.tolist()
+            l3_gate_rfecv_history = {}
+        else:
+            print("  Selecting L3 stage-1 gate features by SHAP importance …")
+            l3_gate_feats, l3_gate_rfecv_history = shap_rfecv(
+                rank_model_l3_gate, X3_gate_train_base, y3_gate_train, min_features=2, max_features=args.max_features, scoring="pr_auc"
+            )
+        l3_gate_features = cap_features(
+            l3_gate_feats, X3_gate_train_base, pd.Series(y3_gate_train),
+            args.max_features, args.random_state, args.model_type, rank_model=rank_model_l3_gate
+        )
+
+        scaler_l3_gate = MinMaxScaler()
+        X3_gate_train_scaled = pd.DataFrame(
+            scaler_l3_gate.fit_transform(X3_gate_train_base[l3_gate_features]),
+            columns=l3_gate_features, index=X3_gate_train_base.index,
+        )
+        X3_gate_test_scaled = pd.DataFrame(
+            scaler_l3_gate.transform(X3_gate_test_base[l3_gate_features]),
+            columns=l3_gate_features, index=X3_gate_test_base.index,
+        )
+        sw_l3_gate = compute_balanced_sample_weight(
+            pd.Series(y3_gate_train, index=X3_gate_train_base.index),
+            w_train.reindex(X3_gate_train_base.index),
+        )
+        l3_gate_params, l3_gate_threshold, l3_gate_study = optimise_binary_model(
+            X3_gate_train_scaled, pd.Series(y3_gate_train, index=X3_gate_train_base.index),
+            n_splits=gate_cv_splits,
+            n_trials=args.binary_trials,
+            random_state=args.random_state,
+            sample_weight=sw_l3_gate,
+            model_type=args.model_type,
+        )
+        l3_gate_base = build_binary_model(args.model_type, l3_gate_params.copy())
+        l3_gate_cal_cv = max(min(5, gate_minority), 2)
+        l3_gate_model = CalibratedClassifierCV(l3_gate_base, cv=l3_gate_cal_cv, method="isotonic")
+        l3_gate_model.fit(X3_gate_train_scaled, y3_gate_train)
+        l3_gate_test_proba = l3_gate_model.predict_proba(X3_gate_test_scaled)[:, 1]
+        l3_gate_test_pred = (l3_gate_test_proba >= l3_gate_threshold).astype(int)
+
+        stage2_train_mask = gate_train_mask & (y_cef_train.astype(str) != "NEGATIVE")
+        stage2_test_mask = gate_test_mask & (y_cef_test.astype(str) != "NEGATIVE")
+        X3_train_base = X_train.loc[stage2_train_mask].copy()
+        X3_test_base = X_test.loc[stage2_test_mask].copy()
+        y3_train_raw = y_cef_train.loc[stage2_train_mask].astype(str)
+        y3_test_raw = y_cef_test.loc[stage2_test_mask].astype(str)
+
+        if y3_train_raw.empty:
+            raise ValueError(
+                "Stage-2 Level 3 has no BMR-positive train rows after NEGATIVE exclusion. "
+                "Check that --cef-target contains raw BMR type labels."
+            )
 
         le_cef = LabelEncoder()
         y3_train_enc = pd.Series(
             le_cef.fit_transform(y3_train_raw), index=y3_train_raw.index, name="cef_enc"
         )
-        # Filter test to known cef classes only
-        cef_test_mask = cef_test_mask & y_cef_test.isin(le_cef.classes_)
-        X3_test_base = X_test.loc[cef_test_mask].copy()
-        y3_test_raw = y_cef_test.loc[cef_test_mask]
+        stage2_test_mask = stage2_test_mask & y3_test_raw.isin(le_cef.classes_)
+        X3_test_base = X_test.loc[stage2_test_mask].copy()
+        y3_test_raw = y_cef_test.loc[stage2_test_mask].astype(str)
         y3_test_enc = pd.Series(
             le_cef.transform(y3_test_raw), index=y3_test_raw.index, name="cef_enc"
         )
 
-        print(f"  Cef classes: {le_cef.classes_.tolist()}")
-        print(f"  Level 3 train rows: {len(X3_train_base)}  |  test rows: {len(X3_test_base)}")
+        l3_target_names = [str(c) for c in le_cef.classes_]
+        is_l3_binary = len(le_cef.classes_) == 2
+
+        print(f"  BMR-positive classes: {l3_target_names}")
+        print(f"  L3 stage-2 train rows: {len(X3_train_base)}  |  test rows: {len(X3_test_base)}")
+
+        rank_model_l3 = _build_ranking_model(args.model_type, y3_train_enc, args.random_state)
+        if args.skip_rfecv:
+            print("  Skipping RFECV for Level 3 stage-2 – using all features.")
+            l3_shap_feats = X3_train_base.columns.tolist()
+            l3_rfecv_history = {}
+        else:
+            print("  Selecting Level 3 stage-2 features by SHAP importance …")
+            l3_shap_feats, l3_rfecv_history = shap_rfecv(
+                rank_model_l3, X3_train_base, y3_train_enc, min_features=2, max_features=args.max_features, scoring="pr_auc"
+            )
+        l3_features = cap_features(
+            l3_shap_feats, X3_train_base, y3_train_enc,
+            args.max_features, args.random_state, args.model_type, rank_model=rank_model_l3
+        )
+        print(f"  Stage-2 SHAP selection kept {len(l3_features)} features.")
+
+        scaler_l3 = MinMaxScaler()
+        X3_train_scaled = pd.DataFrame(
+            scaler_l3.fit_transform(X3_train_base[l3_features]),
+            columns=l3_features, index=X3_train_base.index,
+        )
+        X3_test_scaled = pd.DataFrame(
+            scaler_l3.transform(X3_test_base[l3_features]),
+            columns=l3_features, index=X3_test_base.index,
+        )
+
+        sw_l3 = compute_balanced_sample_weight(y3_train_enc, w_train.reindex(y3_train_enc.index))
+        if is_l3_binary:
+            l3_params, l3_threshold, l3_study = optimise_binary_model(
+                X3_train_scaled, y3_train_enc,
+                n_splits=args.cv_splits,
+                n_trials=args.binary_trials,
+                random_state=args.random_state,
+                sample_weight=sw_l3,
+                model_type=args.model_type,
+            )
+            l3_base = build_binary_model(args.model_type, l3_params.copy())
+        else:
+            l3_params, l3_study = optimise_multiclass_model(
+                X3_train_scaled, y3_train_enc,
+                n_splits=args.cv_splits,
+                n_trials=args.binary_trials,
+                random_state=args.random_state,
+                sample_weight=sw_l3,
+                model_type=args.model_type,
+                num_classes=len(le_cef.classes_),
+            )
+            l3_threshold = None
+            l3_base = build_multiclass_model(args.model_type, l3_params.copy(), len(le_cef.classes_))
+
+        l3_cal_cv = max(min(5, int(y3_train_enc.value_counts().min())), 2)
+        l3_model = CalibratedClassifierCV(l3_base, cv=l3_cal_cv, method="isotonic")
+        l3_model.fit(X3_train_scaled, y3_train_enc)
+
+        l3_test_proba = l3_model.predict_proba(X3_test_scaled)
+        if is_l3_binary:
+            l3_test_pred = (l3_test_proba[:, 1] >= l3_threshold).astype(int)
+        else:
+            l3_test_pred = np.argmax(l3_test_proba, axis=1)
+
+        l3_f1 = f1_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
+        l3_auc: Optional[float] = None
+        if y3_test_enc.nunique() > 1:
+            if is_l3_binary:
+                l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba[:, 1]))
+            else:
+                l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba, multi_class="ovr", average="macro"))
+
+        l3_report = classification_report(
+            y3_test_enc, l3_test_pred,
+            target_names=l3_target_names,
+            zero_division=0,
+        )
+
+        (l3_dir / "stage1_bmr_gate_summary.json").write_text(json.dumps({
+            "params": l3_gate_params,
+            "threshold": l3_gate_threshold,
+            "macro_f1": float(f1_score(y3_gate_test, l3_gate_test_pred, average="macro", zero_division=0)),
+            "roc_auc": float(roc_auc_score(y3_gate_test, l3_gate_test_proba)) if pd.Series(y3_gate_test).nunique() > 1 else None,
+            "features": l3_gate_features,
+            "shaprfecv_features": l3_gate_feats,
+        }, indent=2))
+        l3_gate_study.trials_dataframe().to_csv(l3_dir / "stage1_bmr_gate_optuna_trials.csv", index=False)
+        pd.DataFrame({
+            "true_bmr": y3_gate_test,
+            "pred_bmr": l3_gate_test_pred,
+            "proba_bmr_positive": l3_gate_test_proba,
+        }, index=X3_gate_test_scaled.index).to_csv(l3_dir / "stage1_bmr_gate_predictions.csv", index_label="row_index")
+
+        stage2_summary = {
+            "mode": "binary" if is_l3_binary else "multiclass",
+            "classes": l3_target_names,
+            "params": l3_params,
+            "threshold": l3_threshold,
+            "macro_f1": l3_f1,
+            "roc_auc": l3_auc,
+            "features": l3_features,
+            "shaprfecv_features": l3_shap_feats,
+        }
+        if is_l3_binary:
+            stage2_summary["negative_label"] = l3_target_names[0]
+            stage2_summary["positive_label"] = l3_target_names[1]
+
+        (l3_dir / "summary.json").write_text(json.dumps({
+            "mode": "two_stage_binary" if is_l3_binary else "two_stage_multiclass",
+            "stage1_gate": "BMR (NEGATIVE vs non-NEGATIVE)",
+            "stage2_target": "BMR class among positives",
+            "stage2": stage2_summary,
+            "hemo_positive_gate": True,
+        }, indent=2))
+        l3_study.trials_dataframe().to_csv(l3_dir / "optuna_trials.csv", index=False)
+
+        stage2_pred_df = pd.DataFrame(index=X3_test_scaled.index)
+        stage2_pred_df["true"] = y3_test_enc.values
+        stage2_pred_df["true_label"] = [l3_target_names[x] for x in y3_test_enc.values]
+        stage2_pred_df["pred"] = l3_test_pred
+        stage2_pred_df["pred_label"] = [l3_target_names[x] for x in l3_test_pred]
+        if is_l3_binary:
+            stage2_pred_df["proba_positive"] = l3_test_proba[:, 1]
+        else:
+            for idx, class_name in enumerate(l3_target_names):
+                stage2_pred_df[f"proba_{class_name}"] = l3_test_proba[:, idx]
+        stage2_pred_df.to_csv(l3_dir / "stage2_bmr_type_predictions.csv", index_label="row_index")
+
+        all_summaries["level3_cefalosporina"] = {
+            "mode": "two_stage_binary" if is_l3_binary else "two_stage_multiclass",
+            "macro_f1": l3_f1,
+            "roc_auc": l3_auc,
+            "classes": l3_target_names,
+            "threshold": l3_threshold,
+        }
+        all_summaries["l3_gate_rfecv_scores"] = l3_gate_rfecv_history
+        all_summaries["l3_rfecv_scores"] = l3_rfecv_history
 
     # ------------------------------------------------------------------
     # L3 size guard
@@ -1682,88 +2000,90 @@ def run_training(args: argparse.Namespace) -> None:
             f"\n  Results should be interpreted with caution."
             f"\n  {'!' * 60}\n"
         )
-        rank_model_l3 = _build_ranking_model(args.model_type, y3_train_enc, args.random_state)
-        if args.skip_rfecv:
-            print("  Skipping RFECV for Level 3 – using all features.")
-            l3_shap_feats = X3_train_base.columns.tolist()
-            l3_rfecv_history = {}
-        else:
-            print("  Selecting Level 3 features by SHAP importance …")
-            l3_shap_feats, l3_rfecv_history = shap_rfecv(
-                rank_model_l3, X3_train_base, y3_train_enc, min_features=2, max_features=args.max_features
-            )
-        l3_features = cap_features(
-            l3_shap_feats, X3_train_base, y3_train_enc,
-            args.max_features, args.random_state, args.model_type, rank_model=rank_model_l3
+
+    rank_model_l3 = _build_ranking_model(args.model_type, y3_train_enc, args.random_state)
+    if args.skip_rfecv:
+        print("  Skipping RFECV for Level 3 – using all features.")
+        l3_shap_feats = X3_train_base.columns.tolist()
+        l3_rfecv_history = {}
+    else:
+        print("  Selecting Level 3 features by SHAP importance …")
+        l3_shap_feats, l3_rfecv_history = shap_rfecv(
+            rank_model_l3, X3_train_base, y3_train_enc, min_features=2, max_features=args.max_features, scoring="pr_auc"
         )
-        print(f"  SHAP selection kept {len(l3_features)} features.")
+    l3_features = cap_features(
+        l3_shap_feats, X3_train_base, y3_train_enc,
+        args.max_features, args.random_state, args.model_type, rank_model=rank_model_l3
+    )
+    print(f"  SHAP selection kept {len(l3_features)} features.")
 
-        scaler_l3 = MinMaxScaler()
-        X3_train_scaled = pd.DataFrame(
-            scaler_l3.fit_transform(X3_train_base[l3_features]),
-            columns=l3_features, index=X3_train_base.index,
-        )
-        X3_test_scaled = pd.DataFrame(
-            scaler_l3.transform(X3_test_base[l3_features]),
-            columns=l3_features, index=X3_test_base.index,
-        )
+    scaler_l3 = MinMaxScaler()
+    X3_train_scaled = pd.DataFrame(
+        scaler_l3.fit_transform(X3_train_base[l3_features]),
+        columns=l3_features, index=X3_train_base.index,
+    )
+    X3_test_scaled = pd.DataFrame(
+        scaler_l3.transform(X3_test_base[l3_features]),
+        columns=l3_features, index=X3_test_base.index,
+    )
 
-        sw_l3 = compute_balanced_sample_weight(y3_train_enc, w_train.reindex(y3_train_enc.index))
+    sw_l3 = compute_balanced_sample_weight(y3_train_enc, w_train.reindex(y3_train_enc.index))
 
-        print("  Optimising Level 3 model …")
-        l3_params, l3_threshold, l3_study = optimise_binary_model(
-            X3_train_scaled, y3_train_enc,
-            n_splits=l3_cv_splits,
-            n_trials=args.binary_trials,
-            random_state=args.random_state,
-            sample_weight=sw_l3,
-            model_type=args.model_type,
-        )
-        print(f"  Best threshold: {l3_threshold:.3f}")
+    print("  Optimising Level 3 model …")
+    l3_params, l3_threshold, l3_study = optimise_binary_model(
+        X3_train_scaled, y3_train_enc,
+        n_splits=l3_cv_splits,
+        n_trials=args.binary_trials,
+        random_state=args.random_state,
+        sample_weight=sw_l3,
+        model_type=args.model_type,
+    )
+    print(f"  Best threshold: {l3_threshold:.3f}")
 
-        # Final Level 3 model, calibrated
-        l3_base = build_binary_model(args.model_type, l3_params.copy())
-        l3_cal_cv = min(5, int(y3_train_enc.value_counts().min()))
-        l3_cal_cv = max(l3_cal_cv, 2)
-        l3_model = CalibratedClassifierCV(l3_base, cv=l3_cal_cv, method="isotonic")
-        l3_model.fit(X3_train_scaled, y3_train_enc)
+    # Final Level 3 model, calibrated
+    l3_base = build_binary_model(args.model_type, l3_params.copy())
+    l3_cal_cv = min(5, int(y3_train_enc.value_counts().min()))
+    l3_cal_cv = max(l3_cal_cv, 2)
+    l3_model = CalibratedClassifierCV(l3_base, cv=l3_cal_cv, method="isotonic")
+    l3_model.fit(X3_train_scaled, y3_train_enc)
 
-        l3_test_proba = l3_model.predict_proba(X3_test_scaled)[:, 1]
-        l3_test_pred = (l3_test_proba >= l3_threshold).astype(int)
+    l3_test_proba = l3_model.predict_proba(X3_test_scaled)[:, 1]
+    l3_test_pred = (l3_test_proba >= l3_threshold).astype(int)
 
-        l3_report = classification_report(
-            y3_test_enc, l3_test_pred,
-            target_names=[str(c) for c in le_cef.classes_],
-            zero_division=0,
-        )
-        l3_f1 = f1_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
-        l3_auc: Optional[float] = None
-        if y3_test_enc.nunique() > 1:
-            l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba))
+    l3_report = classification_report(
+        y3_test_enc, l3_test_pred,
+        target_names=l3_target_names,
+        zero_division=0,
+    )
+    l3_f1 = f1_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
+    l3_auc: Optional[float] = None
+    if y3_test_enc.nunique() > 1:
+        l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba))
 
-        print(
-            f"  Level 3 – Macro F1: {l3_f1:.3f}"
-            + (f"  |  ROC-AUC: {l3_auc:.3f}" if l3_auc is not None else "")
-        )
+    print(
+        f"  Level 3 – Macro F1: {l3_f1:.3f}"
+        + (f"  |  ROC-AUC: {l3_auc:.3f}" if l3_auc is not None else "")
+    )
 
-        (l3_dir / "report.txt").write_text(l3_report)
-        (l3_dir / "summary.json").write_text(json.dumps({
-            "params": l3_params, "threshold": l3_threshold,
-            "macro_f1": l3_f1, "roc_auc": l3_auc,
-            "classes": le_cef.classes_.tolist(),
-            "shaprfecv_features": l3_shap_feats,
-            "features": l3_features,
-            "hemo_positive_gate": True,
-        }, indent=2))
-        l3_study.trials_dataframe().to_csv(l3_dir / "optuna_trials.csv", index=False)
-        pd.DataFrame({
-            "true": y3_test_enc.values,
-            "pred": l3_test_pred,
-            "proba": l3_test_proba,
-        }, index=X3_test_scaled.index).to_csv(l3_dir / "predictions.csv", index_label="row_index")
+    print(f"Saving Level 3 results to {l3_dir}")
+    (l3_dir / "report.txt").write_text(l3_report)
+    (l3_dir / "summary.json").write_text(json.dumps({
+        "params": l3_params, "threshold": l3_threshold,
+        "macro_f1": l3_f1, "roc_auc": l3_auc,
+        "classes": l3_target_names,
+        "shaprfecv_features": l3_shap_feats,
+        "features": l3_features,
+        "hemo_positive_gate": True,
+    }, indent=2))
+    l3_study.trials_dataframe().to_csv(l3_dir / "optuna_trials.csv", index=False)
+    pd.DataFrame({
+        "true": y3_test_enc.values,
+        "pred": l3_test_pred,
+        "proba": l3_test_proba,
+    }, index=X3_test_scaled.index).to_csv(l3_dir / "predictions.csv", index_label="row_index")
 
-        all_summaries["level3_cefalosporina"] = {"macro_f1": l3_f1, "roc_auc": l3_auc}
-        all_summaries["l3_rfecv_scores"] = l3_rfecv_history
+    all_summaries["level3_cefalosporina"] = {"macro_f1": l3_f1, "roc_auc": l3_auc}
+    all_summaries["l3_rfecv_scores"] = l3_rfecv_history
 
     all_summaries["l1_rfecv_scores"] = l1_rfecv_history
     all_summaries["l2_rfecv_scores"] = l2_rfecv_history
@@ -1804,11 +2124,51 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--hemo-target", type=str, default="resultado_hemo_grouped",
-        help="Column name for the Level-2 multiclass target (default: resultado_hemo_grouped).",
+        help=(
+            "Column name for the Level-2 multiclass target (default: resultado_hemo_grouped). "
+            "Raw resultado_hemo values are also supported; when more than two positive ``hemo`` labels "
+            "exist, Stage 2 will automatically use multiclass modeling."
+        ),
+    )
+    parser.add_argument(
+        "--hemo-negative-label",
+        type=str,
+        default="NEGATIVE",
+        help="Label treated as hemoculture-negative for Level-2 Stage-1 gate.",
+    )
+    parser.add_argument(
+        "--hemo-coco-label",
+        type=str,
+        default="Coco gram+",
+        help="Positive-class label for Level-2 Stage-2 subtype model.",
+    )
+    parser.add_argument(
+        "--hemo-bacilo-label",
+        type=str,
+        default="Bacilo gram-",
+        help="Negative-class label for Level-2 Stage-2 subtype model.",
+    )
+    parser.add_argument(
+        "--bmr-target", type=str, default="bmr_etiologia",
+        help="Column name for the Level-3 first-stage BMR gate target (default: bmr_etiologia).",
+    )
+    parser.add_argument(
+        "--bmr-negative-label",
+        type=str,
+        default="NEGATIVE",
+        help="Label treated as BMR-negative for Level-3 Stage-1 gate.",
     )
     parser.add_argument(
         "--cef-target", type=str, default="resistente_cefalosporina",
         help="Column name for the Level-3 binary target (default: resistente_cefalosporina).",
+    )
+    parser.add_argument(
+        "--skip-l3-hemo-filter",
+        action="store_true",
+        help=(
+            "Skip filtering Level 3 rows to resultado_hemo != NEGATIVE before the BMR gate. "
+            "By default, Level 3 is scoped to positive blood culture rows only."
+        ),
     )
     parser.add_argument(
         "--cef-multi-positive-label",
@@ -1883,19 +2243,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     action="store_true",
     help="Skip RFECV and use all features."
     )
-    parser.add_argument(
-        "--l2-positive-gate",
-        dest="l2_positive_gate",
-        action="store_true",
-        help="Apply positive hemoculture gate (hemo != NEGATIVE) before final Level-2 model.",
-    )
-    parser.add_argument(
-        "--no-l2-positive-gate",
-        dest="l2_positive_gate",
-        action="store_false",
-        help="Disable positive hemoculture gate before final Level-2 model.",
-    )
-    parser.set_defaults(l2_positive_gate=True)
     return parser
 
 
@@ -1905,7 +2252,7 @@ def main() -> None:
     args = parser.parse_args()
     print("Parsed args:", args)
 
-    output_folder = Path(str(args.output_dir) + "_" + TODAY + "_" + JOB_ID)
+    output_folder = Path(args.output_dir)
     try:
         run_training(args)
     except Exception:
