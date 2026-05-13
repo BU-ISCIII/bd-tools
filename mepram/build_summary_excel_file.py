@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FULL_DATASET = ROOT / "preprocess_test.csv"
 FILTERED_DATASET = ROOT / "preprocess_test_filtered.csv"
 DETAILED_LOG = ROOT / "preprocess_test_log_detailed.json"
-OUTPUT_XLSX = ROOT / "report" / "tables" / "clinician_variable_dictionary.xlsx"
+OUTPUT_XLSX = ROOT / "report" / "tables" / "summary_excel_file.xlsx"
 
 
 HEADERS = [
@@ -165,23 +165,9 @@ def parse_date(value: str) -> datetime | None:
     return None
 
 
-def has_count_semantics(column: str) -> bool:
-    return (
-        column.endswith("_count")
-        or column.endswith("_counts")
-        or column.endswith("_total")
-        or column.endswith("_total_grouped")
-        or column in {"antib_previo_total_veces", "antib_previo_total_familias"}
-    )
-
-
-def infer_data_type(column: str, non_missing_values: list[str], numeric_values: list[float]) -> str:
+def infer_data_type(non_missing_values: list[str], numeric_values: list[float]) -> str:
     if not non_missing_values:
         return "empty"
-    if has_count_semantics(column) and len(numeric_values) == len(non_missing_values):
-        if all(value.is_integer() for value in numeric_values):
-            return "int"
-        return "float"
     bool_tokens = [normalize_bool_token(value) for value in non_missing_values]
     if all(token is not None for token in bool_tokens):
         return "bool"
@@ -208,7 +194,7 @@ def profile_values(column: str, values: list[str]) -> dict[str, str]:
         for value in non_missing
         if (parsed := parse_number(value)) is not None
     ]
-    data_type = infer_data_type(column, non_missing, numeric_values)
+    data_type = infer_data_type(non_missing, numeric_values)
 
     profile = {
         "data_type": data_type,
@@ -279,47 +265,7 @@ def format_class_count_display(
     return class_count
 
 
-def infer_description(column: str, stage_name: str | None) -> str:
-    if column == "person_id":
-        return "Patient identifier retained to link all preprocessed tables."
-    if column.startswith("tipo_cancer_"):
-        return "Cancer ICD/category dummy created from tipo_cancer one-hot encoding."
-    if column.startswith("tipo_hepatopatia_"):
-        return "Liver disease ICD/category dummy created from tipo_hepatopatia one-hot encoding."
-    if column.startswith("sintoma_") and column.endswith("_categorico"):
-        return "Symptom duration category after pivoting symptoms to patient-level columns: 0 absent, 1 up to 7 days, 2 more than 7 days."
-    if column.startswith("sintoma_"):
-        return "Symptom presence flag after pivoting symptoms to patient-level columns: 1 if symptom duration was recorded, else 0."
-    if column.startswith("antib_previo_") and column.endswith("_counts"):
-        return "Count of previous antibiotic exposures in this antimicrobial family within the configured prior-antibiotic window."
-    if column.startswith("antib_previo_") and column.endswith("_binary"):
-        return "Binary flag for any previous antibiotic exposure in this antimicrobial family within the configured prior-antibiotic window."
-    if column.startswith(("infprev_", "hemo_", "colo_", "otros_cult_", "all_cult_")):
-        if column.endswith("_binary"):
-            return "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping."
-        if column.endswith("_count"):
-            return "Organism count derived from culture records after microorganism grouping."
-        if column.endswith("_tuple"):
-            return "Tuple of resistance phenotype labels derived from culture/infection records."
-    if column.startswith("foco_") and column.endswith("_binary"):
-        return "Infection focus dummy variable generated from the focus/foco category."
-    if column.endswith("_recoded"):
-        return "Ordinal recoded version of the corresponding numeric variable after outlier handling and quartile binning."
-    if column.endswith("_total"):
-        return "Cross-table total count/summary feature for this grouped organism across available culture tables."
-    if column in {
-        "resultado_hemo_mo",
-        "resultado_hemo",
-        "resultado_hemo_grouped",
-        "resultado_hemo_multilabel",
-        "fenotipo_resistencia",
-        "fenotipo_resistencia_individual",
-        "resistente_cefalosporina",
-        "resistente_cefalosporina_multi",
-        "sepsis",
-        "bmr_etiologia",
-    }:
-        return "Prediction target or target-support variable derived during target building."
+def retained_variable_description(stage_name: str | None) -> str:
     if stage_name:
         return f"Original or retained variable from {stage_name}; no additional variable-level transformation was recorded in the preprocessing log."
     return "Variable present in the full preprocessed dataset; no variable-level transformation was recorded in the preprocessing log."
@@ -361,10 +307,12 @@ def build_rows(
         for key in ("created_variables", "recoded_variables", "transformed_variables", "role_variables"):
             for operation in stage.get(key, []):
                 sentence = operation_sentence(stage_name, operation)
+                logged_descriptions = operation.get("descriptions", {}) or {}
                 for target in as_list(operation.get("target")):
                     if "*" in target:
                         continue
-                    descriptions[target].append(sentence)
+                    description = logged_descriptions.get(target)
+                    descriptions[target].append(description or sentence)
                     if operation.get("variable_type"):
                         variable_types[target] = str(operation["variable_type"])
                         class_count = class_count_for_target(operation, target)
@@ -380,7 +328,7 @@ def build_rows(
 
     for column in final_dropped:
         descriptions[column].append(
-            "Removed from the clinician/model-compatible filtered dataset by the final drop list in mepram/config/preprocess_columns_to_drop.txt."
+            "Removed from the clinician/model-compatible filtered dataset by the final drop list in */config/preprocess_columns_to_drop.txt."
         )
 
     column_positions = {column: index for index, column in enumerate(full_columns)}
@@ -394,7 +342,9 @@ def build_rows(
 
     rows = [HEADERS]
     for column in ordered_columns:
-        desc_parts = descriptions.get(column) or [infer_description(column, first_stage_by_column.get(column))]
+        desc_parts = descriptions.get(column) or [
+            retained_variable_description(first_stage_by_column.get(column))
+        ]
         description = " ".join(dict.fromkeys(clean_text(part) for part in desc_parts if clean_text(part)))
         dropped = "yes" if column not in filtered_columns else "no"
         variable_type = variable_types.get(column, "feature")
@@ -521,7 +471,7 @@ def write_xlsx(rows: list[list[str]], output_path: Path) -> None:
         zf.writestr("xl/worksheets/sheet1.xml", sheet_xml(rows))
         zf.writestr("docProps/core.xml", f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-  <dc:title>Clinician variable dictionary</dc:title><dc:creator>preprocessing pipeline</dc:creator><cp:lastModifiedBy>preprocessing pipeline</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
+  <dc:title>Preprocessing summary Excel file</dc:title><dc:creator>preprocessing pipeline</dc:creator><cp:lastModifiedBy>preprocessing pipeline</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
 </cp:coreProperties>""")
         zf.writestr("docProps/app.xml", """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
@@ -529,7 +479,7 @@ def write_xlsx(rows: list[list[str]], output_path: Path) -> None:
 </Properties>""")
 
 
-def build_variable_dictionary(
+def build_summary_excel_file(
     *,
     full_dataset_path: Path = FULL_DATASET,
     filtered_dataset_path: Path = FILTERED_DATASET,
@@ -552,7 +502,7 @@ def build_variable_dictionary(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build clinician-facing Excel data dictionary from preprocessing outputs."
+        description="Build preprocessing summary Excel file from preprocessing outputs."
     )
     parser.add_argument("--full-dataset-path", type=Path, default=FULL_DATASET)
     parser.add_argument("--filtered-dataset-path", type=Path, default=FILTERED_DATASET)
@@ -563,7 +513,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    total, kept, dropped = build_variable_dictionary(
+    total, kept, dropped = build_summary_excel_file(
         full_dataset_path=args.full_dataset_path,
         filtered_dataset_path=args.filtered_dataset_path,
         detailed_log_path=args.detailed_log_path,

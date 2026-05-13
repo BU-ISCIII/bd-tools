@@ -10,8 +10,8 @@ infrastructure should live in `ml_benchmark/` instead.
 ## Main Files
 
 - `preprocess_pipeline.py`: builds the full and filtered MEPRAM analytical CSVs.
-- `preprocess_report.py`: builds clinician-facing preprocessing report outputs.
-- `build_clinician_variable_dictionary.py`: helper used by the report script.
+- `preprocess_report.py`: builds preprocessing report outputs.
+- `build_summary_excel_file.py`: helper used by the report script.
 - `compare_preprocessed_csvs.py`: local comparison helper for preprocessing QA.
 - `config/preprocess_config.py`: clinical/domain preprocessing configuration.
 - `config/preprocess_report.yml`: preprocessing report configuration for MEPRAM-specific domains and target sections.

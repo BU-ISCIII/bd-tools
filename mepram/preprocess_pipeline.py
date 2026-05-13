@@ -37,6 +37,7 @@ class VariableChange:
     how: str
     variable_type: str = ""
     n_classes: int | dict[str, int] | None = None
+    descriptions: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,6 +78,11 @@ class PipelineArtifacts:
     logs: list[TableLog] = field(default_factory=list)
 
 
+def describe_columns(columns: str | list[str], description: str) -> dict[str, str]:
+    values = columns if isinstance(columns, list) else [columns]
+    return {str(column): description for column in values if column and "*" not in str(column)}
+
+
 def add_change(
     log: TableLog,
     section: str,
@@ -86,6 +92,7 @@ def add_change(
     how: str,
     variable_type: str = "",
     n_classes: int | dict[str, int] | None = None,
+    descriptions: dict[str, str] | None = None,
 ) -> None:
     change = VariableChange(
         kind=section,
@@ -94,6 +101,7 @@ def add_change(
         how=how,
         variable_type=variable_type,
         n_classes=n_classes,
+        descriptions=descriptions or {},
     )
     getattr(log, section).append(change)
 
@@ -106,6 +114,7 @@ def add_role(
     how: str,
     variable_type: str,
     n_classes: int | dict[str, int] | None = None,
+    descriptions: dict[str, str] | None = None,
 ) -> None:
     add_change(
         log,
@@ -115,6 +124,7 @@ def add_role(
         how=how,
         variable_type=variable_type,
         n_classes=n_classes,
+        descriptions=descriptions,
     )
 
 
@@ -780,6 +790,16 @@ def preprocess_tbl_comorbilidad(
         source=["tipo_cancer", "tipo_hepatopatia"],
         target=comorbidity_transformed_columns,
         how="one-hot encode categorical comorbidity variables",
+        descriptions={
+            **describe_columns(
+                cancer_dummy_columns,
+                "Cancer ICD/category dummy created from tipo_cancer one-hot encoding.",
+            ),
+            **describe_columns(
+                hepatopathy_dummy_columns,
+                "Liver disease ICD/category dummy created from tipo_hepatopatia one-hot encoding.",
+            ),
+        },
     )
     add_change(
         log,
@@ -896,6 +916,10 @@ def preprocess_tbl_sintomas(
         source="duracion_sintoma",
         target=[f"{col}_categorico" for col in symptom_columns],
         how=f"pivot symptoms to wide categorical columns with 0 absent, 1 if duration <= {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days, and 2 if duration > {config['SINTOMA_SHORT_DURATION_MAX_DAYS']} days",
+        descriptions=describe_columns(
+            [f"{col}_categorico" for col in symptom_columns],
+            "Symptom duration category after pivoting symptoms to patient-level columns: 0 absent, 1 up to 7 days, 2 more than 7 days.",
+        ),
     )
     add_change(
         log,
@@ -1058,6 +1082,10 @@ def preprocess_tbl_signos(
             source=variable,
             target=info["new_column"],
             how=format_quartile_recode_info(info),
+            descriptions=describe_columns(
+                info["new_column"],
+                "Ordinal recoded version of the corresponding numeric variable after outlier handling and quartile binning.",
+            ),
         )
     log.output_rows = len(df)
     log.output_columns = df.columns.tolist()
@@ -1087,6 +1115,10 @@ def preprocess_tbl_sepsis(
             how="retain source binary sepsis label as prediction target",
             variable_type="target",
             n_classes=variable_class_count(df["sepsis"]),
+            descriptions=describe_columns(
+                "sepsis",
+                "Prediction target or target-support variable derived during target building.",
+            ),
         )
 
     df["lactato_serico"] = np.where(df["lactato_serico"] == "<= 2 millimole per liter", 0, 1)
@@ -1159,6 +1191,10 @@ def preprocess_tbl_sepsis(
             source=variable,
             target=info["new_column"],
             how=format_quartile_recode_info(info),
+            descriptions=describe_columns(
+                info["new_column"],
+                "Ordinal recoded version of the corresponding numeric variable after outlier handling and quartile binning.",
+            ),
         )
 
     log.output_rows = len(df)
@@ -1222,6 +1258,10 @@ def preprocess_tbl_infecciones_previas(
         source="grupo_microorganismo",
         target=infprev_binary_columns,
         how="pivot grouped organisms and binarize per patient/admission",
+        descriptions=describe_columns(
+            infprev_binary_columns,
+            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+        ),
     )
 
     detail_rows = df[df["grupo_microorganismo"].notna()].copy()
@@ -1262,6 +1302,10 @@ def preprocess_tbl_infecciones_previas(
             source=["grupo_microorganismo", "bmr_infec_previa"],
             target=infprev_bmr_columns,
             how="create organism-specific previous-infection BMR binary flags using max bmr_infec_previa per patient/admission/organism",
+            descriptions=describe_columns(
+                infprev_bmr_columns,
+                "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+            ),
         )
 
         phenotype_by_organism = (
@@ -1306,6 +1350,10 @@ def preprocess_tbl_infecciones_previas(
             source=["grupo_microorganismo", "feno_resist_infec_prev"],
             target=infprev_phenotype_columns,
             how="create organism-specific previous-infection phenotype tuples using non-zero deduplicated feno_resist_infec_prev codes",
+            descriptions=describe_columns(
+                infprev_phenotype_columns,
+                "Tuple of resistance phenotype labels derived from culture/infection records.",
+            ),
         )
     for column in infprev_bmr_columns:
         pivoted[column] = pivoted[column].fillna(0).astype(int)
@@ -1337,6 +1385,10 @@ def preprocess_tbl_infecciones_previas(
         source="infprev_*_binary",
         target=infection_broad_group_columns,
         how="sum previous-infection organism binaries into broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP",
+        descriptions=describe_columns(
+            infection_broad_group_columns,
+            "Cross-table total count/summary feature for this grouped organism across available culture tables.",
+        ),
     )
 
     visits = df[["person_id", "fecha_ingreso_urgencias", "fecha_infeccion"]].copy()
@@ -1646,6 +1698,10 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
             source="antimicrobiano_previo_familia",
             target=family_binary_columns,
             how="pivot configured in-window prior antibiotic families to antib_previo_*_binary exposure flags per patient/admission",
+            descriptions=describe_columns(
+                family_binary_columns,
+                "Binary flag for any previous antibiotic exposure in this antimicrobial family within the configured prior-antibiotic window.",
+            ),
         )
         add_change(
             log,
@@ -1656,6 +1712,10 @@ def preprocess_tbl_tratamiento_antibiotico_previo(
                 "count in-window prior antibiotic records per configured family "
                 "into antib_previo_*_counts columns; these are record counts, not summed treatment days, and "
                 "missing family exposure is filled with 0"
+            ),
+            descriptions=describe_columns(
+                family_count_columns,
+                "Count of previous antibiotic exposures in this antimicrobial family within the configured prior-antibiotic window.",
             ),
         )
         add_change(
@@ -1941,6 +2001,10 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source="microorganismo",
         target=hemo_organism_columns,
         how="pivot grouped hemoculture organisms to binary columns per patient/admission",
+        descriptions=describe_columns(
+            hemo_organism_columns,
+            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+        ),
     )
 
     result_df = base.merge(organism_pivot, on=merge_keys, how="left")
@@ -1972,6 +2036,10 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source=["microorganismo", "bmr_etiologia"],
         target=hemo_bmr_columns,
         how="create organism-specific hemoculture BMR binary flags using max bmr_etiologia per patient/admission/organism",
+        descriptions=describe_columns(
+            hemo_bmr_columns,
+            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+        ),
     )
 
     phenotype_by_organism = (
@@ -2007,6 +2075,10 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         source=["microorganismo", "fenotipo_resistencia"],
         target=hemo_phenotype_columns,
         how="create organism-specific hemoculture phenotype tuples using non-zero deduplicated fenotipo_resistencia codes",
+        descriptions=describe_columns(
+            hemo_phenotype_columns,
+            "Tuple of resistance phenotype labels derived from culture/infection records.",
+        ),
     )
     for column in hemo_bmr_columns:
         result_df[column] = result_df[column].fillna(0).astype(int)
@@ -2024,6 +2096,10 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         how="pre-clinician-correction tuple of all positive grouped organisms; NEGATIVE tuple if no positive organism exists",
         variable_type="target",
         n_classes=variable_class_count(result_df["resultado_hemo_multilabel"]),
+        descriptions=describe_columns(
+            "resultado_hemo_multilabel",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
     result_df = result_df.merge(raw_microorganism_result, on=merge_keys, how="left")
     resultado_hemo_mo_override_mask = result_df["person_id"].isin(coinfection_map)
@@ -2043,6 +2119,10 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         ),
         variable_type="target",
         n_classes=variable_class_count(result_df["resultado_hemo_mo"]),
+        descriptions=describe_columns(
+            "resultado_hemo_mo",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     dominant_organism_columns = {
@@ -2078,6 +2158,10 @@ def preprocess_tbl_hemocultivo_de_urgencias(
         how="scalar dominant organism after clinician co-infection correction; NEGATIVE if no positive non-NEGATIVE organism column exists",
         variable_type="target",
         n_classes=variable_class_count(result_df["resultado_hemo"]),
+        descriptions=describe_columns(
+            "resultado_hemo",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
     add_change(
         log,
@@ -2168,6 +2252,10 @@ def preprocess_tbl_colonizaciones_previas(
         source="microorganism_colonizador_grupo",
         target=colonization_binary_columns,
         how="pivot grouped colonizing organisms to binary columns per patient/admission",
+        descriptions=describe_columns(
+            colonization_binary_columns,
+            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+        ),
     )
 
     detail_rows = df[df["microorganism_colonizador_grupo"].notna()].copy()
@@ -2202,6 +2290,10 @@ def preprocess_tbl_colonizaciones_previas(
             source=["microorganism_colonizador_grupo", "bmr_colonizador"],
             target=colonization_bmr_columns,
             how="create organism-specific colonization BMR binary flags using max bmr_colonizador per patient/admission/organism",
+            descriptions=describe_columns(
+                colonization_bmr_columns,
+                "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+            ),
         )
 
         phenotype_by_organism = (
@@ -2240,6 +2332,10 @@ def preprocess_tbl_colonizaciones_previas(
             source=["microorganism_colonizador_grupo", "feno_resist_colo"],
             target=colonization_phenotype_columns,
             how="create organism-specific colonization phenotype tuples using non-zero deduplicated feno_resist_colo codes",
+            descriptions=describe_columns(
+                colonization_phenotype_columns,
+                "Tuple of resistance phenotype labels derived from culture/infection records.",
+            ),
         )
     for column in colonization_bmr_columns:
         pivoted[column] = pivoted[column].fillna(0).astype(int)
@@ -2283,6 +2379,10 @@ def preprocess_tbl_colonizaciones_previas(
         source="colo_*_binary",
         target=colonization_broad_group_columns,
         how="sum colonization organism binaries into broad Gram-stain groups using MICROORGANISM_BROAD_GROUP_MAP",
+        descriptions=describe_columns(
+            colonization_broad_group_columns,
+            "Cross-table total count/summary feature for this grouped organism across available culture tables.",
+        ),
     )
     add_change(
         log,
@@ -2416,6 +2516,10 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         source="otro_cult_microorganismo",
         target=other_culture_columns,
         how="pivot grouped other emergency culture organisms to count columns per patient/admission",
+        descriptions=describe_columns(
+            other_culture_columns,
+            "Organism count derived from culture records after microorganism grouping.",
+        ),
     )
 
     df["bmr_etiologia_otros_numeric"] = pd.to_numeric(
@@ -2448,6 +2552,10 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         source=["otro_cult_microorganismo", "bmr_etiologia_otros"],
         target=other_culture_bmr_columns,
         how="create organism-specific other-culture BMR binary flags using max bmr_etiologia_otros per patient/admission/organism",
+        descriptions=describe_columns(
+            other_culture_bmr_columns,
+            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+        ),
     )
 
     phenotype_by_organism = (
@@ -2485,6 +2593,10 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         source=["otro_cult_microorganismo", "fenotipo_resistencia_otros"],
         target=other_culture_phenotype_columns,
         how="create organism-specific other-culture phenotype tuples using non-zero deduplicated fenotipo_resistencia_otros codes",
+        descriptions=describe_columns(
+            other_culture_phenotype_columns,
+            "Tuple of resistance phenotype labels derived from culture/infection records.",
+        ),
     )
     for column in other_culture_bmr_columns:
         result_df[column] = result_df[column].fillna(0).astype(int)
@@ -2701,6 +2813,10 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         ],
         target=all_culture_columns,
         how="sum hemoculture organism binaries and other-emergency-culture organism counts into combined urgent-culture count columns",
+        descriptions=describe_columns(
+            all_culture_columns,
+            "Organism count derived from culture records after microorganism grouping.",
+        ),
     )
     add_change(
         log,
@@ -2713,6 +2829,10 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         ),
         variable_type="target",
         n_classes=variable_class_count(result["dominant_all_cult_org"]),
+        descriptions=describe_columns(
+            "dominant_all_cult_org",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     all_culture_bmr_columns: list[str] = []
@@ -2757,6 +2877,10 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         source=["hemo_bmr_*_binary", "otros_cult_bmr_*_binary"],
         target=all_culture_bmr_columns,
         how="combine hemoculture and other-culture organism-specific BMR flags into urgent-culture organism-specific BMR flags",
+        descriptions=describe_columns(
+            all_culture_bmr_columns,
+            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
+        ),
     )
     add_change(
         log,
@@ -2764,6 +2888,10 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         source=["hemo_fenotipo_*_tuple", "otros_cult_fenotipo_*_tuple"],
         target=all_culture_phenotype_columns,
         how="combine hemoculture and other-culture organism-specific phenotype tuples into urgent-culture organism-specific phenotype tuples",
+        descriptions=describe_columns(
+            all_culture_phenotype_columns,
+            "Tuple of resistance phenotype labels derived from culture/infection records.",
+        ),
     )
 
     synthetic_feature_sources = {
@@ -2891,6 +3019,10 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
             "create per-organism history total columns from previous-infection and previous-colonization features only; "
             "current hemoculture and other urgent-culture organism features are target-side information and are excluded"
         ),
+        descriptions=describe_columns(
+            organism_total_columns,
+            "Cross-table total count/summary feature for this grouped organism across available culture tables.",
+        ),
     )
 
     log.notes.append(
@@ -2938,6 +3070,10 @@ def build_targets(
         ),
         variable_type="target",
         n_classes=variable_class_count(result["resultado_hemo_grouped"]),
+        descriptions=describe_columns(
+            "resultado_hemo_grouped",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     result["infected_yes_no"] = np.where(
@@ -2953,6 +3089,10 @@ def build_targets(
         how="POSITIVE if resultado_hemo is not NEGATIVE, else NEGATIVE",
         variable_type="target",
         n_classes=variable_class_count(result["infected_yes_no"]),
+        descriptions=describe_columns(
+            "infected_yes_no",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     result["bmr_etiologia"] = np.where(
@@ -2968,6 +3108,10 @@ def build_targets(
         how="1.0 becomes BMR resistente, all other values become NEGATIVE",
         variable_type="target",
         n_classes=variable_class_count(result["bmr_etiologia"]),
+        descriptions=describe_columns(
+            "bmr_etiologia",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     antibiotic_name_family_map = {
@@ -3032,6 +3176,10 @@ def build_targets(
         how="decode phenotype resistance codes to individual resistance phenotype labels before family grouping",
         variable_type="target",
         n_classes=variable_class_count(result["fenotipo_resistencia_individual"]),
+        descriptions=describe_columns(
+            "fenotipo_resistencia_individual",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     result["fenotipo_resistencia"] = result["fenotipo_resistencia"].apply(
@@ -3045,6 +3193,10 @@ def build_targets(
         how="decode phenotype resistance codes to drug names, map drugs to antimicrobial families, deduplicate, and keep an empty list when no mapped phenotype remains",
         variable_type="target",
         n_classes=variable_class_count(result["fenotipo_resistencia"]),
+        descriptions=describe_columns(
+            "fenotipo_resistencia",
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     result["resistente_cefalosporina"] = result["fenotipo_resistencia"].apply(
@@ -3076,6 +3228,10 @@ def build_targets(
             "resistente_cefalosporina": variable_class_count(result["resistente_cefalosporina"]),
             "resistente_cefalosporina_multi": variable_class_count(result["resistente_cefalosporina_multi"]),
         },
+        descriptions=describe_columns(
+            ["resistente_cefalosporina", "resistente_cefalosporina_multi"],
+            "Prediction target or target-support variable derived during target building.",
+        ),
     )
 
     result["sample_weight"] = 1

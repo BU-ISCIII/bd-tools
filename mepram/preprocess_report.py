@@ -10,9 +10,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import yaml
 
-from build_clinician_variable_dictionary import (
+from build_summary_excel_file import (
     DEFAULT_DOMAIN_BY_STAGE,
-    build_variable_dictionary,
+    build_summary_excel_file,
 )
 
 
@@ -1411,11 +1411,11 @@ def build_report(
         },
     )
     if build_dictionary and full_dataset_path and filtered_dataset_path:
-        build_variable_dictionary(
+        build_summary_excel_file(
             full_dataset_path=full_dataset_path,
             filtered_dataset_path=filtered_dataset_path,
             detailed_log_path=detailed_log_path,
-            output_path=tables_dir / "clinician_variable_dictionary.xlsx",
+            output_path=tables_dir / "summary_excel_file.xlsx",
             domain_by_stage=domain_by_stage,
         )
 
@@ -1437,7 +1437,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-variable-dictionary",
         action="store_true",
-        help="Do not generate tables/clinician_variable_dictionary.xlsx.",
+        help="Do not generate tables/summary_excel_file.xlsx.",
     )
     return parser.parse_args()
 
