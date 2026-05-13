@@ -66,12 +66,13 @@ def main() -> None:
     args = parser.parse_args()
     config = load_config(args.config)
     jobs = build_job_matrix(config)
+    selected = select_jobs(args, jobs)
 
     if args.print_job_matrix:
-        print(format_job_matrix(jobs))
+        print(format_job_matrix(selected))
         return
     if args.print_slurm_array:
-        print(format_slurm_array(jobs))
+        print(format_slurm_array(selected))
         return
     if args.print_slurm_script:
         print(render_slurm_script(config, len(jobs)))
@@ -85,7 +86,6 @@ def main() -> None:
         print(json.dumps(report, indent=2))
         return
 
-    selected = select_jobs(args, jobs)
     if not selected:
         raise ValueError("No benchmark jobs matched the requested filters.")
     results = [run_job(config, job, dry_run=args.dry_run) for job in selected]

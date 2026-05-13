@@ -61,4 +61,14 @@ def format_job_matrix(jobs: Iterable[BenchmarkJob]) -> str:
 def format_slurm_array(jobs: List[BenchmarkJob]) -> str:
     if not jobs:
         raise ValueError("Cannot build a Slurm array for an empty job matrix.")
-    return f"#SBATCH --array=0-{len(jobs) - 1}"
+    indices = sorted(job.index for job in jobs)
+    ranges = []
+    start = previous = indices[0]
+    for index in indices[1:]:
+        if index == previous + 1:
+            previous = index
+            continue
+        ranges.append(f"{start}-{previous}" if start != previous else str(start))
+        start = previous = index
+    ranges.append(f"{start}-{previous}" if start != previous else str(start))
+    return f"#SBATCH --array={','.join(ranges)}"
