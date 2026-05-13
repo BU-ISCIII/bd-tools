@@ -18,7 +18,7 @@
 data:
   # Analytical table used by the benchmark. This should already be the filtered
   # preprocessing output, not raw source tables.
-  path: preprocess_test_filtered.csv
+  path: playground/preprocessing/20260512_baseline_test/20260512_baseline_test_full_filtered.csv
 
   # Optional row weight column. If present, it is removed from X and passed as
   # sample_weight to estimators that accept it.
@@ -80,7 +80,7 @@ row_filters:
     # Drops rows where column is equal to one of values.
     - name: exclude_minor_foci
       type: exclude_values
-      enabled: false
+      enabled: true
       column: foco
       values:
         - catéter venoso

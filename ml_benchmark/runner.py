@@ -17,6 +17,8 @@ from sklearn.metrics import (
     balanced_accuracy_score,
     f1_score,
     log_loss,
+    precision_score,
+    recall_score,
     roc_auc_score,
 )
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
@@ -1432,6 +1434,20 @@ def _aggregate_metrics(
         "balanced_accuracy": _safe_metric(balanced_accuracy_score, y_true, y_pred),
         "f1_macro": _safe_metric(f1_score, y_true, y_pred, average="macro"),
         "f1_weighted": _safe_metric(f1_score, y_true, y_pred, average="weighted"),
+        "precision_macro": _safe_metric(
+            precision_score,
+            y_true,
+            y_pred,
+            average="macro",
+            zero_division=0,
+        ),
+        "recall_macro": _safe_metric(
+            recall_score,
+            y_true,
+            y_pred,
+            average="macro",
+            zero_division=0,
+        ),
     }
     if proba is None:
         return metrics

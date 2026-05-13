@@ -15,10 +15,14 @@ from sklearn.metrics import (
     ConfusionMatrixDisplay,
     PrecisionRecallDisplay,
     RocCurveDisplay,
+    accuracy_score,
     average_precision_score,
     brier_score_loss,
     classification_report,
+    f1_score,
+    precision_score,
     precision_recall_curve,
+    recall_score,
     roc_auc_score,
     roc_curve,
 )
@@ -280,7 +284,7 @@ def _write_validation_test_plots(
         ax.scatter(plot_df["validation_main_metric"], plot_df["test_main_metric"])
         for _, row in plot_df.iterrows():
             ax.annotate(
-                f"{row['model']}|{row['feature_set']}",
+                _compact_run_label(row),
                 (row["validation_main_metric"], row["test_main_metric"]),
                 fontsize=7,
                 alpha=0.75,
@@ -303,26 +307,53 @@ def _write_validation_test_plots(
         plt.close(fig)
         files.append(str(path))
 
-        ordered = plot_df.sort_values("validation_main_metric", ascending=False)
-        fig, ax = plt.subplots(figsize=(max(8, len(ordered) * 0.7), 5))
+        metric_panels = _available_bar_metrics(target_df)
+        if not metric_panels:
+            continue
+        ordered = target_df.sort_values(
+            f"validation_{metric_panels[0][0]}",
+            ascending=False,
+            na_position="last",
+        )
+        fig, axes = plt.subplots(
+            len(metric_panels),
+            1,
+            figsize=(max(12, len(ordered) * 0.85), 4.2 * len(metric_panels)),
+            squeeze=False,
+        )
         x = np.arange(len(ordered))
         width = 0.38
-        ax.bar(x - width / 2, ordered["validation_main_metric"], width, label="validation")
-        ax.bar(x + width / 2, ordered["test_main_metric"], width, label="test")
-        ax.set_xticks(x)
-        ax.set_xticklabels(
-            [
-                f"{row.model}\n{row.feature_set}"
-                for row in ordered.itertuples(index=False)
-            ],
-            rotation=45,
-            ha="right",
-        )
-        ax.set_ylabel(metric)
-        ax.set_title(f"Validation/Test {metric}: {target}")
-        ax.legend()
+        labels = [_compact_run_label(row) for _, row in ordered.iterrows()]
+        for ax, (metric_name, metric_label) in zip(axes[:, 0], metric_panels):
+            validation_col = f"validation_{metric_name}"
+            test_col = f"test_{metric_name}"
+            validation_values = pd.to_numeric(ordered[validation_col], errors="coerce")
+            test_values = pd.to_numeric(ordered[test_col], errors="coerce")
+            validation_bars = ax.bar(
+                x - width / 2,
+                validation_values,
+                width,
+                label="validation",
+            )
+            test_bars = ax.bar(
+                x + width / 2,
+                test_values,
+                width,
+                label="test",
+            )
+            _add_bar_value_labels(ax, validation_bars)
+            _add_bar_value_labels(ax, test_bars)
+            ax.set_ylabel(metric_label)
+            ax.set_title(f"Validation/Test {metric_label}: {target}")
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
+            ax.set_ylim(
+                bottom=0,
+                top=_metric_axis_top(validation_values, test_values),
+            )
+            ax.legend()
         fig.tight_layout()
-        path = target_dir / f"validation_test_bars__{safe_target}.png"
+        path = target_dir / f"validation_test_metric_bars__{safe_target}.png"
         fig.savefig(path, dpi=160)
         plt.close(fig)
         files.append(str(path))
@@ -350,7 +381,7 @@ def _write_prediction_diagnostics(
     labels = sorted(pd.concat([y_true, y_pred]).dropna().unique().tolist(), key=str)
 
     cm_path = job_report_dir / f"{split}_confusion_matrix.png"
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
     ConfusionMatrixDisplay.from_predictions(
         y_true,
         y_pred,
@@ -359,7 +390,24 @@ def _write_prediction_diagnostics(
         colorbar=False,
     )
     ax.set_title(f"{split.title()} Confusion Matrix\n{job_slug}")
-    fig.tight_layout()
+    metric_text = _confusion_matrix_metric_text(summary, predictions)
+    if metric_text:
+        ax.text(
+            1.04,
+            0.5,
+            metric_text,
+            transform=ax.transAxes,
+            va="center",
+            ha="left",
+            fontsize=9,
+            bbox={
+                "boxstyle": "round,pad=0.45",
+                "facecolor": "white",
+                "edgecolor": "#B0B0B0",
+                "alpha": 0.95,
+            },
+        )
+    fig.tight_layout(rect=[0, 0, 0.78, 1])
     fig.savefig(cm_path, dpi=160)
     plt.close(fig)
     rows.append(_artifact_row(summary, split, "confusion_matrix", cm_path))
@@ -477,6 +525,150 @@ def _write_prediction_diagnostics(
             )
         plt.close(fig)
     return rows
+
+
+def _available_bar_metrics(comparison: pd.DataFrame) -> list[tuple[str, str]]:
+    requested = [
+        ("average_precision", "PR-AUC / average precision"),
+        ("f1_macro", "F1 macro"),
+        ("recall_macro", "Recall macro"),
+        ("precision_macro", "Precision macro"),
+        ("accuracy", "Accuracy"),
+        ("roc_auc", "ROC-AUC"),
+        ("roc_auc_ovr", "ROC-AUC OvR"),
+        ("log_loss", "Log loss"),
+    ]
+    available = []
+    for metric, label in requested:
+        columns = [f"validation_{metric}", f"test_{metric}"]
+        if all(column in comparison.columns for column in columns):
+            values = comparison[columns].apply(pd.to_numeric, errors="coerce")
+            if values.notna().any().any():
+                available.append((metric, label))
+    return available
+
+
+def _compact_run_label(row: pd.Series) -> str:
+    return "\n".join(
+        [
+            str(row.get("model", "")),
+            str(row.get("feature_view", "")),
+            str(row.get("feature_set", "")),
+        ]
+    )
+
+
+def _add_bar_value_labels(ax, bars) -> None:
+    for bar in bars:
+        height = bar.get_height()
+        if not np.isfinite(height):
+            continue
+        ax.annotate(
+            f"{height:.3f}",
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            rotation=90,
+            fontsize=7,
+        )
+
+
+def _metric_axis_top(*series: pd.Series) -> float:
+    values = pd.concat([item.dropna() for item in series])
+    if values.empty:
+        return 1.0
+    max_value = float(values.max())
+    if max_value <= 1.0:
+        return 1.08
+    return max_value * 1.12
+
+
+def _confusion_matrix_metric_text(
+    summary: dict[str, Any],
+    predictions: pd.DataFrame,
+) -> str:
+    task_type = summary.get("target", {}).get("task_type")
+    y_true = predictions["y_true"].astype(str)
+    y_pred = predictions["y_pred"].astype(str)
+    average = "binary" if task_type == "binary" else "macro"
+    kwargs: dict[str, Any] = {"average": average, "zero_division": 0}
+    if task_type == "binary":
+        kwargs["pos_label"] = str(_positive_label(summary, y_true))
+
+    metrics = {
+        "Accuracy": _safe_auc(accuracy_score, y_true, y_pred),
+        "F1": _safe_auc(f1_score, y_true, y_pred, **kwargs),
+        "Recall": _safe_auc(recall_score, y_true, y_pred, **kwargs),
+        "Precision": _safe_auc(precision_score, y_true, y_pred, **kwargs),
+    }
+    metrics.update(_prediction_auc_summary(summary, predictions))
+    return "\n".join(
+        f"{name}: {_format_metric_value(value)}"
+        for name, value in metrics.items()
+    )
+
+
+def _prediction_auc_summary(
+    summary: dict[str, Any],
+    predictions: pd.DataFrame,
+) -> dict[str, float | None]:
+    proba_columns = [
+        column for column in predictions.columns if column.startswith("proba_")
+    ]
+    if not proba_columns:
+        return {"ROC-AUC": None, "PR-AUC": None}
+    task_type = summary.get("target", {}).get("task_type")
+    y_true = predictions["y_true"].astype(str)
+    if task_type == "binary":
+        proba_column = _positive_probability_column(summary, proba_columns)
+        y_score = predictions[proba_column].astype(float)
+        positive_label = str(_positive_label(summary, y_true))
+        y_binary = (y_true == positive_label).astype(int)
+        if y_binary.nunique() < 2:
+            return {"ROC-AUC": None, "PR-AUC": None}
+        return {
+            "ROC-AUC": _safe_auc(roc_auc_score, y_binary, y_score),
+            "PR-AUC": _safe_auc(average_precision_score, y_binary, y_score),
+        }
+
+    class_labels = [column.removeprefix("proba_") for column in proba_columns]
+    y_binary = pd.DataFrame(
+        {
+            label: (y_true == label).astype(int)
+            for label in class_labels
+        }
+    )
+    valid_labels = [
+        label
+        for label in class_labels
+        if y_binary[label].nunique() == 2
+    ]
+    if not valid_labels:
+        return {"ROC-AUC OvR": None, "PR-AUC OvR": None}
+    y_binary_valid = y_binary[valid_labels]
+    proba_valid = predictions[[f"proba_{label}" for label in valid_labels]].astype(float)
+    return {
+        "ROC-AUC OvR": _safe_auc(
+            roc_auc_score,
+            y_binary_valid,
+            proba_valid,
+            average="macro",
+        ),
+        "PR-AUC OvR": _safe_auc(
+            average_precision_score,
+            y_binary_valid,
+            proba_valid,
+            average="macro",
+        ),
+    }
+
+
+def _format_metric_value(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "NA"
+    return f"{float(value):.3f}"
 
 
 def _calibration_report_rows(
@@ -825,9 +1017,9 @@ def _class_auc_metrics(predictions: pd.DataFrame) -> dict[str, dict[str, float]]
     return metrics
 
 
-def _safe_auc(metric_func, y_true, y_score) -> float | None:
+def _safe_auc(metric_func, y_true, y_score, **kwargs) -> float | None:
     try:
-        return float(metric_func(y_true, y_score))
+        return float(metric_func(y_true, y_score, **kwargs))
     except ValueError:
         return None
 
