@@ -3021,7 +3021,7 @@ def build_cross_table_features(df: pd.DataFrame, config: dict[str, Any]) -> Prep
         ),
         descriptions=describe_columns(
             organism_total_columns,
-            "Cross-table total count/summary feature for this grouped organism across available culture tables.",
+            "History total count/summary feature for this grouped organism, combining previous-infection and previous-colonization indicators only.",
         ),
     )
 

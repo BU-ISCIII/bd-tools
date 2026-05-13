@@ -45,7 +45,7 @@ data:
 
 # Root output directory. Jobs are written to output_dir/jobs/<job_slug>/.
 # Aggregate and target-level reports are written to output_dir/reports/.
-output_dir: outputs/ml_benchmark/mepram
+output_dir: playground/ml_benchmark/
 
 # Split controls.
 #
@@ -106,12 +106,12 @@ row_filters:
   # imputation: it removes rows before splitting, while imputation fills values
   # inside the model pipeline.
   feature_na_filter:
-    enabled: false
+    enabled: True
     # Supported mode currently used by the runner: max_fraction.
     # A row is dropped if the selected feature subset has missingness above
     # max_missing_fraction.
     mode: max_fraction
-    max_missing_fraction: 0.50
+    max_missing_fraction: 0.10
     # Glob-style feature include patterns. "*" means all feature columns after
     # target removal and feature-view selection.
     include_patterns:
@@ -239,7 +239,7 @@ feature_policies:
     iqr_multiplier: 3.0
     correlation_filter:
       enabled: true
-      threshold: 0.80
+      threshold: 0.90
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -629,7 +629,7 @@ feature_views:
       lactate: raw
       blood_pressure: raw
       inflammatory_markers: raw
-      symptoms: binary_flags
+      symptoms: category
       previous_antibiotic_families: counts
 
   - name: binary_vitals
@@ -664,7 +664,7 @@ feature_views:
       blood_pressure: raw
       inflammatory_markers: raw
       symptoms: category
-      previous_antibiotic_families: counts
+      previous_antibiotic_families: binary_flags
 
 # Feature sets define the feature-selection layer applied after preprocessing
 # and correlation filtering.
@@ -733,7 +733,7 @@ feature_selection:
 # trial tables, and Optuna HTML plots are written inside each job folder.
 tuning:
   # false -> use model defaults/configured params; true -> run Optuna.
-  enabled: false
+  enabled: true
   # Desired completed trials per job. If reuse_existing is true and a study
   # already has completed trials, only missing trials are run.
   n_trials: 25
