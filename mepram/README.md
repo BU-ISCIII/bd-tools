@@ -10,8 +10,6 @@ infrastructure should live in `ml_benchmark/` instead.
 ## Main Files
 
 - `preprocess_pipeline.py`: builds the full and filtered MEPRAM analytical CSVs.
-- `preprocess_report.py`: builds preprocessing report outputs.
-- `build_summary_excel_file.py`: helper used by the report script.
 - `compare_preprocessed_csvs.py`: local comparison helper for preprocessing QA.
 - `config/preprocess_config.py`: clinical/domain preprocessing configuration.
 - `config/preprocess_report.yml`: preprocessing report configuration for MEPRAM-specific domains and target sections.
@@ -19,6 +17,9 @@ infrastructure should live in `ml_benchmark/` instead.
 - `config/model_filters.yml`: MEPRAM cohort/model row filters.
 - `config/benchmark_mepram.yml`: MEPRAM benchmark matrix configuration.
 - `preprocessing_report/`: checked-in preprocessing report artifacts.
+
+Reusable preprocessing report code lives in `../preprocess_report/`. This
+folder only keeps the MEPRAM report config and generated MEPRAM report outputs.
 
 ## Typical Workflow
 
@@ -34,7 +35,7 @@ From the repository root:
 ```
 
 ```bash
-./.venv/bin/python mepram/preprocess_report.py \
+./.venv/bin/python preprocess_report/preprocess_report.py \
   --summary-log-path preprocess_test_log_summary.csv \
   --detailed-log-path preprocess_test_log_detailed.json \
   --full-dataset-path preprocess_test.csv \

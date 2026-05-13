@@ -22,8 +22,8 @@ DEFAULT_SUMMARY_LOG_PATH = Path("preprocess_test_log_summary.csv")
 DEFAULT_DETAILED_LOG_PATH = Path("preprocess_test_log_detailed.json")
 DEFAULT_FULL_DATASET_PATH = Path("preprocess_test.csv")
 DEFAULT_FILTERED_DATASET_PATH = Path("preprocess_test_filtered.csv")
-DEFAULT_OUTPUT_DIR = ROOT_DIR / "preprocessing_report"
-DEFAULT_REPORT_CONFIG_PATH = ROOT_DIR / "config" / "preprocess_report.yml"
+DEFAULT_OUTPUT_DIR = Path("preprocessing_report")
+DEFAULT_REPORT_CONFIG_PATH = Path("preprocess_report.yml")
 
 DEFAULT_COLORS = {
     "input": "#0072B2",
@@ -1249,7 +1249,7 @@ def build_report(
     filtered_dataset_path: Path | None,
     output_dir: Path,
     report_config_path: Path = DEFAULT_REPORT_CONFIG_PATH,
-    build_dictionary: bool = True,
+    build_summary_excel: bool = True,
 ) -> None:
     report_config = load_report_config(report_config_path)
     domain_by_stage = dict(report_config["domain_by_stage"])
@@ -1410,7 +1410,7 @@ def build_report(
             "variable_distribution": variable_distribution_chart,
         },
     )
-    if build_dictionary and full_dataset_path and filtered_dataset_path:
+    if build_summary_excel and full_dataset_path and filtered_dataset_path:
         build_summary_excel_file(
             full_dataset_path=full_dataset_path,
             filtered_dataset_path=filtered_dataset_path,
@@ -1422,7 +1422,7 @@ def build_report(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate clinician-facing preprocessing summary figures and markdown from preprocessing logs."
+        description="Generate preprocessing summary figures, tables, markdown, and Excel output from preprocessing logs."
     )
     parser.add_argument("--summary-log-path", type=Path, default=DEFAULT_SUMMARY_LOG_PATH)
     parser.add_argument("--detailed-log-path", type=Path, default=DEFAULT_DETAILED_LOG_PATH)
@@ -1435,7 +1435,7 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_REPORT_CONFIG_PATH,
     )
     parser.add_argument(
-        "--skip-variable-dictionary",
+        "--skip-summary-excel",
         action="store_true",
         help="Do not generate tables/summary_excel_file.xlsx.",
     )
@@ -1451,7 +1451,7 @@ def main() -> None:
         filtered_dataset_path=args.filtered_dataset_path,
         output_dir=args.output_dir,
         report_config_path=args.report_config_path,
-        build_dictionary=not args.skip_variable_dictionary,
+        build_summary_excel=not args.skip_summary_excel,
     )
 
 

@@ -13,11 +13,10 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 
-ROOT = Path(__file__).resolve().parents[1]
-FULL_DATASET = ROOT / "preprocess_test.csv"
-FILTERED_DATASET = ROOT / "preprocess_test_filtered.csv"
-DETAILED_LOG = ROOT / "preprocess_test_log_detailed.json"
-OUTPUT_XLSX = ROOT / "report" / "tables" / "summary_excel_file.xlsx"
+FULL_DATASET = Path("preprocess_test.csv")
+FILTERED_DATASET = Path("preprocess_test_filtered.csv")
+DETAILED_LOG = Path("preprocess_test_log_detailed.json")
+OUTPUT_XLSX = Path("preprocessing_report") / "tables" / "summary_excel_file.xlsx"
 
 
 HEADERS = [
