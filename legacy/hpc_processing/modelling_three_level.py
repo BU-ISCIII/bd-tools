@@ -42,7 +42,6 @@ import numpy as np
 import optuna
 import pandas as pd
 from catboost import CatBoostClassifier
-from imblearn.over_sampling import SMOTE, RandomOverSampler
 from lightgbm import LGBMClassifier
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import KNNImputer, SimpleImputer
@@ -1755,6 +1754,10 @@ def run_training(args: argparse.Namespace) -> None:
 
         all_summaries["level3_cefalosporina"] = {
             "mode": "two_stage_from_resistente_cefalosporina_multi",
+            "stage1_gate_macro_f1": float(f1_score(y3_gate_test, l3_gate_test_pred, average="macro", zero_division=0)),
+            "stage1_gate_roc_auc": float(roc_auc_score(y3_gate_test, l3_gate_test_proba)) if pd.Series(y3_gate_test).nunique() > 1 else None,
+            "stage2_macro_f1": l3_f1,
+            "stage2_roc_auc": l3_auc,
             "macro_f1": l3_f1,
             "roc_auc": l3_auc,
             "stage2_positive_label_token": args.cef_multi_positive_label,
@@ -1973,6 +1976,10 @@ def run_training(args: argparse.Namespace) -> None:
 
         all_summaries["level3_cefalosporina"] = {
             "mode": "two_stage_binary" if is_l3_binary else "two_stage_multiclass",
+            "stage1_gate_macro_f1": float(f1_score(y3_gate_test, l3_gate_test_pred, average="macro", zero_division=0)),
+            "stage1_gate_roc_auc": float(roc_auc_score(y3_gate_test, l3_gate_test_proba)) if pd.Series(y3_gate_test).nunique() > 1 else None,
+            "stage2_macro_f1": l3_f1,
+            "stage2_roc_auc": l3_auc,
             "macro_f1": l3_f1,
             "roc_auc": l3_auc,
             "classes": l3_target_names,
@@ -1980,110 +1987,6 @@ def run_training(args: argparse.Namespace) -> None:
         }
         all_summaries["l3_gate_rfecv_scores"] = l3_gate_rfecv_history
         all_summaries["l3_rfecv_scores"] = l3_rfecv_history
-
-    # ------------------------------------------------------------------
-    # L3 size guard
-    # ------------------------------------------------------------------
-    l3_minority_count = int(y3_train_enc.value_counts().min())
-    l3_small_dataset = l3_minority_count < args.l3_min_positive
-
-    # Cap CV splits for L3 (used by Optuna, OOF generation, and calibration)
-    l3_cv_splits = max(min(args.cv_splits, l3_minority_count), 2)
-    if l3_cv_splits != args.cv_splits:
-        print(f"  Reducing cv_splits from {args.cv_splits} to {l3_cv_splits} for Level 3.")
-
-    if l3_small_dataset:
-        print(
-            f"\n  {'!' * 60}"
-            f"\n  WARNING: Level 3 minority class has only {l3_minority_count} training"
-            f" samples (threshold: {args.l3_min_positive})."
-            f"\n  Results should be interpreted with caution."
-            f"\n  {'!' * 60}\n"
-        )
-
-    rank_model_l3 = _build_ranking_model(args.model_type, y3_train_enc, args.random_state)
-    if args.skip_rfecv:
-        print("  Skipping RFECV for Level 3 – using all features.")
-        l3_shap_feats = X3_train_base.columns.tolist()
-        l3_rfecv_history = {}
-    else:
-        print("  Selecting Level 3 features by SHAP importance …")
-        l3_shap_feats, l3_rfecv_history = shap_rfecv(
-            rank_model_l3, X3_train_base, y3_train_enc, min_features=2, max_features=args.max_features, scoring="pr_auc"
-        )
-    l3_features = cap_features(
-        l3_shap_feats, X3_train_base, y3_train_enc,
-        args.max_features, args.random_state, args.model_type, rank_model=rank_model_l3
-    )
-    print(f"  SHAP selection kept {len(l3_features)} features.")
-
-    scaler_l3 = MinMaxScaler()
-    X3_train_scaled = pd.DataFrame(
-        scaler_l3.fit_transform(X3_train_base[l3_features]),
-        columns=l3_features, index=X3_train_base.index,
-    )
-    X3_test_scaled = pd.DataFrame(
-        scaler_l3.transform(X3_test_base[l3_features]),
-        columns=l3_features, index=X3_test_base.index,
-    )
-
-    sw_l3 = compute_balanced_sample_weight(y3_train_enc, w_train.reindex(y3_train_enc.index))
-
-    print("  Optimising Level 3 model …")
-    l3_params, l3_threshold, l3_study = optimise_binary_model(
-        X3_train_scaled, y3_train_enc,
-        n_splits=l3_cv_splits,
-        n_trials=args.binary_trials,
-        random_state=args.random_state,
-        sample_weight=sw_l3,
-        model_type=args.model_type,
-    )
-    print(f"  Best threshold: {l3_threshold:.3f}")
-
-    # Final Level 3 model, calibrated
-    l3_base = build_binary_model(args.model_type, l3_params.copy())
-    l3_cal_cv = min(5, int(y3_train_enc.value_counts().min()))
-    l3_cal_cv = max(l3_cal_cv, 2)
-    l3_model = CalibratedClassifierCV(l3_base, cv=l3_cal_cv, method="isotonic")
-    l3_model.fit(X3_train_scaled, y3_train_enc)
-
-    l3_test_proba = l3_model.predict_proba(X3_test_scaled)[:, 1]
-    l3_test_pred = (l3_test_proba >= l3_threshold).astype(int)
-
-    l3_report = classification_report(
-        y3_test_enc, l3_test_pred,
-        target_names=l3_target_names,
-        zero_division=0,
-    )
-    l3_f1 = f1_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
-    l3_auc: Optional[float] = None
-    if y3_test_enc.nunique() > 1:
-        l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba))
-
-    print(
-        f"  Level 3 – Macro F1: {l3_f1:.3f}"
-        + (f"  |  ROC-AUC: {l3_auc:.3f}" if l3_auc is not None else "")
-    )
-
-    print(f"Saving Level 3 results to {l3_dir}")
-    (l3_dir / "report.txt").write_text(l3_report)
-    (l3_dir / "summary.json").write_text(json.dumps({
-        "params": l3_params, "threshold": l3_threshold,
-        "macro_f1": l3_f1, "roc_auc": l3_auc,
-        "classes": l3_target_names,
-        "shaprfecv_features": l3_shap_feats,
-        "features": l3_features,
-        "hemo_positive_gate": True,
-    }, indent=2))
-    l3_study.trials_dataframe().to_csv(l3_dir / "optuna_trials.csv", index=False)
-    pd.DataFrame({
-        "true": y3_test_enc.values,
-        "pred": l3_test_pred,
-        "proba": l3_test_proba,
-    }, index=X3_test_scaled.index).to_csv(l3_dir / "predictions.csv", index_label="row_index")
-
-    all_summaries["level3_cefalosporina"] = {"macro_f1": l3_f1, "roc_auc": l3_auc}
-    all_summaries["l3_rfecv_scores"] = l3_rfecv_history
 
     all_summaries["l1_rfecv_scores"] = l1_rfecv_history
     all_summaries["l2_rfecv_scores"] = l2_rfecv_history
