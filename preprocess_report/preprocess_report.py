@@ -72,21 +72,36 @@ DEFAULT_REPORT_CONFIG = {
             },
         },
         {
-            "model": "Model 3 - GBN selected etiology",
-            "target_column": "resultado_hemo_gbn_selected",
+            "model": "Model 3 - GNB selected etiology",
+            "target_column": "resultado_hemo_gnb_selected",
             "notes": (
                 "Hemoculture etiology target. Selected Gram-negative organisms "
-                "are grouped as GBNSelected, NEGATIVE stays NEGATIVE, and all "
+                "are grouped as GNBSelected, NEGATIVE stays NEGATIVE, and all "
                 "other detected etiologies are grouped as other_etiology."
             ),
             "class_labels": {
                 "NEGATIVE": "Negative blood culture",
-                "GBNSelected": "Selected Gram-negative bacillus etiology",
+                "GNBSelected": "Selected Gram-negative bacillus etiology",
                 "other_etiology": "Other detected etiology",
             },
         },
         {
-            "model": "Model 4 - Resistance",
+            "model": "Model 4 - GNB all etiology",
+            "target_column": "resultado_hemo_gnb_all",
+            "notes": (
+                "Hemoculture etiology target. All configured Gram-negative "
+                "bacilli and coccobacilli are grouped as GNBAll, NEGATIVE "
+                "stays NEGATIVE, and all other detected etiologies are grouped "
+                "as other_etiology."
+            ),
+            "class_labels": {
+                "NEGATIVE": "Negative blood culture",
+                "GNBAll": "All Gram-negative bacillus etiologies",
+                "other_etiology": "Other detected etiology",
+            },
+        },
+        {
+            "model": "Model 5 - Resistance",
             "target_column": "resistente_cefalosporina",
             "notes": (
                 "Restricted to grouped positive blood cultures "
@@ -124,10 +139,17 @@ DEFAULT_REPORT_CONFIG = {
         },
         {
             "domain": "Etiology",
-            "target_version": "GBN selected etiology",
-            "target_columns": ["resultado_hemo_gbn_selected"],
+            "target_version": "GNB selected etiology",
+            "target_columns": ["resultado_hemo_gnb_selected"],
             "count_mode": "single",
-            "notes": "Pipeline target grouped into NEGATIVE, selected Gram-negative organisms (GBNSelected), and other_etiology.",
+            "notes": "Pipeline target grouped into NEGATIVE, selected Gram-negative organisms (GNBSelected), and other_etiology.",
+        },
+        {
+            "domain": "Etiology",
+            "target_version": "GNB all etiology",
+            "target_columns": ["resultado_hemo_gnb_all"],
+            "count_mode": "single",
+            "notes": "Pipeline target grouped into NEGATIVE, all configured Gram-negative bacilli/coccobacilli (GNBAll), and other_etiology.",
         },
         {
             "domain": "Resistance",
@@ -176,12 +198,22 @@ DEFAULT_REPORT_CONFIG = {
             "target_column": "resultado_hemo",
         },
         {
-            "section": "Etiology - GBN selected",
-            "description": "Hemoculture etiology grouped as GBNSelected for selected Gram-negative organisms, other_etiology for other detected etiologies, and NEGATIVE.",
-            "target_column": "resultado_hemo_gbn_selected",
+            "section": "Etiology - GNB selected",
+            "description": "Hemoculture etiology grouped as GNBSelected for selected Gram-negative organisms, other_etiology for other detected etiologies, and NEGATIVE.",
+            "target_column": "resultado_hemo_gnb_selected",
             "class_labels": {
                 "NEGATIVE": "Negative blood culture",
-                "GBNSelected": "Selected Gram-negative bacillus etiology",
+                "GNBSelected": "Selected Gram-negative bacillus etiology",
+                "other_etiology": "Other detected etiology",
+            },
+        },
+        {
+            "section": "Etiology - GNB all",
+            "description": "Hemoculture etiology grouped as GNBAll for all configured Gram-negative bacilli/coccobacilli, other_etiology for other detected etiologies, and NEGATIVE.",
+            "target_column": "resultado_hemo_gnb_all",
+            "class_labels": {
+                "NEGATIVE": "Negative blood culture",
+                "GNBAll": "All Gram-negative bacillus etiologies",
                 "other_etiology": "Other detected etiology",
             },
         },

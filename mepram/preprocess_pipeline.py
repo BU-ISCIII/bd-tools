@@ -3076,15 +3076,24 @@ def build_targets(
         ),
     )
 
-    gbn_selected_organisms = set(config["HEMOCULTURE_GBN_SELECTED_ORGANISMS"])
-    result["resultado_hemo_gbn_selected"] = np.select(
+    gnb_class_map = config["HEMOCULTURE_MICROORGANISM_GNB_CLASS"]
+    missing_gnb_classes = sorted(
+        set(result["resultado_hemo_mo"].dropna().astype(str).unique()) - set(gnb_class_map)
+    )
+    if missing_gnb_classes:
+        raise ValueError(
+            "Missing HEMOCULTURE_MICROORGANISM_GNB_CLASS entries for "
+            f"{missing_gnb_classes}"
+        )
+    resultado_hemo_gnb_class = result["resultado_hemo"].map(gnb_class_map)
+    result["resultado_hemo_gnb_selected"] = np.select(
         [
             result["resultado_hemo"] == "NEGATIVE",
-            result["resultado_hemo"].isin(gbn_selected_organisms),
+            resultado_hemo_gnb_class == "GNBSelected",
         ],
         [
             "NEGATIVE",
-            "GBNSelected",
+            "GNBSelected",
         ],
         default="other_etiology",
     )
@@ -3092,16 +3101,46 @@ def build_targets(
         log,
         "created_variables",
         source="resultado_hemo",
-        target="resultado_hemo_gbn_selected",
+        target="resultado_hemo_gnb_selected",
         how=(
-            "map selected Gram-negative hemoculture organisms from "
-            "HEMOCULTURE_GBN_SELECTED_ORGANISMS to GBNSelected; keep NEGATIVE as "
+            "map hemoculture organisms classified as GNBSelected in "
+            "HEMOCULTURE_MICROORGANISM_GNB_CLASS to GNBSelected; keep NEGATIVE "
+            "as NEGATIVE; collapse all other detected etiologies to other_etiology."
+        ),
+        variable_type="target",
+        n_classes=variable_class_count(result["resultado_hemo_gnb_selected"]),
+        descriptions=describe_columns(
+            "resultado_hemo_gnb_selected",
+            "Prediction target or target-support variable derived during target building.",
+        ),
+    )
+
+    resultado_hemo_mo_gnb_class = result["resultado_hemo_mo"].map(gnb_class_map)
+    result["resultado_hemo_gnb_all"] = np.select(
+        [
+            result["resultado_hemo_mo"] == "NEGATIVE",
+            resultado_hemo_mo_gnb_class.isin(["GNBSelected", "GNB"]),
+        ],
+        [
+            "NEGATIVE",
+            "GNBAll",
+        ],
+        default="other_etiology",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="resultado_hemo_mo",
+        target="resultado_hemo_gnb_all",
+        how=(
+            "map hemoculture organisms classified as GNBSelected or GNB in "
+            "HEMOCULTURE_MICROORGANISM_GNB_CLASS to GNBAll; keep NEGATIVE as "
             "NEGATIVE; collapse all other detected etiologies to other_etiology."
         ),
         variable_type="target",
-        n_classes=variable_class_count(result["resultado_hemo_gbn_selected"]),
+        n_classes=variable_class_count(result["resultado_hemo_gnb_all"]),
         descriptions=describe_columns(
-            "resultado_hemo_gbn_selected",
+            "resultado_hemo_gnb_all",
             "Prediction target or target-support variable derived during target building.",
         ),
     )
