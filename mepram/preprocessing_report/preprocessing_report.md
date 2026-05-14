@@ -4,10 +4,10 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 
 ## Dataset Shapes
 
-- Full dataset: `3,913 rows x 418 columns`
-- Filtered/model-compatible dataset: `3,913 rows x 181 columns`
-- Final pipeline stage before filtering: `3,913` rows and `418` columns
-- Filtered stage removed `237` columns and kept `181` columns
+- Full dataset: `3,913 rows x 419 columns`
+- Filtered/model-compatible dataset: `3,913 rows x 182 columns`
+- Final pipeline stage before filtering: `3,913` rows and `419` columns
+- Filtered stage removed `237` columns and kept `182` columns
 
 ## Figures
 
@@ -32,7 +32,7 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 - `tbl_colonizaciones_previas`: `33` created variables
 - `tbl_otros_cultivos_en_urgencias`: `33` created variables
 - `tbl_sintomas`: `16` created variables
-- `target_building`: `7` created variables
+- `target_building`: `8` created variables
 
 ## Predictive Targets
 
@@ -40,8 +40,9 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 |---|---|---:|---:|---|---:|
 | Model 1 - Sepsis | `sepsis` | 3,913 | 2 | Sepsis (-) | 50.8% |
 | Model 2 - Etiology | `resultado_hemo_grouped` | 3,913 | 3 | Negative blood culture | 59.2% |
-| Model 3 - GBN selected etiology | `resultado_hemo_gbn_selected` | 3,913 | 3 | Negative blood culture | 53.0% |
-| Model 4 - Resistance | `resistente_cefalosporina` | 1,597 | 2 | Not resistant | 85.5% |
+| Model 3 - GNB selected etiology | `resultado_hemo_gnb_selected` | 3,913 | 3 | Negative blood culture | 53.0% |
+| Model 4 - GNB all etiology | `resultado_hemo_gnb_all` | 3,913 | 3 | Negative blood culture | 53.0% |
+| Model 5 - Resistance | `resistente_cefalosporina` | 1,597 | 2 | Not resistant | 85.5% |
 
 | Model | Class | Samples | % within target |
 |---|---|---:|---:|
@@ -50,18 +51,22 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 | Model 2 - Etiology | Gram-negative bacillus | 1,320 | 33.7% |
 | Model 2 - Etiology | Gram-positive coccus | 277 | 7.1% |
 | Model 2 - Etiology | Negative blood culture | 2,316 | 59.2% |
-| Model 3 - GBN selected etiology | Selected Gram-negative bacillus etiology | 1,320 | 33.7% |
-| Model 3 - GBN selected etiology | Negative blood culture | 2,072 | 53.0% |
-| Model 3 - GBN selected etiology | Other detected etiology | 521 | 13.3% |
-| Model 4 - Resistance | Not resistant | 1,365 | 85.5% |
-| Model 4 - Resistance | Resistant to cephalosporins 3a/4a | 232 | 14.5% |
+| Model 3 - GNB selected etiology | Selected Gram-negative bacillus etiology | 1,320 | 33.7% |
+| Model 3 - GNB selected etiology | Negative blood culture | 2,072 | 53.0% |
+| Model 3 - GNB selected etiology | Other detected etiology | 521 | 13.3% |
+| Model 4 - GNB all etiology | All Gram-negative bacillus etiologies | 1,352 | 34.6% |
+| Model 4 - GNB all etiology | Negative blood culture | 2,072 | 53.0% |
+| Model 4 - GNB all etiology | Other detected etiology | 489 | 12.5% |
+| Model 5 - Resistance | Not resistant | 1,365 | 85.5% |
+| Model 5 - Resistance | Resistant to cephalosporins 3a/4a | 232 | 14.5% |
 
 | Model | Exclusions or grouping |
 |---|---|
 | Model 1 - Sepsis | No exclusions; binary target over the full cohort. |
 | Model 2 - Etiology | Grouped hemoculture target. NEGATIVE includes negative blood cultures and non-target or unmapped detected organisms. |
-| Model 3 - GBN selected etiology | Hemoculture etiology target. Selected Gram-negative organisms are grouped as GBNSelected, NEGATIVE stays NEGATIVE, and all other detected etiologies are grouped as other_etiology. |
-| Model 4 - Resistance | Restricted to grouped positive blood cultures (resultado_hemo_grouped != NEGATIVE); grouped as binary cephalosporin 3a/4a resistance. |
+| Model 3 - GNB selected etiology | Hemoculture etiology target. Selected Gram-negative organisms are grouped as GNBSelected, NEGATIVE stays NEGATIVE, and all other detected etiologies are grouped as other_etiology. |
+| Model 4 - GNB all etiology | Hemoculture etiology target. All configured Gram-negative bacilli and coccobacilli are grouped as GNBAll, NEGATIVE stays NEGATIVE, and all other detected etiologies are grouped as other_etiology. |
+| Model 5 - Resistance | Restricted to grouped positive blood cultures (resultado_hemo_grouped != NEGATIVE); grouped as binary cephalosporin 3a/4a resistance. |
 
 ## Target Evolution
 
@@ -70,7 +75,8 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 | Etiology | Microorganism target | `resultado_hemo_mo` | 3,913 | 101 | NEGATIVE | 53.0% | NEGATIVE: 2,072; Escherichia coli: 850; Klebsiella pneumoniae: 210; Staphylococcus aureus: 171 |
 | Etiology | Clinical organism grouping | `resultado_hemo` | 3,913 | 10 | NEGATIVE | 53.0% | NEGATIVE: 2,072; Escherichia coli: 850; Klebsiella pneumoniae: 210; _Other bacteria: 198 |
 | Etiology | Gram grouped | `resultado_hemo_grouped` | 3,913 | 3 | NEGATIVE | 59.2% | NEGATIVE: 2,316; Bacilo gram-: 1,320; Coco gram+: 277 |
-| Etiology | GBN selected etiology | `resultado_hemo_gbn_selected` | 3,913 | 3 | NEGATIVE | 53.0% | NEGATIVE: 2,072; GBNSelected: 1,320; other_etiology: 521 |
+| Etiology | GNB selected etiology | `resultado_hemo_gnb_selected` | 3,913 | 3 | NEGATIVE | 53.0% | NEGATIVE: 2,072; GNBSelected: 1,320; other_etiology: 521 |
+| Etiology | GNB all etiology | `resultado_hemo_gnb_all` | 3,913 | 3 | NEGATIVE | 53.0% | NEGATIVE: 2,072; GNBAll: 1,352; other_etiology: 489 |
 | Resistance | Individual phenotype labels | `fenotipo_resistencia_individual` | 3,913 | 13 | NEGATIVE | 80.6% | NEGATIVE: 3,152; Bacilo Gram negativo resistente a amoxicilina/clavulánico: 438; Bacilo Gram negativo resistente a ciprofloxacino: 315; Bacilo Gram negativo resistente a ceftrixona o cefotaxima: 208 |
 | Resistance | Antibiotic family labels | `fenotipo_resistencia` | 3,913 | 6 | NEGATIVE | 80.6% | NEGATIVE: 3,152; Penicilinas: 621; Quinolonas: 315; Cefalosporinas 3/4 gen: 235 |
 | Resistance | Cephalosporin yes/no | `resistente_cefalosporina` | 3,913 | 2 | NEGATIVE | 94.0% | NEGATIVE: 3,678; RESIST_CEFALOSPORINAS_3a_4a: 235 |
@@ -80,7 +86,8 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 | Etiology | Microorganism target | Hemoculture microorganism target after clinician coinfection resolution. |
 | Etiology | Clinical organism grouping | Configured clinical organism grouping from the preprocessing pipeline. |
 | Etiology | Gram grouped | Pipeline target grouped into negative, Gram-negative bacillus, and Gram-positive coccus. |
-| Etiology | GBN selected etiology | Pipeline target grouped into NEGATIVE, selected Gram-negative organisms (GBNSelected), and other_etiology. |
+| Etiology | GNB selected etiology | Pipeline target grouped into NEGATIVE, selected Gram-negative organisms (GNBSelected), and other_etiology. |
+| Etiology | GNB all etiology | Pipeline target grouped into NEGATIVE, all configured Gram-negative bacilli/coccobacilli (GNBAll), and other_etiology. |
 | Resistance | Individual phenotype labels | Individual resistance phenotype labels before antibiotic-family grouping; multilabel rows are counted once for each phenotype present. |
 | Resistance | Antibiotic family labels | Pipeline target after mapping raw resistance phenotypes to antibiotic families; multilabel rows are counted once for each family present. |
 | Resistance | Cephalosporin yes/no | Final binary target: any cephalosporin 3a/4a resistance versus negative. |
@@ -91,7 +98,7 @@ This report summarizes the preprocessing audit logs. It is intended for clinicia
 
 Binary sepsis prediction target.
 
-- Dataset shape: `3,913` rows x `181` columns
+- Dataset shape: `3,913` rows x `182` columns
 - Target column: `sepsis`
 - Classes: `2`
 
@@ -105,7 +112,7 @@ Binary sepsis prediction target.
 
 Original microorganism target before clinical grouping; shown as top 50 classes plus Other.
 
-- Dataset shape: `3,913` rows x `181` columns
+- Dataset shape: `3,913` rows x `182` columns
 - Target column: `resultado_hemo_mo`
 - Classes: `101`
 
@@ -168,7 +175,7 @@ Original microorganism target before clinical grouping; shown as top 50 classes 
 
 Clinician-configured microorganism grouping used by the etiology model.
 
-- Dataset shape: `3,913` rows x `181` columns
+- Dataset shape: `3,913` rows x `182` columns
 - Target column: `resultado_hemo`
 - Classes: `10`
 
@@ -186,12 +193,12 @@ Clinician-configured microorganism grouping used by the etiology model.
 | _Fungi | 7 | 0.2% |
 | Total | 3,913 | 100.0% |
 
-### Etiology - GBN selected
+### Etiology - GNB selected
 
-Hemoculture etiology grouped as GBNSelected for selected Gram-negative organisms, other_etiology for other detected etiologies, and NEGATIVE.
+Hemoculture etiology grouped as GNBSelected for selected Gram-negative organisms, other_etiology for other detected etiologies, and NEGATIVE.
 
-- Dataset shape: `3,913` rows x `181` columns
-- Target column: `resultado_hemo_gbn_selected`
+- Dataset shape: `3,913` rows x `182` columns
+- Target column: `resultado_hemo_gnb_selected`
 - Classes: `3`
 
 | Class | Rows | % within target |
@@ -201,11 +208,26 @@ Hemoculture etiology grouped as GBNSelected for selected Gram-negative organisms
 | Other detected etiology | 521 | 13.3% |
 | Total | 3,913 | 100.0% |
 
+### Etiology - GNB all
+
+Hemoculture etiology grouped as GNBAll for all configured Gram-negative bacilli/coccobacilli, other_etiology for other detected etiologies, and NEGATIVE.
+
+- Dataset shape: `3,913` rows x `182` columns
+- Target column: `resultado_hemo_gnb_all`
+- Classes: `3`
+
+| Class | Rows | % within target |
+|---|---:|---:|
+| Negative blood culture | 2,072 | 53.0% |
+| All Gram-negative bacillus etiologies | 1,352 | 34.6% |
+| Other detected etiology | 489 | 12.5% |
+| Total | 3,913 | 100.0% |
+
 ### Resistance - individual phenotypes
 
 Individual resistance phenotype labels before antibiotic-family grouping; multilabel rows are counted once for each phenotype present.
 
-- Dataset shape: `3,913` rows x `181` columns
+- Dataset shape: `3,913` rows x `182` columns
 - Target column: `fenotipo_resistencia_individual`
 - Classes: `13`
 
@@ -231,7 +253,7 @@ Individual resistance phenotype labels before antibiotic-family grouping; multil
 
 Resistance phenotypes grouped into antibiotic-family labels; multilabel rows are counted once for each family present.
 
-- Dataset shape: `3,913` rows x `181` columns
+- Dataset shape: `3,913` rows x `182` columns
 - Target column: `fenotipo_resistencia`
 - Classes: `6`
 
@@ -250,7 +272,7 @@ Resistance phenotypes grouped into antibiotic-family labels; multilabel rows are
 
 Final binary cephalosporin resistance target.
 
-- Dataset shape: `3,913` rows x `181` columns
+- Dataset shape: `3,913` rows x `182` columns
 - Target column: `resistente_cefalosporina`
 - Classes: `2`
 
@@ -301,5 +323,5 @@ Top missing columns in the filtered dataset:
 - `tbl_otros_cultivos_en_urgencias`: rows `5,104` -> `3,913`, columns `8` -> `35`, dropped `6`, warnings `0`
 - `merged_dataset`: rows `3,913` -> `3,913`, columns `13` -> `364`, dropped `0`, warnings `0`
 - `cross_table_features`: rows `3,913` -> `3,913`, columns `364` -> `411`, dropped `0`, warnings `0`
-- `target_building`: rows `3,913` -> `3,913`, columns `411` -> `418`, dropped `0`, warnings `0`
-- `filtered_dataset`: rows `3,913` -> `3,913`, columns `418` -> `181`, dropped `237`, warnings `0`
+- `target_building`: rows `3,913` -> `3,913`, columns `411` -> `419`, dropped `0`, warnings `0`
+- `filtered_dataset`: rows `3,913` -> `3,913`, columns `419` -> `182`, dropped `237`, warnings `0`

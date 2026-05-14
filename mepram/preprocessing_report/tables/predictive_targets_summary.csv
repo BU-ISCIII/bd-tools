@@ -1,5 +1,6 @@
 model,target_column,samples,classes,majority_class,majority_class_percent,exclusions_or_grouping
 Model 1 - Sepsis,sepsis,3913,2,Sepsis (-),50.8,No exclusions; binary target over the full cohort.
 Model 2 - Etiology,resultado_hemo_grouped,3913,3,Negative blood culture,59.2,Grouped hemoculture target. NEGATIVE includes negative blood cultures and non-target or unmapped detected organisms.
-Model 3 - GBN selected etiology,resultado_hemo_gbn_selected,3913,3,Negative blood culture,53.0,"Hemoculture etiology target. Selected Gram-negative organisms are grouped as GBNSelected, NEGATIVE stays NEGATIVE, and all other detected etiologies are grouped as other_etiology."
-Model 4 - Resistance,resistente_cefalosporina,1597,2,Not resistant,85.5,Restricted to grouped positive blood cultures (resultado_hemo_grouped != NEGATIVE); grouped as binary cephalosporin 3a/4a resistance.
+Model 3 - GNB selected etiology,resultado_hemo_gnb_selected,3913,3,Negative blood culture,53.0,"Hemoculture etiology target. Selected Gram-negative organisms are grouped as GNBSelected, NEGATIVE stays NEGATIVE, and all other detected etiologies are grouped as other_etiology."
+Model 4 - GNB all etiology,resultado_hemo_gnb_all,3913,3,Negative blood culture,53.0,"Hemoculture etiology target. All configured Gram-negative bacilli and coccobacilli are grouped as GNBAll, NEGATIVE stays NEGATIVE, and all other detected etiologies are grouped as other_etiology."
+Model 5 - Resistance,resistente_cefalosporina,1597,2,Not resistant,85.5,Restricted to grouped positive blood cultures (resultado_hemo_grouped != NEGATIVE); grouped as binary cephalosporin 3a/4a resistance.

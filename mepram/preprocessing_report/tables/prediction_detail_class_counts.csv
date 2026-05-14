@@ -65,10 +65,14 @@ Etiology - clinical grouping,resultado_hemo,Pseudomonas aeruginosa,84,2.1
 Etiology - clinical grouping,resultado_hemo,Enterococcus,39,1.0
 Etiology - clinical grouping,resultado_hemo,_Fungi,7,0.2
 Etiology - clinical grouping,resultado_hemo,Total,3913,100.0
-Etiology - GBN selected,resultado_hemo_gbn_selected,Negative blood culture,2072,53.0
-Etiology - GBN selected,resultado_hemo_gbn_selected,Selected Gram-negative bacillus etiology,1320,33.7
-Etiology - GBN selected,resultado_hemo_gbn_selected,Other detected etiology,521,13.3
-Etiology - GBN selected,resultado_hemo_gbn_selected,Total,3913,100.0
+Etiology - GNB selected,resultado_hemo_gnb_selected,Negative blood culture,2072,53.0
+Etiology - GNB selected,resultado_hemo_gnb_selected,Selected Gram-negative bacillus etiology,1320,33.7
+Etiology - GNB selected,resultado_hemo_gnb_selected,Other detected etiology,521,13.3
+Etiology - GNB selected,resultado_hemo_gnb_selected,Total,3913,100.0
+Etiology - GNB all,resultado_hemo_gnb_all,Negative blood culture,2072,53.0
+Etiology - GNB all,resultado_hemo_gnb_all,All Gram-negative bacillus etiologies,1352,34.6
+Etiology - GNB all,resultado_hemo_gnb_all,Other detected etiology,489,12.5
+Etiology - GNB all,resultado_hemo_gnb_all,Total,3913,100.0
 Resistance - individual phenotypes,fenotipo_resistencia_individual,NEGATIVE,3152,80.6
 Resistance - individual phenotypes,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a amoxicilina/clavulánico,438,11.2
 Resistance - individual phenotypes,fenotipo_resistencia_individual,Bacilo Gram negativo resistente a ciprofloxacino,315,8.1
