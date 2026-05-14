@@ -41,7 +41,18 @@ predictive_targets:
       Bacilo gram-: Gram-negative bacillus
       Coco gram+: Gram-positive coccus
 
-  - model: Model 3 - Resistance
+  - model: Model 3 - GBN selected etiology
+    target_column: resultado_hemo_gbn_selected
+    notes: >-
+      Hemoculture etiology target. Selected Gram-negative organisms are grouped
+      as GBNSelected, NEGATIVE stays NEGATIVE, and all other detected etiologies
+      are grouped as other_etiology.
+    class_labels:
+      NEGATIVE: Negative blood culture
+      GBNSelected: Selected Gram-negative bacillus etiology
+      other_etiology: Other detected etiology
+
+  - model: Model 4 - Resistance
     target_column: resistente_cefalosporina
     notes: >-
       Restricted to grouped positive blood cultures
@@ -79,6 +90,15 @@ target_evolution:
     notes: >-
       Pipeline target grouped into negative, Gram-negative bacillus, and
       Gram-positive coccus.
+
+  - domain: Etiology
+    target_version: GBN selected etiology
+    target_columns:
+      - resultado_hemo_gbn_selected
+    count_mode: single
+    notes: >-
+      Pipeline target grouped into NEGATIVE, selected Gram-negative organisms
+      (GBNSelected), and other_etiology.
 
   - domain: Resistance
     target_version: Individual phenotype labels
@@ -126,6 +146,16 @@ prediction_detail_sections:
   - section: Etiology - clinical grouping
     description: Clinician-configured microorganism grouping used by the etiology model.
     target_column: resultado_hemo
+
+  - section: Etiology - GBN selected
+    description: >-
+      Hemoculture etiology grouped as GBNSelected for selected Gram-negative
+      organisms, other_etiology for other detected etiologies, and NEGATIVE.
+    target_column: resultado_hemo_gbn_selected
+    class_labels:
+      NEGATIVE: Negative blood culture
+      GBNSelected: Selected Gram-negative bacillus etiology
+      other_etiology: Other detected etiology
 
   - section: Resistance - individual phenotypes
     description: >-

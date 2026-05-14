@@ -4,5 +4,8 @@ Model 1 - Sepsis,sepsis,Sepsis (+),1,1924,49.2
 Model 2 - Etiology,resultado_hemo_grouped,Gram-negative bacillus,Bacilo gram-,1320,33.7
 Model 2 - Etiology,resultado_hemo_grouped,Gram-positive coccus,Coco gram+,277,7.1
 Model 2 - Etiology,resultado_hemo_grouped,Negative blood culture,NEGATIVE,2316,59.2
-Model 3 - Resistance,resistente_cefalosporina,Not resistant,NEGATIVE,1365,85.5
-Model 3 - Resistance,resistente_cefalosporina,Resistant to cephalosporins 3a/4a,RESIST_CEFALOSPORINAS_3a_4a,232,14.5
+Model 3 - GBN selected etiology,resultado_hemo_gbn_selected,Selected Gram-negative bacillus etiology,GBNSelected,1320,33.7
+Model 3 - GBN selected etiology,resultado_hemo_gbn_selected,Negative blood culture,NEGATIVE,2072,53.0
+Model 3 - GBN selected etiology,resultado_hemo_gbn_selected,Other detected etiology,other_etiology,521,13.3
+Model 4 - Resistance,resistente_cefalosporina,Not resistant,NEGATIVE,1365,85.5
+Model 4 - Resistance,resistente_cefalosporina,Resistant to cephalosporins 3a/4a,RESIST_CEFALOSPORINAS_3a_4a,232,14.5

@@ -78,6 +78,13 @@ MICROORGANISM_BROAD_GROUP_MAP = {
     "Streptococcus pneumoniae": "Coco gram+",
 }
 
+HEMOCULTURE_GBN_SELECTED_ORGANISMS = [
+    "Escherichia coli",
+    "Klebsiella pneumoniae",
+    "_Enterobacteria",
+    "Pseudomonas aeruginosa",
+]
+
 FENOTYPE_DRUG_TRANSLATIONS = {
     "amoxicilina/clavulánico": "amoxicillin and beta-lactamase inhibitor",
     "ciprofloxacino": "ciprofloxacin",
@@ -303,6 +310,7 @@ def as_dict() -> dict:
         "FECHA_INFECCION_CORRECTIONS": FECHA_INFECCION_CORRECTIONS,
         "MICROORGANISM_LABEL_MAP": MICROORGANISM_LABEL_MAP,
         "MICROORGANISM_BROAD_GROUP_MAP": MICROORGANISM_BROAD_GROUP_MAP,
+        "HEMOCULTURE_GBN_SELECTED_ORGANISMS": HEMOCULTURE_GBN_SELECTED_ORGANISMS,
         "FENOTYPE_DRUG_TRANSLATIONS": FENOTYPE_DRUG_TRANSLATIONS,
         "HEMOCULTIVO_COINFECTION_RESOLUTION_GROUPS": HEMOCULTIVO_COINFECTION_RESOLUTION_GROUPS,
         "ANTIMICROBIAL_GROUPS": ANTIMICROBIAL_GROUPS,

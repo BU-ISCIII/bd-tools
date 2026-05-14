@@ -13,5 +13,5 @@ tbl_colonizaciones_previas,33,1,33,4,0,0
 tbl_otros_cultivos_en_urgencias,33,1,12,6,0,1
 merged_dataset,0,0,0,0,0,11
 cross_table_features,47,0,0,0,0,2
-target_building,6,2,0,0,0,1
+target_building,7,2,0,0,0,1
 filtered_dataset,0,0,0,237,0,5

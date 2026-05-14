@@ -18,7 +18,7 @@
 data:
   # Analytical table used by the benchmark. This should already be the filtered
   # preprocessing output, not raw source tables.
-  path: playground/preprocessing/20260512_baseline_test/20260512_baseline_test_full_filtered.csv
+  path: playground/preprocessing/20260514_gbn_selected/20260514_gbn_selected_full_filtered.csv
 
   # Optional row weight column. If present, it is removed from X and passed as
   # sample_weight to estimators that accept it.
@@ -32,6 +32,7 @@ data:
     - resultado_hemo
     - resultado_hemo_mo
     - resultado_hemo_grouped
+    - resultado_hemo_gbn_selected
     - resultado_hemo_multilabel
     - all_cult_org
     - dominant_all_cult_org
@@ -130,6 +131,10 @@ targets:
     main_metric: roc_auc
 
   - name: resultado_hemo_grouped
+    type: multiclass
+    main_metric: log_loss
+
+  - name: resultado_hemo_gbn_selected
     type: multiclass
     main_metric: log_loss
 

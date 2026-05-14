@@ -3076,6 +3076,36 @@ def build_targets(
         ),
     )
 
+    gbn_selected_organisms = set(config["HEMOCULTURE_GBN_SELECTED_ORGANISMS"])
+    result["resultado_hemo_gbn_selected"] = np.select(
+        [
+            result["resultado_hemo"] == "NEGATIVE",
+            result["resultado_hemo"].isin(gbn_selected_organisms),
+        ],
+        [
+            "NEGATIVE",
+            "GBNSelected",
+        ],
+        default="other_etiology",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="resultado_hemo",
+        target="resultado_hemo_gbn_selected",
+        how=(
+            "map selected Gram-negative hemoculture organisms from "
+            "HEMOCULTURE_GBN_SELECTED_ORGANISMS to GBNSelected; keep NEGATIVE as "
+            "NEGATIVE; collapse all other detected etiologies to other_etiology."
+        ),
+        variable_type="target",
+        n_classes=variable_class_count(result["resultado_hemo_gbn_selected"]),
+        descriptions=describe_columns(
+            "resultado_hemo_gbn_selected",
+            "Prediction target or target-support variable derived during target building.",
+        ),
+    )
+
     result["infected_yes_no"] = np.where(
         result["resultado_hemo"] == "NEGATIVE",
         "NEGATIVE",
