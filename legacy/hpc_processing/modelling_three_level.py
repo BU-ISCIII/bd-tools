@@ -508,6 +508,23 @@ def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
     return float(np.clip(thresholds[best_idx], 0.05, 0.95))
 
 
+def _create_optuna_study(
+    *,
+    direction: str,
+    study_name: Optional[str],
+    storage: Optional[str],
+    load_if_exists: bool,
+):
+    if storage:
+        return optuna.create_study(
+            direction=direction,
+            study_name=study_name,
+            storage=storage,
+            load_if_exists=load_if_exists,
+        )
+    return optuna.create_study(direction=direction)
+
+
 def _binary_params_for_trial(trial: optuna.Trial, model_type: str, scale_pos_weight: float, random_state: int) -> Dict:
     if model_type == "rf":
         return {
@@ -588,6 +605,9 @@ def optimise_binary_model(
     random_state: int,
     sample_weight: Optional[pd.Series],
     model_type: str,
+    study_name: Optional[str] = None,
+    optuna_storage: Optional[str] = None,
+    optuna_load_if_exists: bool = False,
 ) -> Tuple[Dict, float, optuna.Study]:
     """Tune a binary classifier with Optuna maximising PR-AUC (Average Precision).
 
@@ -624,7 +644,12 @@ def optimise_binary_model(
             print(f"Trial {trial.number}: score={float(np.mean(scores))}")
         return float(np.mean(scores))
 
-    study = optuna.create_study(direction="maximize")
+    study = _create_optuna_study(
+        direction="maximize",
+        study_name=study_name,
+        storage=optuna_storage,
+        load_if_exists=optuna_load_if_exists,
+    )
     study.optimize(objective, n_trials=n_trials, n_jobs=1, gc_after_trial=True)
     best = study.best_trial.params.copy()
 
@@ -729,6 +754,9 @@ def optimise_multiclass_model(
     sample_weight: Optional[pd.Series],
     model_type: str,
     num_classes: int,
+    study_name: Optional[str] = None,
+    optuna_storage: Optional[str] = None,
+    optuna_load_if_exists: bool = False,
 ) -> Tuple[Dict, optuna.Study]:
     """Tune a multiclass classifier with Optuna maximising macro F1.
 
@@ -769,7 +797,12 @@ def optimise_multiclass_model(
             print(f"Trial {trial.number}: score={float(np.mean(scores))}")
         return float(np.mean(scores))
 
-    study = optuna.create_study(direction="maximize")
+    study = _create_optuna_study(
+        direction="maximize",
+        study_name=study_name,
+        storage=optuna_storage,
+        load_if_exists=optuna_load_if_exists,
+    )
     study.optimize(objective, n_trials=n_trials, n_jobs=1, gc_after_trial=True)
     return study.best_trial.params.copy(), study
 
@@ -1234,6 +1267,13 @@ def run_training(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     all_summaries: Dict = {"args": {str(k): str(v) for k,v in args.__dict__.items()}}
+    optuna_storage = args.optuna_storage or None
+    study_prefix = args.optuna_study_prefix.strip() if args.optuna_study_prefix else "three_level"
+    if optuna_storage:
+        print(f"Optuna storage: {optuna_storage}")
+
+    def _study_name(tag: str) -> str:
+        return f"{study_prefix}_{tag}_rs{args.random_state}"
 
     # ==================================================================
     # LEVEL 1 – sepsis
@@ -1292,6 +1332,9 @@ def run_training(args: argparse.Namespace) -> None:
         random_state=args.random_state,
         sample_weight=sw_l1,
         model_type=args.model_type,
+        study_name=_study_name("l1"),
+        optuna_storage=optuna_storage,
+        optuna_load_if_exists=args.optuna_load_if_exists,
     )
     print(f"  Best threshold: {l1_threshold:.3f}")
 
@@ -1416,6 +1459,9 @@ def run_training(args: argparse.Namespace) -> None:
                 random_state=args.random_state,
                 sample_weight=sw_l2,
                 model_type=args.model_type,
+                study_name=_study_name("l2_direct_bin"),
+                optuna_storage=optuna_storage,
+                optuna_load_if_exists=args.optuna_load_if_exists,
             )
             l2_base = build_binary_model(args.model_type, l2_params.copy())
         else:
@@ -1427,6 +1473,9 @@ def run_training(args: argparse.Namespace) -> None:
                 sample_weight=sw_l2,
                 model_type=args.model_type,
                 num_classes=len(le_l2.classes_),
+                study_name=_study_name("l2_direct_multi"),
+                optuna_storage=optuna_storage,
+                optuna_load_if_exists=args.optuna_load_if_exists,
             )
             l2_threshold = None
             l2_base = build_multiclass_model(args.model_type, l2_params.copy(), len(le_l2.classes_))
@@ -1547,6 +1596,9 @@ def run_training(args: argparse.Namespace) -> None:
             random_state=args.random_state,
             sample_weight=sw_l2_gate,
             model_type=args.model_type,
+            study_name=_study_name("l2_gate"),
+            optuna_storage=optuna_storage,
+            optuna_load_if_exists=args.optuna_load_if_exists,
         )
         l2_gate_base = build_binary_model(args.model_type, l2_gate_params.copy())
         l2_gate_model = _fit_calibrated_or_base(
@@ -1639,6 +1691,9 @@ def run_training(args: argparse.Namespace) -> None:
                 random_state=args.random_state,
                 sample_weight=sw_l2,
                 model_type=args.model_type,
+                study_name=_study_name("l2_sub_bin"),
+                optuna_storage=optuna_storage,
+                optuna_load_if_exists=args.optuna_load_if_exists,
             )
             l2_base = build_binary_model(args.model_type, l2_params.copy())
         else:
@@ -1650,6 +1705,9 @@ def run_training(args: argparse.Namespace) -> None:
                 sample_weight=sw_l2,
                 model_type=args.model_type,
                 num_classes=len(le_l2.classes_),
+                study_name=_study_name("l2_sub_multi"),
+                optuna_storage=optuna_storage,
+                optuna_load_if_exists=args.optuna_load_if_exists,
             )
             l2_threshold = None
             l2_base = build_multiclass_model(args.model_type, l2_params.copy(), len(le_l2.classes_))
@@ -1832,6 +1890,9 @@ def run_training(args: argparse.Namespace) -> None:
             random_state=args.random_state,
             sample_weight=sw_l3_gate,
             model_type=args.model_type,
+            study_name=_study_name("l3_gate_bmr"),
+            optuna_storage=optuna_storage,
+            optuna_load_if_exists=args.optuna_load_if_exists,
         )
         l3_gate_base = build_binary_model(args.model_type, l3_gate_params.copy())
         l3_gate_model = _fit_calibrated_or_base(
@@ -1903,6 +1964,9 @@ def run_training(args: argparse.Namespace) -> None:
             random_state=args.random_state,
             sample_weight=sw_l3,
             model_type=args.model_type,
+            study_name=_study_name("l3_stage2_bin_from_multi"),
+            optuna_storage=optuna_storage,
+            optuna_load_if_exists=args.optuna_load_if_exists,
         )
         l3_base = build_binary_model(args.model_type, l3_params.copy())
         l3_model = _fit_calibrated_or_base(l3_base, X3_train_scaled, y3_train_stage2, max_cv=5, method="isotonic")
@@ -2012,6 +2076,9 @@ def run_training(args: argparse.Namespace) -> None:
             random_state=args.random_state,
             sample_weight=sw_l3_gate,
             model_type=args.model_type,
+            study_name=_study_name("l3_gate_cef"),
+            optuna_storage=optuna_storage,
+            optuna_load_if_exists=args.optuna_load_if_exists,
         )
         l3_gate_base = build_binary_model(args.model_type, l3_gate_params.copy())
         l3_gate_model = _fit_calibrated_or_base(
@@ -2087,6 +2154,9 @@ def run_training(args: argparse.Namespace) -> None:
                 random_state=args.random_state,
                 sample_weight=sw_l3,
                 model_type=args.model_type,
+                study_name=_study_name("l3_stage2_bin"),
+                optuna_storage=optuna_storage,
+                optuna_load_if_exists=args.optuna_load_if_exists,
             )
             l3_base = build_binary_model(args.model_type, l3_params.copy())
         else:
@@ -2098,6 +2168,9 @@ def run_training(args: argparse.Namespace) -> None:
                 sample_weight=sw_l3,
                 model_type=args.model_type,
                 num_classes=len(le_cef.classes_),
+                study_name=_study_name("l3_stage2_multi"),
+                optuna_storage=optuna_storage,
+                optuna_load_if_exists=args.optuna_load_if_exists,
             )
             l3_threshold = None
             l3_base = build_multiclass_model(args.model_type, l3_params.copy(), len(le_cef.classes_))
@@ -2313,6 +2386,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Hold-out fraction (default: 0.35).",
     )
     parser.add_argument("--random-state", type=int, default=99)
+    parser.add_argument(
+        "--optuna-storage",
+        type=str,
+        default="",
+        help=(
+            "Optuna storage URL (e.g. sqlite:////mnt/.../optuna_studies/three_level.db "
+            "or postgresql://...). If empty, studies are in-memory only."
+        ),
+    )
+    parser.add_argument(
+        "--optuna-study-prefix",
+        type=str,
+        default="three_level",
+        help="Prefix used to build per-stage Optuna study names.",
+    )
+    parser.add_argument(
+        "--optuna-load-if-exists",
+        action="store_true",
+        help="Reuse existing Optuna studies with the same study name.",
+    )
     parser.add_argument(
         "--na-perc-limit", "-na", type=float, default=0.20,
         help="Drop columns with more than this fraction of missing values.",
