@@ -8,13 +8,15 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from ..types import ModelSpec
 
 
-class NativeCatBoostClassifier(BaseEstimator, ClassifierMixin):
+class NativeCatBoostClassifier(ClassifierMixin, BaseEstimator):
     """CatBoost sklearn wrapper that detects categorical pandas columns.
 
     The benchmark preprocessor keeps native categorical features in a DataFrame
     for CatBoost. This wrapper passes those column names through ``cat_features``
     during fit so CatBoost does not try to parse them as numeric values.
     """
+
+    _estimator_type = "classifier"
 
     def __init__(
         self,
@@ -49,11 +51,13 @@ class NativeCatBoostClassifier(BaseEstimator, ClassifierMixin):
             params["loss_function"] = "MultiClass"
         return CatBoostClassifier(**params)
 
-    def fit(self, X, y, **fit_params):
+    def fit(self, X, y, sample_weight=None, **fit_params):
         self.model_ = self._build_model()
         cat_features = _categorical_columns(X)
         if cat_features:
             fit_params.setdefault("cat_features", cat_features)
+        if sample_weight is not None:
+            fit_params["sample_weight"] = sample_weight
         self.model_.fit(X, y, **fit_params)
         self.classes_ = self.model_.classes_
         return self

@@ -733,7 +733,7 @@ feature_selection:
 # trial tables, and Optuna HTML plots are written inside each job folder.
 tuning:
   # false -> use model defaults/configured params; true -> run Optuna.
-  enabled: true
+  enabled: false
   # Desired completed trials per job. If reuse_existing is true and a study
   # already has completed trials, only missing trials are run.
   n_trials: 25
