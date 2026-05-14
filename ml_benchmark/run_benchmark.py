@@ -67,6 +67,8 @@ def main() -> None:
     config = load_config(args.config)
     jobs = build_job_matrix(config)
     selected = select_jobs(args, jobs)
+    if not selected:
+        raise ValueError("No benchmark jobs matched the requested filters.")
 
     if args.print_job_matrix:
         print(format_job_matrix(selected))
@@ -75,10 +77,10 @@ def main() -> None:
         print(format_slurm_array(selected))
         return
     if args.print_slurm_script:
-        print(render_slurm_script(config, len(jobs)))
+        print(render_slurm_script(config, selected))
         return
     if args.write_slurm_script:
-        path = write_slurm_script(config, len(jobs), args.write_slurm_script)
+        path = write_slurm_script(config, selected, args.write_slurm_script)
         print(path)
         return
     if args.build_report:
@@ -86,8 +88,6 @@ def main() -> None:
         print(json.dumps(report, indent=2))
         return
 
-    if not selected:
-        raise ValueError("No benchmark jobs matched the requested filters.")
     results = [run_job(config, job, dry_run=args.dry_run) for job in selected]
     print(json.dumps(results, indent=2))
 
