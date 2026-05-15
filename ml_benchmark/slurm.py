@@ -12,7 +12,9 @@ from .types import BenchmarkJob
 
 def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> str:
     slurm = config.raw.get("slurm", {})
-    script_path = slurm.get("script_path", "ml_benchmark/run_benchmark.py")
+    script_path = _resolve_script_path(
+        slurm.get("script_path", "ml_benchmark/run_benchmark.py")
+    )
     config_path = str(config.path)
     array_line = format_slurm_array(jobs)
     max_parallel_tasks = slurm.get("max_parallel_tasks")
@@ -52,6 +54,18 @@ def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> st
         """
     )
     return "\n".join(directives) + "\n" + body
+
+
+def _resolve_script_path(script_path: str) -> str:
+    path = Path(script_path)
+    if path.is_absolute():
+        return str(path)
+
+    repo_relative = Path(__file__).resolve().parents[1] / path
+    if repo_relative.exists():
+        return str(repo_relative)
+
+    return str(path.resolve())
 
 
 def write_slurm_script(
