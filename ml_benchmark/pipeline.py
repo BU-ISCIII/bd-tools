@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import List, Sequence
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -314,14 +316,22 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             self.cache_status_ = "miss" if cache_path is not None else "disabled"
             return None
         self.cache_path_ = str(cache_path)
-        return json.loads(cache_path.read_text(encoding="utf-8"))
+        try:
+            return json.loads(cache_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            self.cache_status_ = "invalid_json"
+            return None
 
     def _write_cache(self, payload: dict[str, object]) -> None:
         if self.cache_path_ is None:
             return
         cache_path = Path(self.cache_path_)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temp_path = cache_path.with_name(
+            f".{cache_path.name}.{os.getpid()}.{uuid4().hex}.tmp"
+        )
+        temp_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        temp_path.replace(cache_path)
 
     def _cache_path(self, X: pd.DataFrame, y) -> Path | None:
         if not self.cache_dir or not self.cache_key:
