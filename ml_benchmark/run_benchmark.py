@@ -77,10 +77,15 @@ def main() -> None:
         print(format_slurm_array(selected))
         return
     if args.print_slurm_script:
-        print(render_slurm_script(config, selected))
+        print(render_slurm_script(config, selected, invoked_script_path=sys.argv[0]))
         return
     if args.write_slurm_script:
-        path = write_slurm_script(config, selected, args.write_slurm_script)
+        path = write_slurm_script(
+            config,
+            selected,
+            args.write_slurm_script,
+            invoked_script_path=sys.argv[0],
+        )
         print(path)
         return
     if args.build_report:

@@ -10,10 +10,16 @@ from .types import BenchmarkConfig
 from .types import BenchmarkJob
 
 
-def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> str:
+def render_slurm_script(
+    config: BenchmarkConfig,
+    jobs: list[BenchmarkJob],
+    *,
+    invoked_script_path: Path | str | None = None,
+) -> str:
     slurm = config.raw.get("slurm", {})
     script_path = _resolve_script_path(
-        slurm.get("script_path", "ml_benchmark/run_benchmark.py")
+        slurm.get("script_path", "ml_benchmark/run_benchmark.py"),
+        invoked_script_path=invoked_script_path,
     )
     config_path = str(config.path)
     array_line = format_slurm_array(jobs)
@@ -56,10 +62,19 @@ def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> st
     return "\n".join(directives) + "\n" + body
 
 
-def _resolve_script_path(script_path: str) -> str:
+def _resolve_script_path(
+    script_path: str,
+    *,
+    invoked_script_path: Path | str | None = None,
+) -> str:
     path = Path(script_path)
     if path.is_absolute():
         return str(path)
+
+    if invoked_script_path is not None:
+        invoked = Path(invoked_script_path)
+        if invoked.name == Path(script_path).name:
+            return str(invoked.resolve())
 
     repo_relative = Path(__file__).resolve().parents[1] / path
     if repo_relative.exists():
@@ -72,7 +87,16 @@ def write_slurm_script(
     config: BenchmarkConfig,
     jobs: list[BenchmarkJob],
     output_path: Path,
+    *,
+    invoked_script_path: Path | str | None = None,
 ) -> Path:
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(render_slurm_script(config, jobs), encoding="utf-8")
+    output_path.write_text(
+        render_slurm_script(
+            config,
+            jobs,
+            invoked_script_path=invoked_script_path,
+        ),
+        encoding="utf-8",
+    )
     return output_path
