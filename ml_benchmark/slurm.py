@@ -24,20 +24,19 @@ def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> st
         optional_directives.append(f'#SBATCH --partition={slurm["partition"]}')
     if slurm.get("nodelist"):
         optional_directives.append(f'#SBATCH --nodelist={slurm["nodelist"]}')
-    optional_directives_text = "\n".join(optional_directives)
-    if optional_directives_text:
-        optional_directives_text = f"{optional_directives_text}\n"
-    return dedent(
+    directives = [
+        "#!/bin/bash",
+        f'#SBATCH --job-name={slurm.get("job_name", "ml_benchmark")}',
+        array_line,
+        "#SBATCH --ntasks=1",
+        f"#SBATCH --cpus-per-task={cpus_per_task}",
+        *optional_directives,
+        f'#SBATCH --mem={slurm.get("mem", "8G")}',
+        f'#SBATCH --time={slurm.get("time", "02:00:00")}',
+        f'#SBATCH --output={slurm.get("output", "logs/benchmark_%A_%a.out")}',
+    ]
+    body = dedent(
         f"""\
-        #!/bin/bash
-        #SBATCH --job-name={slurm.get("job_name", "ml_benchmark")}
-        {array_line}
-        #SBATCH --ntasks=1
-        #SBATCH --cpus-per-task={cpus_per_task}
-        {optional_directives_text}\
-        #SBATCH --mem={slurm.get("mem", "8G")}
-        #SBATCH --time={slurm.get("time", "02:00:00")}
-        #SBATCH --output={slurm.get("output", "logs/benchmark_%A_%a.out")}
 
         set -euo pipefail
         export OMP_NUM_THREADS="${{SLURM_CPUS_PER_TASK:-{cpus_per_task}}}"
@@ -52,6 +51,7 @@ def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> st
           --array-index "$SLURM_ARRAY_TASK_ID"
         """
     )
+    return "\n".join(directives) + "\n" + body
 
 
 def write_slurm_script(
