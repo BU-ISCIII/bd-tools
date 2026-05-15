@@ -789,8 +789,14 @@ slurm:
   job_name: ml_benchmark
   # Passed to Slurm and read back by the runner to set n_jobs.
   cpus_per_task: 8
+  # Caps simultaneous array tasks. With 8 CPUs per task, 16 concurrent tasks
+  # request at most 128 CPUs, matching four 32-CPU nodes.
+  max_parallel_tasks: 16
+  partition: long_idx
+  # Optional comma-separated node list, for example: node001,node002,node003,node004.
+  # Leave empty to let Slurm choose nodes from the partition.
+  nodelist:
   mem: 32G
   time: "08:00:00"
   # %A is Slurm job ID, %a is array task ID.
   output: logs/benchmark_%A_%a.out
-  error: logs/benchmark_%A_%a.err

@@ -15,18 +15,37 @@ def render_slurm_script(config: BenchmarkConfig, jobs: list[BenchmarkJob]) -> st
     script_path = slurm.get("script_path", "ml_benchmark/run_benchmark.py")
     config_path = str(config.path)
     array_line = format_slurm_array(jobs)
+    max_parallel_tasks = slurm.get("max_parallel_tasks")
+    if max_parallel_tasks:
+        array_line = f"{array_line}%{int(max_parallel_tasks)}"
+    cpus_per_task = int(slurm.get("cpus_per_task", 1))
+    optional_directives = []
+    if slurm.get("partition"):
+        optional_directives.append(f'#SBATCH --partition={slurm["partition"]}')
+    if slurm.get("nodelist"):
+        optional_directives.append(f'#SBATCH --nodelist={slurm["nodelist"]}')
+    optional_directives_text = "\n".join(optional_directives)
+    if optional_directives_text:
+        optional_directives_text = f"{optional_directives_text}\n"
     return dedent(
         f"""\
         #!/bin/bash
         #SBATCH --job-name={slurm.get("job_name", "ml_benchmark")}
         {array_line}
-        #SBATCH --cpus-per-task={slurm.get("cpus_per_task", 1)}
+        #SBATCH --ntasks=1
+        #SBATCH --cpus-per-task={cpus_per_task}
+        {optional_directives_text}\
         #SBATCH --mem={slurm.get("mem", "8G")}
         #SBATCH --time={slurm.get("time", "02:00:00")}
         #SBATCH --output={slurm.get("output", "logs/benchmark_%A_%a.out")}
-        #SBATCH --error={slurm.get("error", "logs/benchmark_%A_%a.err")}
 
         set -euo pipefail
+        export OMP_NUM_THREADS="${{SLURM_CPUS_PER_TASK:-{cpus_per_task}}}"
+        export OPENBLAS_NUM_THREADS="${{SLURM_CPUS_PER_TASK:-{cpus_per_task}}}"
+        export MKL_NUM_THREADS="${{SLURM_CPUS_PER_TASK:-{cpus_per_task}}}"
+        export NUMEXPR_NUM_THREADS="${{SLURM_CPUS_PER_TASK:-{cpus_per_task}}}"
+        export OMP_DYNAMIC=FALSE
+        export MKL_DYNAMIC=FALSE
 
         python {script_path} \\
           --config {config_path} \\
