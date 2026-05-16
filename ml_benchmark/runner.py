@@ -530,6 +530,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "correlation_matrix.csv",
                 "correlation_pairs.csv",
                 "shap_rfecv_history.csv",
+                "shap_rfecv_selected_features.csv",
                 *tuning_result["files"],
                 *([str(cache_index_path)] if cache_index_path is not None else []),
             ],
@@ -1037,6 +1038,10 @@ def _build_and_write_audit(
     final_features_path = output_dir / "final_features.csv"
     pd.DataFrame({"feature": final_features}).to_csv(final_features_path, index=False)
 
+    shap_selected_features = _shap_rfecv_selected_features(feature_selection)
+    shap_selected_features_path = output_dir / "shap_rfecv_selected_features.csv"
+    shap_selected_features.to_csv(shap_selected_features_path, index=False)
+
     imputation_report = _imputation_report(preprocess)
     imputation_report_path = output_dir / "imputation_report.csv"
     imputation_report.to_csv(imputation_report_path, index=False)
@@ -1207,6 +1212,10 @@ def _build_and_write_audit(
                 ),
                 "history_file": "shap_rfecv_history.csv",
                 "history_rounds": int(len(shap_history)),
+                "selected_features_file": "shap_rfecv_selected_features.csv",
+                "selected_feature_count": int(
+                    shap_selected_features["selected"].sum()
+                ),
                 "kept_count": len(final_features),
                 "dropped_count": len(
                     getattr(feature_selection, "dropped_features_", [])
@@ -1223,6 +1232,7 @@ def _build_and_write_audit(
             "correlation_matrix": "correlation_matrix.csv",
             "correlation_pairs": "correlation_pairs.csv",
             "shap_rfecv_history": "shap_rfecv_history.csv",
+            "shap_rfecv_selected_features": "shap_rfecv_selected_features.csv",
         },
     }
     return {
@@ -1369,6 +1379,39 @@ def _categorical_encoding_summary(preprocess) -> Dict[str, Any]:
         "created_columns_count": len(created),
         "created_columns": created,
     }
+
+
+def _shap_rfecv_selected_features(feature_selection) -> pd.DataFrame:
+    ranking_features = list(getattr(feature_selection, "ranking_features_", []))
+    selected_feature_list = list(getattr(feature_selection, "selected_features_", []))
+    selected_features = set(selected_feature_list)
+    dropped_features = set(getattr(feature_selection, "dropped_features_", []))
+    rows = []
+    for rank, feature in enumerate(ranking_features, start=1):
+        rows.append(
+            {
+                "rank": rank,
+                "feature": feature,
+                "selected": feature in selected_features,
+                "dropped": feature in dropped_features,
+            }
+        )
+
+    if not rows:
+        for rank, feature in enumerate(selected_feature_list, start=1):
+            rows.append(
+                {
+                    "rank": rank,
+                    "feature": feature,
+                    "selected": True,
+                    "dropped": False,
+                }
+            )
+
+    return pd.DataFrame(
+        rows,
+        columns=["rank", "feature", "selected", "dropped"],
+    )
 
 
 def _shap_rfecv_history(feature_selection) -> pd.DataFrame:

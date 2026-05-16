@@ -117,8 +117,9 @@ python ml_benchmark/run_benchmark.py \
 Completed jobs write `summary.json`, `cv_results.csv`,
 `validation_predictions.csv`, `test_predictions.csv`,
 `diagnostics_manifest.json`, `final_features.csv`, `imputation_report.csv`,
-`correlation_matrix.csv`, `correlation_pairs.csv`, and
-`shap_rfecv_history.csv` under `outputs/ml_benchmark/.../jobs/<job_slug>/`.
+`correlation_matrix.csv`, `correlation_pairs.csv`,
+`shap_rfecv_history.csv`, and `shap_rfecv_selected_features.csv` under
+`outputs/ml_benchmark/.../jobs/<job_slug>/`.
 
 `summary.json` includes a `benchmark_audit` section with row counts, feature
 counts, target-like feature removal, feature-view filtering, imputation
@@ -380,8 +381,10 @@ feature_sets:
     max_features: 20
 ```
 
-The selected final feature list is written to `final_features.csv`; the
-recursive elimination trace is written to `shap_rfecv_history.csv`.
+The final pipeline feature list is written to `final_features.csv`. The
+ranked SHAP-RFECV selected-feature list is written to
+`shap_rfecv_selected_features.csv`; the recursive elimination trace is written
+to `shap_rfecv_history.csv` when available.
 
 ## Hyperparameter Tuning
 
