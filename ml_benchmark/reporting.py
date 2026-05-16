@@ -589,25 +589,46 @@ def _confusion_matrix_metric_text(
     summary: dict[str, Any],
     predictions: pd.DataFrame,
 ) -> str:
-    task_type = summary.get("target", {}).get("task_type")
     y_true = predictions["y_true"].astype(str)
     y_pred = predictions["y_pred"].astype(str)
-    average = "binary" if task_type == "binary" else "macro"
-    kwargs: dict[str, Any] = {"average": average, "zero_division": 0}
-    if task_type == "binary":
-        kwargs["pos_label"] = str(_positive_label(summary, y_true))
-
-    metrics = {
-        "Accuracy": _safe_auc(accuracy_score, y_true, y_pred),
-        "F1": _safe_auc(f1_score, y_true, y_pred, **kwargs),
-        "Recall": _safe_auc(recall_score, y_true, y_pred, **kwargs),
-        "Precision": _safe_auc(precision_score, y_true, y_pred, **kwargs),
-    }
-    metrics.update(_prediction_auc_summary(summary, predictions))
-    return "\n".join(
-        f"{name}: {_format_metric_value(value)}"
-        for name, value in metrics.items()
+    labels = sorted(pd.concat([y_true, y_pred]).dropna().unique().tolist(), key=str)
+    report = classification_report(
+        y_true,
+        y_pred,
+        labels=labels,
+        output_dict=True,
+        zero_division=0,
     )
+
+    accuracy = _safe_auc(accuracy_score, y_true, y_pred)
+    f1_macro = _safe_auc(f1_score, y_true, y_pred, average="macro")
+    f1_weighted = _safe_auc(f1_score, y_true, y_pred, average="weighted")
+    lines = [
+        f"Accuracy: {_format_metric_value(accuracy)}",
+        f"F1 macro: {_format_metric_value(f1_macro)}",
+        f"F1 weighted: {_format_metric_value(f1_weighted)}",
+        "Per-class:",
+    ]
+    for label in labels:
+        class_metrics = report.get(str(label), {})
+        if not isinstance(class_metrics, dict):
+            continue
+        lines.append(
+            "{label}: P {precision} R {recall} F1 {f1} n {support}".format(
+                label=label,
+                precision=_format_metric_value(class_metrics.get("precision")),
+                recall=_format_metric_value(class_metrics.get("recall")),
+                f1=_format_metric_value(class_metrics.get("f1-score")),
+                support=_format_support_value(class_metrics.get("support")),
+            )
+        )
+
+    auc_metrics = _prediction_auc_summary(summary, predictions)
+    lines.extend(
+        f"{name}: {_format_metric_value(value)}"
+        for name, value in auc_metrics.items()
+    )
+    return "\n".join(lines)
 
 
 def _prediction_auc_summary(
@@ -669,6 +690,12 @@ def _format_metric_value(value: float | None) -> str:
     if value is None or pd.isna(value):
         return "NA"
     return f"{float(value):.3f}"
+
+
+def _format_support_value(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "NA"
+    return str(int(value))
 
 
 def _calibration_report_rows(

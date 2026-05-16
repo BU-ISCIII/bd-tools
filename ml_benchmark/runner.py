@@ -15,6 +15,7 @@ from sklearn.metrics import (
     accuracy_score,
     average_precision_score,
     balanced_accuracy_score,
+    classification_report,
     f1_score,
     log_loss,
     precision_score,
@@ -1429,6 +1430,13 @@ def _aggregate_metrics(
     task_type: str,
     positive_label: Any | None,
 ) -> Dict[str, Any]:
+    class_report = classification_report(
+        y_true,
+        y_pred,
+        labels=classes,
+        output_dict=True,
+        zero_division=0,
+    )
     metrics: Dict[str, Any] = {
         "accuracy": _safe_metric(accuracy_score, y_true, y_pred),
         "balanced_accuracy": _safe_metric(balanced_accuracy_score, y_true, y_pred),
@@ -1449,6 +1457,15 @@ def _aggregate_metrics(
             zero_division=0,
         ),
     }
+    for class_value in classes:
+        class_metrics = class_report.get(str(class_value))
+        if not isinstance(class_metrics, dict):
+            continue
+        class_key = _metric_label_key(class_value)
+        metrics[f"precision_class_{class_key}"] = class_metrics.get("precision")
+        metrics[f"recall_class_{class_key}"] = class_metrics.get("recall")
+        metrics[f"f1_class_{class_key}"] = class_metrics.get("f1-score")
+        metrics[f"support_class_{class_key}"] = class_metrics.get("support")
     if proba is None:
         return metrics
 
@@ -1474,6 +1491,14 @@ def _aggregate_metrics(
         )
         metrics["log_loss"] = _safe_metric(log_loss, y_true, proba, labels=classes)
     return metrics
+
+
+def _metric_label_key(value: Any) -> str:
+    key = "".join(
+        char if char.isalnum() else "_"
+        for char in str(value).strip().lower()
+    ).strip("_")
+    return key or "empty"
 
 
 def _safe_metric(func, *args, **kwargs):
