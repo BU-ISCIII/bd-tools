@@ -1,0 +1,106 @@
+"""Model builders and fitting helpers."""
+
+from .base import *
+from .config import algorithm_params
+
+_ALGO_PARAMS = algorithm_params()
+
+
+def _with_fixed_params(model_type: str, task: str, params: Dict) -> Dict:
+    fixed = _ALGO_PARAMS.get(model_type, {}).get(task, {})
+    merged = dict(fixed)
+    merged.update(params)
+    return merged
+
+def build_binary_model(model_type: str, params: Dict) -> object:
+    cls_map = {
+        "xgb": XGBClassifier,
+        "lgbm": LGBMClassifier,
+        "rf": RandomForestClassifier,
+        "catb": CatBoostClassifier,
+    }
+    if model_type not in cls_map:
+        raise ValueError(f"Unknown model_type '{model_type}'.")
+    return cls_map[model_type](**_with_fixed_params(model_type, "binary", params))
+
+
+def build_multiclass_model(model_type: str, params: Dict, num_classes: int) -> object:
+    params = _with_fixed_params(model_type, "multiclass", params)
+    if model_type == "xgb":
+        params.setdefault("objective", "multi:softprob")
+        params["num_class"] = num_classes
+        return XGBClassifier(**params)
+    elif model_type == "lgbm":
+        params.setdefault("objective", "multiclass")
+        params["num_class"] = num_classes
+        return LGBMClassifier(**params)
+    elif model_type == "rf":
+        params.setdefault("class_weight", "balanced")
+        return RandomForestClassifier(**params)
+    elif model_type == "catb":
+        params.setdefault("loss_function", "MultiClass")
+        params.setdefault("auto_class_weights", "Balanced")
+        params.setdefault("verbose", False)
+        params.setdefault("custom_metric", "PRAUC")
+        params.setdefault("thread_count", N_CPUS)
+        params.setdefault("random_state", 42)
+        return CatBoostClassifier(**params)
+    else:
+        raise ValueError(f"Unsupported model type for multiclass: '{model_type}'.")
+
+
+def _fit_model(model, model_type: str, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None) -> None:
+    """Fit a model; CatBoost uses early-stopping with the validation fold."""
+    sw = sample_weight
+    if model_type == "catb" and X_va is not None:
+        n_iter = getattr(model, "iterations", 500)
+        model.fit(
+            X_tr, y_tr,
+            eval_set=(X_va, y_va),
+            early_stopping_rounds=max(20, int(0.05 * n_iter)),
+            verbose=False,
+            sample_weight=sw,
+        )
+    else:
+        if sw is not None:
+            model.fit(X_tr, y_tr, sample_weight=sw)
+        else:
+            model.fit(X_tr, y_tr)
+
+
+def _fit_calibrated_or_base(
+    base_model,
+    X_tr: pd.DataFrame,
+    y_tr: pd.Series,
+    *,
+    max_cv: int = 5,
+    method: str = "isotonic",
+):
+    """Fit calibrated model when feasible; otherwise fit and return base model."""
+    class_counts = pd.Series(y_tr).value_counts()
+    if class_counts.empty or int(class_counts.min()) < 2:
+        print(
+            "  Warning: skipping calibration because at least one class has <2 samples "
+            f"(counts={class_counts.to_dict()})."
+        )
+        base_model.fit(X_tr, y_tr)
+        return base_model
+
+    cal_cv = min(max_cv, int(class_counts.min()))
+    model = CalibratedClassifierCV(base_model, cv=cal_cv, method=method)
+    model.fit(X_tr, y_tr)
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Optuna optimisation
+# ---------------------------------------------------------------------------
+
+
+def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
+    """Find the probability threshold that maximises Youden's J (sensitivity + specificity - 1)."""
+    fpr, tpr, thresholds = roc_curve(y_true, y_proba)
+    j_scores = tpr - fpr
+    best_idx = int(np.argmax(j_scores))
+    return float(np.clip(thresholds[best_idx], 0.05, 0.95))
+

@@ -1,0 +1,37 @@
+{
+  "paths": {
+    "default_database_rel": "mepram_data/df_merged_full_multilabel_grouped.csv",
+    "default_output_rel": "mepram_data/outputs/independent_three_level"
+  },
+  "targets": {
+    "sepsis_target": "sepsis",
+    "hemo_target": "resultado_hemo_grouped",
+    "hemo_negative_label": "NEGATIVE",
+    "hemo_coco_label": "Coco gram+",
+    "hemo_bacilo_label": "Bacilo gram-",
+    "bmr_target": "bmr_etiologia",
+    "bmr_negative_label": "NEGATIVE",
+    "cef_target": "resistente_cefalosporina",
+    "cef_multi_positive_label": "cefalosporina",
+    "weight_column": "sample_weight"
+  },
+  "training": {
+    "model_type": "lgbm",
+    "binary_trials": 500,
+    "cv_splits": 5,
+    "test_size": 0.35,
+    "random_state": 99,
+    "na_perc_limit": 0.2,
+    "max_features": null,
+    "l3_min_positive": 30,
+    "max_corr": 0.9,
+    "impute_missing": true,
+    "optuna_storage": "",
+    "optuna_study_prefix": "three_level",
+    "optuna_load_if_exists": false,
+    "skip_rfecv": false,
+    "skip_l2_gate": false,
+    "skip_l3_hemo_filter": false
+  },
+  "categorical_for_dummies": ["foco", "ultimo_antib"]
+}

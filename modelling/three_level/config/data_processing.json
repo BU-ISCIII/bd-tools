@@ -1,0 +1,47 @@
+{
+  "focus_map": {
+    "1": "pulmonar",
+    "2": "intraabdominal",
+    "3": "biliar",
+    "4": "urinario",
+    "5": "cardiovascular",
+    "6": "piel",
+    "7": "sistema nervioso central",
+    "8": "cateter venoso",
+    "9": "vías altas respiratorias",
+    "10": "osteoarticular",
+    "11": "genital",
+    "12": "desconocido"
+  },
+  "focus_to_exclude": [
+    "piel",
+    "osteoarticular",
+    "biliar",
+    "genital",
+    "sistema nervioso central",
+    "cateter venoso",
+    "vías altas respiratorias",
+    "cardiovascular"
+  ],
+  "target_remove": [
+    "sepsis",
+    "resultado_hemo",
+    "resultado_hemo_grouped",
+    "resultado_hemo_mo",
+    "all_cult_org",
+    "infected_yes_no",
+    "bmr_etiologia",
+    "fenotipo_resistencia",
+    "fenotipo_resistencia_individual",
+    "fenotipo_resistencia_grouped",
+    "resistente_cefalosporina",
+    "resistente_cefalosporina_multi"
+  ],
+  "delete_columns": [],
+  "missing_indicator_threshold": 0.1,
+  "knn_imputer": {
+    "n_neighbors": 10,
+    "weights": "distance"
+  },
+  "drop_helper_columns": ["resultado_hemo_multilabel", "dominant_all_cult_org"]
+}
