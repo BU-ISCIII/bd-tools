@@ -197,9 +197,6 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             return self
 
         frame = _as_frame(X, self.feature_names_in_)
-        if not _all_numeric(frame):
-            self.status_ = "skipped_non_numeric_features"
-            return self
 
         selector_frame, selector_y = self._selector_training_data(frame, y)
         self.selector_rows_ = len(selector_frame)
@@ -905,10 +902,6 @@ def _numeric_scaler(scale: str):
     raise ValueError(
         f"Unsupported scale='{scale}'. Use one of: none, standard, minmax, robust."
     )
-
-
-def _all_numeric(frame: pd.DataFrame) -> bool:
-    return all(pd.api.types.is_numeric_dtype(dtype) for dtype in frame.dtypes)
 
 
 def _selector_splitter(y: pd.Series, cv_splits: int, random_state: int):

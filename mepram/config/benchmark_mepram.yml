@@ -695,10 +695,9 @@ feature_sets:
     strategy: shap_rfecv
     max_features:
 
-  # Name kept for historical continuity, but this currently caps to top 30.
   - name: shap_rfecv_top_20
     strategy: shap_rfecv
-    max_features: 30
+    max_features: 20
 
 # SHAP-RFECV global settings.
 #
