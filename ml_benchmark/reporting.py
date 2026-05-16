@@ -341,7 +341,7 @@ def _write_validation_test_plots(
             ascending=False,
             na_position="last",
         )
-        panel_height = max(3.6, len(ordered) * 0.48 + 1.8)
+        panel_height = max(4.4, len(ordered) * 0.72 + 2.2)
         fig, axes = plt.subplots(
             len(metric_panels),
             1,
@@ -349,7 +349,7 @@ def _write_validation_test_plots(
             squeeze=False,
         )
         y = np.arange(len(ordered))
-        height = 0.36
+        height = 0.28
         labels = [_compact_run_label(row) for _, row in ordered.iterrows()]
         for ax, (metric_name, metric_label) in zip(axes[:, 0], metric_panels):
             validation_col = f"validation_{metric_name}"
@@ -375,7 +375,8 @@ def _write_validation_test_plots(
             ax.set_xlabel(metric_label)
             ax.set_title(f"Validation/Test {metric_label}: {target}")
             ax.set_yticks(y)
-            ax.set_yticklabels(labels, fontsize=8)
+            ax.set_yticklabels(labels, fontsize=8, linespacing=1.25)
+            ax.tick_params(axis="y", pad=8)
             ax.set_xlim(
                 left=0,
                 right=_metric_axis_top(validation_values, test_values),
