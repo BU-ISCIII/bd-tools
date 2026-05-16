@@ -269,6 +269,8 @@ def _write_validation_test_plots(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    validation_color = "#0072B2"
+    test_color = "#E69F00"
     files = []
     for target, target_df in comparison.groupby("target", dropna=False):
         target_dir = _target_report_dir(reports_dir, str(target))
@@ -280,8 +282,15 @@ def _write_validation_test_plots(
         if plot_df.empty:
             continue
         safe_target = _safe_name(str(target))
-        fig, ax = plt.subplots(figsize=(7, 6))
-        ax.scatter(plot_df["validation_main_metric"], plot_df["test_main_metric"])
+        fig, ax = plt.subplots(figsize=(8.5, 6.5))
+        ax.scatter(
+            plot_df["validation_main_metric"],
+            plot_df["test_main_metric"],
+            color=validation_color,
+            edgecolor="white",
+            linewidth=0.8,
+            s=46,
+        )
         for _, row in plot_df.iterrows():
             ax.annotate(
                 _compact_run_label(row),
@@ -297,13 +306,14 @@ def _write_validation_test_plots(
             plot_df["validation_main_metric"].max(),
             plot_df["test_main_metric"].max(),
         )
-        ax.plot([min_value, max_value], [min_value, max_value], "--", color="gray")
+        ax.plot([min_value, max_value], [min_value, max_value], "--", color="#6F6F6F")
+        ax.margins(x=0.12, y=0.12)
         ax.set_xlabel(f"Validation {metric}")
         ax.set_ylabel(f"Test {metric}")
         ax.set_title(f"Validation vs Test: {target}")
         fig.tight_layout()
         path = target_dir / f"validation_vs_test__{safe_target}.png"
-        fig.savefig(path, dpi=160)
+        fig.savefig(path, dpi=160, bbox_inches="tight")
         plt.close(fig)
         files.append(str(path))
 
@@ -315,46 +325,51 @@ def _write_validation_test_plots(
             ascending=False,
             na_position="last",
         )
+        panel_height = max(3.6, len(ordered) * 0.48 + 1.8)
         fig, axes = plt.subplots(
             len(metric_panels),
             1,
-            figsize=(max(12, len(ordered) * 0.85), 4.2 * len(metric_panels)),
+            figsize=(14, panel_height * len(metric_panels)),
             squeeze=False,
         )
-        x = np.arange(len(ordered))
-        width = 0.38
+        y = np.arange(len(ordered))
+        height = 0.36
         labels = [_compact_run_label(row) for _, row in ordered.iterrows()]
         for ax, (metric_name, metric_label) in zip(axes[:, 0], metric_panels):
             validation_col = f"validation_{metric_name}"
             test_col = f"test_{metric_name}"
             validation_values = pd.to_numeric(ordered[validation_col], errors="coerce")
             test_values = pd.to_numeric(ordered[test_col], errors="coerce")
-            validation_bars = ax.bar(
-                x - width / 2,
+            validation_bars = ax.barh(
+                y - height / 2,
                 validation_values,
-                width,
+                height,
                 label="validation",
+                color=validation_color,
             )
-            test_bars = ax.bar(
-                x + width / 2,
+            test_bars = ax.barh(
+                y + height / 2,
                 test_values,
-                width,
+                height,
                 label="test",
+                color=test_color,
             )
-            _add_bar_value_labels(ax, validation_bars)
-            _add_bar_value_labels(ax, test_bars)
-            ax.set_ylabel(metric_label)
+            _add_horizontal_bar_value_labels(ax, validation_bars)
+            _add_horizontal_bar_value_labels(ax, test_bars)
+            ax.set_xlabel(metric_label)
             ax.set_title(f"Validation/Test {metric_label}: {target}")
-            ax.set_xticks(x)
-            ax.set_xticklabels(labels, rotation=60, ha="right", fontsize=8)
-            ax.set_ylim(
-                bottom=0,
-                top=_metric_axis_top(validation_values, test_values),
+            ax.set_yticks(y)
+            ax.set_yticklabels(labels, fontsize=8)
+            ax.set_xlim(
+                left=0,
+                right=_metric_axis_top(validation_values, test_values),
             )
-            ax.legend()
-        fig.tight_layout()
+            ax.invert_yaxis()
+            ax.grid(axis="x", alpha=0.25)
+            ax.legend(loc="lower right")
+        fig.subplots_adjust(left=0.32, right=0.96, top=0.96, bottom=0.04, hspace=0.42)
         path = target_dir / f"validation_test_metric_bars__{safe_target}.png"
-        fig.savefig(path, dpi=160)
+        fig.savefig(path, dpi=160, bbox_inches="tight")
         plt.close(fig)
         files.append(str(path))
     return files
@@ -571,6 +586,22 @@ def _add_bar_value_labels(ax, bars) -> None:
             ha="center",
             va="bottom",
             rotation=90,
+            fontsize=7,
+        )
+
+
+def _add_horizontal_bar_value_labels(ax, bars) -> None:
+    for bar in bars:
+        width = bar.get_width()
+        if not np.isfinite(width):
+            continue
+        ax.annotate(
+            f"{width:.3f}",
+            xy=(width, bar.get_y() + bar.get_height() / 2),
+            xytext=(4, 0),
+            textcoords="offset points",
+            ha="left",
+            va="center",
             fontsize=7,
         )
 
