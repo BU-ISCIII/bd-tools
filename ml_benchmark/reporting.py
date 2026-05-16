@@ -30,6 +30,24 @@ from sklearn.metrics import (
 from .types import BenchmarkJob, DiagnosticResult, ResourceLimits
 
 
+REPORT_VALIDATION_COLOR = "#0072B2"
+REPORT_TEST_COLOR = "#E69F00"
+REPORT_REFERENCE_COLOR = "#6F6F6F"
+REPORT_GRID_COLOR = "#D0D7DE"
+REPORT_BOX_EDGE_COLOR = "#8C959F"
+REPORT_CONFUSION_CMAP = "YlGnBu"
+REPORT_LINE_COLORS = [
+    REPORT_VALIDATION_COLOR,
+    REPORT_TEST_COLOR,
+    "#009E73",
+    "#CC79A7",
+    "#56B4E9",
+    "#D55E00",
+    "#F0E442",
+    "#000000",
+]
+
+
 def job_output_dir(base_output_dir: Path, job: BenchmarkJob) -> Path:
     return base_output_dir / "jobs" / job.slug
 
@@ -269,8 +287,6 @@ def _write_validation_test_plots(
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    validation_color = "#0072B2"
-    test_color = "#E69F00"
     files = []
     for target, target_df in comparison.groupby("target", dropna=False):
         target_dir = _target_report_dir(reports_dir, str(target))
@@ -286,7 +302,7 @@ def _write_validation_test_plots(
         ax.scatter(
             plot_df["validation_main_metric"],
             plot_df["test_main_metric"],
-            color=validation_color,
+            color=REPORT_VALIDATION_COLOR,
             edgecolor="white",
             linewidth=0.8,
             s=46,
@@ -306,7 +322,7 @@ def _write_validation_test_plots(
             plot_df["validation_main_metric"].max(),
             plot_df["test_main_metric"].max(),
         )
-        ax.plot([min_value, max_value], [min_value, max_value], "--", color="#6F6F6F")
+        ax.plot([min_value, max_value], [min_value, max_value], "--", color=REPORT_REFERENCE_COLOR)
         ax.margins(x=0.12, y=0.12)
         ax.set_xlabel(f"Validation {metric}")
         ax.set_ylabel(f"Test {metric}")
@@ -345,14 +361,14 @@ def _write_validation_test_plots(
                 validation_values,
                 height,
                 label="validation",
-                color=validation_color,
+                color=REPORT_VALIDATION_COLOR,
             )
             test_bars = ax.barh(
                 y + height / 2,
                 test_values,
                 height,
                 label="test",
-                color=test_color,
+                color=REPORT_TEST_COLOR,
             )
             _add_horizontal_bar_value_labels(ax, validation_bars)
             _add_horizontal_bar_value_labels(ax, test_bars)
@@ -365,7 +381,7 @@ def _write_validation_test_plots(
                 right=_metric_axis_top(validation_values, test_values),
             )
             ax.invert_yaxis()
-            ax.grid(axis="x", alpha=0.25)
+            ax.grid(axis="x", color=REPORT_GRID_COLOR, alpha=0.6)
             ax.legend(loc="lower right")
         fig.subplots_adjust(left=0.32, right=0.96, top=0.96, bottom=0.04, hspace=0.42)
         path = target_dir / f"validation_test_metric_bars__{safe_target}.png"
@@ -396,13 +412,14 @@ def _write_prediction_diagnostics(
     labels = sorted(pd.concat([y_true, y_pred]).dropna().unique().tolist(), key=str)
 
     cm_path = job_report_dir / f"{split}_confusion_matrix.png"
-    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    fig, ax = plt.subplots(figsize=(10.5, 6.4))
     ConfusionMatrixDisplay.from_predictions(
         y_true,
         y_pred,
         labels=labels,
         ax=ax,
         colorbar=False,
+        cmap=REPORT_CONFUSION_CMAP,
     )
     ax.set_title(f"{split.title()} Confusion Matrix\n{job_slug}")
     metric_text = _confusion_matrix_metric_text(summary, predictions)
@@ -418,12 +435,12 @@ def _write_prediction_diagnostics(
             bbox={
                 "boxstyle": "round,pad=0.45",
                 "facecolor": "white",
-                "edgecolor": "#B0B0B0",
+                "edgecolor": REPORT_BOX_EDGE_COLOR,
                 "alpha": 0.95,
             },
         )
-    fig.tight_layout(rect=[0, 0, 0.78, 1])
-    fig.savefig(cm_path, dpi=160)
+    fig.subplots_adjust(left=0.10, right=0.72, top=0.86, bottom=0.14)
+    fig.savefig(cm_path, dpi=160, bbox_inches="tight")
     plt.close(fig)
     rows.append(_artifact_row(summary, split, "confusion_matrix", cm_path))
 
@@ -435,20 +452,30 @@ def _write_prediction_diagnostics(
         y_binary = (y_true.astype(str) == str(positive_label)).astype(int)
 
         roc_path = job_report_dir / f"{split}_roc_curve.png"
-        fig, ax = plt.subplots(figsize=(6, 5))
-        RocCurveDisplay.from_predictions(y_binary, y_score, ax=ax)
+        fig, ax = plt.subplots(figsize=(7.2, 5.8))
+        RocCurveDisplay.from_predictions(
+            y_binary,
+            y_score,
+            ax=ax,
+            color=REPORT_VALIDATION_COLOR,
+        )
         ax.set_title(f"{split.title()} ROC\n{job_slug}")
         fig.tight_layout()
-        fig.savefig(roc_path, dpi=160)
+        fig.savefig(roc_path, dpi=160, bbox_inches="tight")
         plt.close(fig)
         rows.append(_artifact_row(summary, split, "roc_curve", roc_path))
 
         pr_path = job_report_dir / f"{split}_pr_curve.png"
-        fig, ax = plt.subplots(figsize=(6, 5))
-        PrecisionRecallDisplay.from_predictions(y_binary, y_score, ax=ax)
+        fig, ax = plt.subplots(figsize=(7.2, 5.8))
+        PrecisionRecallDisplay.from_predictions(
+            y_binary,
+            y_score,
+            ax=ax,
+            color=REPORT_TEST_COLOR,
+        )
         ax.set_title(f"{split.title()} Precision-Recall\n{job_slug}")
         fig.tight_layout()
-        fig.savefig(pr_path, dpi=160)
+        fig.savefig(pr_path, dpi=160, bbox_inches="tight")
         plt.close(fig)
         rows.append(_artifact_row(summary, split, "pr_curve", pr_path))
 
@@ -459,15 +486,21 @@ def _write_prediction_diagnostics(
             n_bins=10,
             strategy="uniform",
         )
-        fig, ax = plt.subplots(figsize=(6, 5))
-        ax.plot(prob_pred, prob_true, marker="o", label="model")
-        ax.plot([0, 1], [0, 1], "--", color="gray", label="perfect")
+        fig, ax = plt.subplots(figsize=(7.2, 5.8))
+        ax.plot(
+            prob_pred,
+            prob_true,
+            marker="o",
+            label="model",
+            color=REPORT_VALIDATION_COLOR,
+        )
+        ax.plot([0, 1], [0, 1], "--", color=REPORT_REFERENCE_COLOR, label="perfect")
         ax.set_xlabel("Mean predicted probability")
         ax.set_ylabel("Observed fraction positive")
         ax.set_title(f"{split.title()} Calibration\n{job_slug}")
         ax.legend()
         fig.tight_layout()
-        fig.savefig(calibration_path, dpi=160)
+        fig.savefig(calibration_path, dpi=160, bbox_inches="tight")
         plt.close(fig)
         rows.append(_artifact_row(summary, split, "calibration_curve", calibration_path))
     elif proba_columns:
@@ -475,10 +508,10 @@ def _write_prediction_diagnostics(
         pr_path = job_report_dir / f"{split}_pr_curve.png"
         y_true_str = y_true.astype(str)
 
-        fig_roc, ax_roc = plt.subplots(figsize=(6, 5))
-        fig_pr, ax_pr = plt.subplots(figsize=(6, 5))
+        fig_roc, ax_roc = plt.subplots(figsize=(7.2, 5.8))
+        fig_pr, ax_pr = plt.subplots(figsize=(7.2, 5.8))
         plotted = False
-        for proba_col in sorted(proba_columns):
+        for color_idx, proba_col in enumerate(sorted(proba_columns)):
             class_label = proba_col.removeprefix("proba_")
             y_binary = (y_true_str == class_label).astype(int)
             if y_binary.nunique() < 2:
@@ -488,17 +521,18 @@ def _write_prediction_diagnostics(
                 y_binary,
                 predictions[proba_col],
             )
-            ax_roc.plot(fpr, tpr, label=str(class_label))
-            ax_pr.plot(recall, precision, label=str(class_label))
+            color = REPORT_LINE_COLORS[color_idx % len(REPORT_LINE_COLORS)]
+            ax_roc.plot(fpr, tpr, label=str(class_label), color=color)
+            ax_pr.plot(recall, precision, label=str(class_label), color=color)
             plotted = True
         if plotted:
-            ax_roc.plot([0, 1], [0, 1], "--", color="gray")
+            ax_roc.plot([0, 1], [0, 1], "--", color=REPORT_REFERENCE_COLOR)
             ax_roc.set_xlabel("False positive rate")
             ax_roc.set_ylabel("True positive rate")
             ax_roc.set_title(f"{split.title()} OvR ROC\n{job_slug}")
             ax_roc.legend(fontsize=7)
             fig_roc.tight_layout()
-            fig_roc.savefig(roc_path, dpi=160)
+            fig_roc.savefig(roc_path, dpi=160, bbox_inches="tight")
             rows.append(_artifact_row(summary, split, "roc_curve_ovr", roc_path))
 
             ax_pr.set_xlabel("Recall")
@@ -506,15 +540,15 @@ def _write_prediction_diagnostics(
             ax_pr.set_title(f"{split.title()} OvR Precision-Recall\n{job_slug}")
             ax_pr.legend(fontsize=7)
             fig_pr.tight_layout()
-            fig_pr.savefig(pr_path, dpi=160)
+            fig_pr.savefig(pr_path, dpi=160, bbox_inches="tight")
             rows.append(_artifact_row(summary, split, "pr_curve_ovr", pr_path))
         plt.close(fig_roc)
         plt.close(fig_pr)
 
         calibration_path = job_report_dir / f"{split}_calibration_curve.png"
-        fig, ax = plt.subplots(figsize=(6, 5))
+        fig, ax = plt.subplots(figsize=(7.2, 5.8))
         calibration_plotted = False
-        for proba_col in sorted(proba_columns):
+        for color_idx, proba_col in enumerate(sorted(proba_columns)):
             class_label = proba_col.removeprefix("proba_")
             y_binary = (y_true_str == class_label).astype(int)
             if y_binary.nunique() < 2:
@@ -525,16 +559,17 @@ def _write_prediction_diagnostics(
                 n_bins=10,
                 strategy="uniform",
             )
-            ax.plot(prob_pred, prob_true, marker="o", label=str(class_label))
+            color = REPORT_LINE_COLORS[color_idx % len(REPORT_LINE_COLORS)]
+            ax.plot(prob_pred, prob_true, marker="o", label=str(class_label), color=color)
             calibration_plotted = True
         if calibration_plotted:
-            ax.plot([0, 1], [0, 1], "--", color="gray", label="perfect")
+            ax.plot([0, 1], [0, 1], "--", color=REPORT_REFERENCE_COLOR, label="perfect")
             ax.set_xlabel("Mean predicted probability")
             ax.set_ylabel("Observed fraction positive")
             ax.set_title(f"{split.title()} OvR Calibration\n{job_slug}")
             ax.legend(fontsize=7)
             fig.tight_layout()
-            fig.savefig(calibration_path, dpi=160)
+            fig.savefig(calibration_path, dpi=160, bbox_inches="tight")
             rows.append(
                 _artifact_row(summary, split, "calibration_curve_ovr", calibration_path)
             )
