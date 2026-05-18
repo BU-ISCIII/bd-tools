@@ -6,6 +6,8 @@
   "targets": {
     "sepsis_target": "sepsis",
     "hemo_target": "resultado_hemo_gnb_selected",
+    "hemo_gate_target": "infected_yes_no",
+    "hemo_gate_negative_label": "NEGATIVE",
     "hemo_negative_label": "NEGATIVE",
     "hemo_coco_label": "Coco gram+",
     "hemo_bacilo_label": "Bacilo gram-",

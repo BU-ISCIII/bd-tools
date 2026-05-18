@@ -49,6 +49,7 @@ def run_training(args: argparse.Namespace) -> None:
     all_targets = {
         args.sepsis_target,
         args.hemo_target,
+        args.hemo_gate_target,
         args.cef_target,
         args.bmr_target,
         args.weight_column,
@@ -82,6 +83,7 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     y_sepsis = working_df.loc[feature_df_raw.index, args.sepsis_target]
     y_hemo = working_df.loc[feature_df_raw.index, args.hemo_target]
+    y_hemo_gate = working_df.loc[feature_df_raw.index, args.hemo_gate_target]
     y_cef = working_df.loc[feature_df_raw.index, args.cef_target]
     y_bmr = working_df.loc[feature_df_raw.index, args.bmr_target]
     w = working_df.loc[feature_df_raw.index, args.weight_column]
@@ -90,11 +92,12 @@ def run_training(args: argparse.Namespace) -> None:
         X_train, X_test,
         y_sep_train, y_sep_test,
         y_hemo_train, y_hemo_test,
+        y_hemo_gate_train, y_hemo_gate_test,
         y_cef_train, y_cef_test,
         y_bmr_train, y_bmr_test,
         w_train, w_test,
     ) = train_test_split(
-        feature_df_raw, y_sepsis, y_hemo, y_cef, y_bmr, w,
+        feature_df_raw, y_sepsis, y_hemo, y_hemo_gate, y_cef, y_bmr, w,
         test_size=args.test_size,
         random_state=args.random_state,
         stratify=y_sepsis,
@@ -122,16 +125,18 @@ def run_training(args: argparse.Namespace) -> None:
         },
     )
     # Align targets/weights after row filtering caused by no-impute mode
-    y_sep_train, y_hemo_train, y_cef_train, y_bmr_train, w_train = (
+    y_sep_train, y_hemo_train, y_hemo_gate_train, y_cef_train, y_bmr_train, w_train = (
         y_sep_train.loc[X_train.index],
         y_hemo_train.loc[X_train.index],
+        y_hemo_gate_train.loc[X_train.index],
         y_cef_train.loc[X_train.index],
         y_bmr_train.loc[X_train.index],
         w_train.loc[X_train.index],
     )
-    y_sep_test, y_hemo_test, y_cef_test, y_bmr_test, w_test = (
+    y_sep_test, y_hemo_test, y_hemo_gate_test, y_cef_test, y_bmr_test, w_test = (
         y_sep_test.loc[X_test.index],
         y_hemo_test.loc[X_test.index],
+        y_hemo_gate_test.loc[X_test.index],
         y_cef_test.loc[X_test.index],
         y_bmr_test.loc[X_test.index],
         w_test.loc[X_test.index],
@@ -285,8 +290,22 @@ def run_training(args: argparse.Namespace) -> None:
             f"  |  Precision: {l1_precision:.3f}  |  Recall: {l1_recall:.3f}"
         )
 
+        l1_confusion = confusion_matrix(y_sep_test_enc, l1_test_pred, labels=[0, 1]).tolist()
+        l1_pred_counts = pd.Series(l1_test_pred).map({0: le_sep.classes_[0], 1: le_sep.classes_[1]}).value_counts().to_dict()
+        l1_true_counts = pd.Series(y_sep_test_enc).map({0: le_sep.classes_[0], 1: le_sep.classes_[1]}).value_counts().to_dict()
+        l1_report_text = (
+            "Level 1 Sepsis Report\n\n"
+            + l1_report
+            + "\nConfusion matrix [TN, FP; FN, TP]:\n"
+            + f"{l1_confusion}\n"
+            + f"predicted_counts: {l1_pred_counts}\n"
+            + f"actual_counts: {l1_true_counts}\n"
+        )
+
         (l1_dir / "report.txt").write_text(l1_report)
+        (l1_dir / "report_stage1_sepsis.txt").write_text(l1_report_text)
         (l1_dir / "summary.json").write_text(json.dumps({
+            "target": args.sep_target,
             "params": l1_params,
             "threshold": l1_threshold,
             "macro_f1": l1_f1,
@@ -295,6 +314,11 @@ def run_training(args: argparse.Namespace) -> None:
             "precision": l1_precision,
             "recall": l1_recall,
             "classes": le_sep.classes_.tolist(),
+            "negative_label": str(le_sep.classes_[0]),
+            "positive_label": str(le_sep.classes_[1]),
+            "predicted_counts": l1_pred_counts,
+            "actual_counts": l1_true_counts,
+            "confusion_matrix": l1_confusion,
             "shaprfecv_features": selected_features,
             "features": l1_features,
         }, indent=2))
@@ -305,13 +329,20 @@ def run_training(args: argparse.Namespace) -> None:
             "proba": l1_test_proba,
         }, index=X_l1_test.index).to_csv(l1_dir / "predictions.csv", index_label="row_index")
 
-        confusion_matrix(y_sep_test_enc, l1_test_pred, labels=[0, 1])
         all_summaries["level1_sepsis"] = {
+            "target": args.sep_target,
             "macro_f1": l1_f1,
             "roc_auc": l1_auc,
             "pr_auc": l1_pr_auc,
             "precision": l1_precision,
             "recall": l1_recall,
+            "classes": le_sep.classes_.tolist(),
+            "negative_label": str(le_sep.classes_[0]),
+            "positive_label": str(le_sep.classes_[1]),
+            "threshold": l1_threshold,
+            "predicted_counts": l1_pred_counts,
+            "actual_counts": l1_true_counts,
+            "confusion_matrix": l1_confusion,
         }
 
     # ==================================================================
@@ -521,12 +552,18 @@ def run_training(args: argparse.Namespace) -> None:
             all_summaries["l2_gate_rfecv_scores"] = l2_rfecv_history
 
         else:
-            # Stage 1: binary gate (NEGATIVE vs positive)
-            y2_gate_train = (y_hemo_train.loc[hemo_valid_train].astype(str) != args.hemo_negative_label).astype(int)
-            gate_test_mask = hemo_valid_test
-            y2_gate_test = (y_hemo_test.loc[gate_test_mask].astype(str) != args.hemo_negative_label).astype(int)
+            # Stage 1: binary gate using separate gate target (e.g. infected_yes_no)
+            hemo_gate_valid_train = y_hemo_gate_train.notna()
+            hemo_gate_valid_test = y_hemo_gate_test.notna()
+            y2_gate_train = (
+                y_hemo_gate_train.loc[hemo_gate_valid_train].astype(str) != args.hemo_gate_negative_label
+            ).astype(int)
+            gate_test_mask = hemo_gate_valid_test
+            y2_gate_test = (
+                y_hemo_gate_test.loc[gate_test_mask].astype(str) != args.hemo_gate_negative_label
+            ).astype(int)
 
-            X2_gate_train_base = X_train.loc[hemo_valid_train].copy()
+            X2_gate_train_base = X_train.loc[hemo_gate_valid_train].copy()
             X2_gate_test_base = X_test.loc[gate_test_mask].copy()
 
             rank_model_l2_gate = _build_ranking_model(args.model_type, y2_gate_train, args.random_state)
@@ -582,6 +619,7 @@ def run_training(args: argparse.Namespace) -> None:
                 name="l2_gate_proba",
             )
             l2_gate_test_pred = (l2_gate_test_proba >= l2_gate_threshold).astype(int)
+            l2_gate_test_pred = pd.Series(l2_gate_test_pred, index=X2_gate_test_scaled.index, name="l2_gate_pred")
             l2_gate_f1 = f1_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
             l2_gate_precision = precision_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
             l2_gate_recall = recall_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
@@ -591,9 +629,14 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_gate_auc = float(roc_auc_score(y2_gate_test, l2_gate_test_proba))
                 l2_gate_pr_auc = float(average_precision_score(y2_gate_test, l2_gate_test_proba))
 
-            # Stage 2: subtype among positives only
-            subtype_train_mask = hemo_valid_train & (y_hemo_train.astype(str) != args.hemo_negative_label)
-            subtype_test_mask = hemo_valid_test & (y_hemo_test.astype(str) != args.hemo_negative_label)
+            # Stage 2: predict the full Level-2 target among gate-positive rows, keeping NEGATIVE as a valid class.
+            subtype_train_mask = hemo_valid_train & hemo_gate_valid_train & (
+                y_hemo_gate_train.astype(str) != args.hemo_gate_negative_label
+            )
+            subtype_test_mask = (
+                hemo_valid_test & hemo_gate_valid_test
+                & (l2_gate_test_pred == 1)
+            )
 
             X2_sub_train_base = X_train.loc[subtype_train_mask].copy()
             X2_sub_test_base = X_test.loc[subtype_test_mask].copy()
@@ -610,8 +653,8 @@ def run_training(args: argparse.Namespace) -> None:
 
             if y2_sub_train_raw.empty:
                 raise ValueError(
-                    "No train rows for Level 2 Stage-2 subtype after excluding NEGATIVE. "
-                    "Check that the hemo target column contains positive labels."
+                    "No train rows for Level 2 Stage-2 subtype after gating. "
+                    "Check that the Level-2 gate target and Level-2 etiology target are present and aligned."
                 )
 
             le_l2 = LabelEncoder()
@@ -737,7 +780,32 @@ def run_training(args: argparse.Namespace) -> None:
                 + f"  |  Precision: {l2_precision:.3f}  |  Recall: {l2_recall:.3f}"
             )
 
+            stage1_confusion = confusion_matrix(y2_gate_test, l2_gate_test_pred, labels=[0, 1]).tolist()
+            stage1_pred_true = int((l2_gate_test_pred == 1).sum())
+            stage1_pred_false = int((l2_gate_test_pred == 0).sum())
+            stage1_real_true = int((y2_gate_test == 1).sum())
+            stage1_real_false = int((y2_gate_test == 0).sum())
+            stage1_report_text = (
+                "Stage 1 Gate Report\n\n"
+                + "Binary gate classification report:\n"
+                + classification_report(
+                    y2_gate_test,
+                    l2_gate_test_pred,
+                    target_names=["gate_negative", "gate_positive"],
+                    zero_division=0,
+                )
+                + "\nConfusion matrix [TN, FP; FN, TP]:\n"
+                + f"{stage1_confusion}\n"
+                + f"predicted_true: {stage1_pred_true}\n"
+                + f"predicted_false: {stage1_pred_false}\n"
+                + f"real_true: {stage1_real_true}\n"
+                + f"real_false: {stage1_real_false}\n"
+            )
+            (l2_dir / "report_stage1_gate.txt").write_text(stage1_report_text)
             (l2_dir / "report.txt").write_text(l2_report)
+            stage2_pred_counts = stage2_pred_df["pred_label"].value_counts().to_dict()
+            stage2_true_counts = stage2_pred_df["true_label"].value_counts().to_dict()
+
             stage2_summary = {
                 "mode": "binary" if is_binary_subtype else "multiclass",
                 "classes": l2_target_names,
@@ -745,7 +813,12 @@ def run_training(args: argparse.Namespace) -> None:
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
                 "roc_auc": l2_auc,
+                "pr_auc": l2_pr_auc,
+                "precision": l2_precision,
+                "recall": l2_recall,
                 "gate_proba_feature": args.l2_gate_proba_as_feature,
+                "predicted_counts": stage2_pred_counts,
+                "actual_counts": stage2_true_counts,
                 "shaprfecv_features": l2_shap_feats,
                 "features": l2_features,
             }
@@ -798,9 +871,15 @@ def run_training(args: argparse.Namespace) -> None:
                     "pr_auc": l2_gate_pr_auc,
                     "precision": l2_gate_precision,
                     "recall": l2_gate_recall,
-                    "negative_label": args.hemo_negative_label,
+                    "negative_label": args.hemo_gate_negative_label,
+                    "positive_label": f"not_{args.hemo_gate_negative_label}",
                     "threshold": l2_gate_threshold,
                     "gate_proba_feature": args.l2_gate_proba_as_feature,
+                    "predicted_true": stage1_pred_true,
+                    "predicted_false": stage1_pred_false,
+                    "real_true": stage1_real_true,
+                    "real_false": stage1_real_false,
+                    "confusion_matrix": stage1_confusion,
                 },
                 "stage2_subtype": {
                     "macro_f1": l2_f1,
@@ -810,6 +889,8 @@ def run_training(args: argparse.Namespace) -> None:
                     "recall": l2_recall,
                     "classes": l2_target_names,
                     "threshold": l2_threshold,
+                    "predicted_counts": stage2_pred_counts,
+                    "actual_counts": stage2_true_counts,
                 },
             }
             all_summaries["l2_gate_rfecv_scores"] = l2_gate_rfecv_history
@@ -1092,6 +1173,21 @@ def run_training(args: argparse.Namespace) -> None:
             l3_pred_df[f"proba_{class_name}"] = l3_test_proba[:, idx]
     l3_pred_df.to_csv(l3_dir / "predictions.csv", index_label="row_index")
 
+    l3_confusion = confusion_matrix(
+        y3_test_enc, l3_test_pred, labels=np.arange(len(l3_target_names))
+    ).tolist()
+    l3_pred_counts = l3_pred_df["pred_label"].value_counts().to_dict()
+    l3_true_counts = l3_pred_df["true_label"].value_counts().to_dict()
+    l3_report_text = (
+        "Level 3 Cefalosporina Report\n\n"
+        + l3_report
+        + "\nConfusion matrix:\n"
+        + f"{l3_confusion}\n"
+        + f"predicted_counts: {l3_pred_counts}\n"
+        + f"actual_counts: {l3_true_counts}\n"
+    )
+    (l3_dir / "report_stage3_cefalosporina.txt").write_text(l3_report_text)
+
     all_summaries["level3_cefalosporina"] = {
         "mode": "direct_binary" if is_l3_binary else "direct_multiclass",
         "target": args.cef_target,
@@ -1102,6 +1198,9 @@ def run_training(args: argparse.Namespace) -> None:
         "recall": l3_recall,
         "classes": l3_target_names,
         "threshold": l3_threshold,
+        "predicted_counts": l3_pred_counts,
+        "actual_counts": l3_true_counts,
+        "confusion_matrix": l3_confusion,
     }
     all_summaries["l3_rfecv_scores"] = l3_rfecv_history
 
@@ -1114,6 +1213,14 @@ def run_training(args: argparse.Namespace) -> None:
     (output_dir / "aggregate_summary.json").write_text(
         json.dumps(all_summaries, indent=2)
     )
+
+    final_report = {
+        "level1_sepsis": all_summaries.get("level1_sepsis"),
+        "level2_hemo": all_summaries.get("level2_hemo"),
+        "level3_cefalosporina": all_summaries.get("level3_cefalosporina"),
+    }
+    (output_dir / "final_report.json").write_text(json.dumps(final_report, indent=2))
+
     print("\n" + "=" * 60)
     print("COMPLETED.  Results saved in:", output_dir)
 

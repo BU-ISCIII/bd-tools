@@ -39,10 +39,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--hemo-gate-target", type=str, default=targets["hemo_gate_target"],
+        help=(
+            "Column name for the Level-2 binary gate target (default: infected_yes_no). "
+            "This target is used to decide which rows move to Stage 2."
+        ),
+    )
+    parser.add_argument(
+        "--hemo-gate-negative-label",
+        type=str,
+        default=targets["hemo_gate_negative_label"],
+        help="Label treated as gate-negative for the Level-2 binary gate.",
+    )
+    parser.add_argument(
         "--hemo-negative-label",
         type=str,
         default=targets["hemo_negative_label"],
-        help="Label treated as hemoculture-negative for Level-2 Stage-1 gate.",
+        help="Label treated as hemoculture-negative for Level-2 direct etiology and Level-3 filter.",
     )
     parser.add_argument(
         "--skip-l2-gate",
