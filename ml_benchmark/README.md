@@ -116,7 +116,8 @@ python ml_benchmark/run_benchmark.py \
 
 Completed jobs write `summary.json`, `cv_results.csv`,
 `validation_predictions.csv`, `test_predictions.csv`,
-`diagnostics_manifest.json`, `final_features.csv`, `imputation_report.csv`,
+`diagnostics_manifest.json`, `final_features.csv`,
+`feature_filtering_audit.csv`, `imputation_report.csv`,
 `correlation_matrix.csv`, `correlation_pairs.csv`,
 `shap_rfecv_history.csv`, and `shap_rfecv_selected_features.csv` under
 `outputs/ml_benchmark/.../jobs/<job_slug>/`.
@@ -382,8 +383,11 @@ feature_sets:
 ```
 
 The final pipeline feature list is written to `final_features.csv`; for
-SHAP-RFECV jobs it includes the RFECV rank and final mean absolute SHAP score.
-The ranked SHAP-RFECV selected-feature list is written to
+SHAP-RFECV jobs it includes feature-view, feature-policy, RFECV, and final-use
+flags plus the RFECV rank and final mean absolute SHAP score.
+`feature_filtering_audit.csv` contains the full feature-level filtering audit so
+you can see whether a feature was removed by the configured feature view/policy
+or by RFECV. The ranked SHAP-RFECV selected-feature list is written to
 `shap_rfecv_selected_features.csv` with `mean_abs_shap` and `score_available`
 columns; the recursive elimination trace is written to `shap_rfecv_history.csv`
 when available.

@@ -537,6 +537,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
                 "correlation_pairs.csv",
                 "shap_rfecv_history.csv",
                 "shap_rfecv_selected_features.csv",
+                "feature_filtering_audit.csv",
                 *tuning_result["files"],
                 *([str(cache_index_path)] if cache_index_path is not None else []),
             ],
@@ -1047,12 +1048,22 @@ def _build_and_write_audit(
     )
 
     shap_selected_features = _shap_rfecv_selected_features(feature_selection)
+    feature_filtering_audit = _feature_filtering_audit(
+        prepared=prepared,
+        final_features=final_features,
+        shap_selected_features=shap_selected_features,
+        feature_selection=feature_selection,
+        job=job,
+    )
 
     final_features_path = output_dir / "final_features.csv"
-    _final_features_report(final_features, shap_selected_features).to_csv(
+    _final_features_report(final_features, feature_filtering_audit).to_csv(
         final_features_path,
         index=False,
     )
+
+    feature_filtering_audit_path = output_dir / "feature_filtering_audit.csv"
+    feature_filtering_audit.to_csv(feature_filtering_audit_path, index=False)
 
     shap_selected_features_path = output_dir / "shap_rfecv_selected_features.csv"
     shap_selected_features.to_csv(shap_selected_features_path, index=False)
@@ -1239,10 +1250,12 @@ def _build_and_write_audit(
                     feature_selection, "dropped_features_", []
                 ),
                 "kept_features_file": "final_features.csv",
+                "filtering_audit_file": "feature_filtering_audit.csv",
             },
         },
         "files": {
             "final_features": "final_features.csv",
+            "feature_filtering_audit": "feature_filtering_audit.csv",
             "imputation_report": "imputation_report.csv",
             "correlation_matrix": "correlation_matrix.csv",
             "correlation_pairs": "correlation_pairs.csv",
@@ -1408,45 +1421,187 @@ def _ranked_final_features(final_features: list[str], feature_selection) -> list
 
 def _final_features_report(
     final_features: list[str],
-    shap_selected_features: pd.DataFrame,
+    feature_filtering_audit: pd.DataFrame,
 ) -> pd.DataFrame:
-    if shap_selected_features.empty or "feature" not in shap_selected_features.columns:
+    if (
+        feature_filtering_audit.empty
+        or "feature" not in feature_filtering_audit.columns
+    ):
         return pd.DataFrame({"feature": final_features})
 
-    by_feature = shap_selected_features.set_index("feature", drop=False)
+    audit_by_feature = feature_filtering_audit.set_index("feature", drop=False)
     rows = []
     for position, feature in enumerate(final_features, start=1):
-        if feature in by_feature.index:
-            item = by_feature.loc[feature]
+        if feature not in audit_by_feature.index:
             rows.append(
                 {
                     "position": position,
-                    "rank": item.get("rank"),
                     "feature": feature,
-                    "mean_abs_shap": item.get("mean_abs_shap"),
-                    "score_available": item.get("score_available"),
-                }
-            )
-        else:
-            rows.append(
-                {
-                    "position": position,
-                    "rank": None,
-                    "feature": feature,
+                    "feature_view_selected": None,
+                    "feature_policy_kept": None,
+                    "rfecv_selected": None,
+                    "used_in_model": True,
+                    "rfecv_rank": None,
                     "mean_abs_shap": None,
                     "score_available": False,
                 }
             )
+            continue
+
+        item = audit_by_feature.loc[feature]
+        rows.append(
+            {
+                "position": position,
+                "feature": feature,
+                "feature_view_selected": item.get("feature_view_selected"),
+                "feature_policy_kept": item.get("feature_policy_kept"),
+                "rfecv_selected": item.get("rfecv_selected"),
+                "used_in_model": item.get("used_in_model"),
+                "rfecv_rank": item.get("rfecv_rank"),
+                "mean_abs_shap": item.get("mean_abs_shap"),
+                "score_available": item.get("score_available"),
+            }
+        )
     return pd.DataFrame(
         rows,
         columns=[
             "position",
-            "rank",
             "feature",
+            "feature_view_selected",
+            "feature_policy_kept",
+            "rfecv_selected",
+            "used_in_model",
+            "rfecv_rank",
             "mean_abs_shap",
             "score_available",
         ],
     )
+
+
+def _feature_filtering_audit(
+    *,
+    prepared: Dict[str, Any],
+    final_features: list[str],
+    shap_selected_features: pd.DataFrame,
+    feature_selection,
+    job: BenchmarkJob,
+) -> pd.DataFrame:
+    feature_view = prepared["feature_view_resolution"]
+    feature_view_selected = list(feature_view.selected_columns)
+    feature_policy_kept = list(prepared["feature_columns"])
+    policy_dropped = sorted(set(feature_view_selected) - set(feature_policy_kept))
+    rfecv_enabled = getattr(feature_selection, "strategy", None) == "shap_rfecv"
+    final_feature_set = set(final_features)
+
+    shap_by_feature = (
+        shap_selected_features.set_index("feature", drop=False)
+        if (
+            not shap_selected_features.empty
+            and "feature" in shap_selected_features.columns
+        )
+        else pd.DataFrame()
+    )
+    rows = []
+    ordered_features = _ordered_unique([
+        *feature_view_selected,
+        *feature_policy_kept,
+        *list(getattr(feature_selection, "ranking_features_", [])),
+        *final_features,
+    ])
+    for feature in ordered_features:
+        item = (
+            shap_by_feature.loc[feature]
+            if feature in shap_by_feature.index
+            else None
+        )
+        feature_policy_kept_flag = feature in feature_policy_kept
+        rfecv_selected = (
+            bool(item.get("selected"))
+            if item is not None and rfecv_enabled
+            else feature_policy_kept_flag
+        )
+        used_in_model = feature in final_feature_set
+        rows.append(
+            {
+                "feature": feature,
+                "feature_view_selected": feature in feature_view_selected,
+                "feature_view_excluded": feature in feature_view.excluded_columns,
+                "feature_policy_kept": feature_policy_kept_flag,
+                "feature_policy_dropped": feature in policy_dropped,
+                "rfecv_enabled": rfecv_enabled,
+                "rfecv_selected": rfecv_selected,
+                "used_in_model": used_in_model,
+                "drop_stage": _feature_drop_stage(
+                    feature=feature,
+                    feature_view_selected=feature in feature_view_selected,
+                    feature_policy_kept=feature_policy_kept_flag,
+                    rfecv_selected=rfecv_selected,
+                    used_in_model=used_in_model,
+                    rfecv_enabled=rfecv_enabled,
+                ),
+                "rfecv_rank": item.get("rank") if item is not None else None,
+                "mean_abs_shap": (
+                    item.get("mean_abs_shap") if item is not None else None
+                ),
+                "score_available": (
+                    item.get("score_available") if item is not None else False
+                ),
+                "feature_view": feature_view.feature_view,
+                "feature_policy": job.feature_policy.name,
+                "feature_set": job.feature_set.name,
+            }
+        )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "feature",
+            "feature_view_selected",
+            "feature_view_excluded",
+            "feature_policy_kept",
+            "feature_policy_dropped",
+            "rfecv_enabled",
+            "rfecv_selected",
+            "used_in_model",
+            "drop_stage",
+            "rfecv_rank",
+            "mean_abs_shap",
+            "score_available",
+            "feature_view",
+            "feature_policy",
+            "feature_set",
+        ],
+    )
+
+
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen = set()
+    ordered = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _feature_drop_stage(
+    *,
+    feature: str,
+    feature_view_selected: bool,
+    feature_policy_kept: bool,
+    rfecv_selected: bool,
+    used_in_model: bool,
+    rfecv_enabled: bool,
+) -> str:
+    if used_in_model:
+        return "used_in_model"
+    if not feature_view_selected:
+        return "feature_view"
+    if not feature_policy_kept:
+        return "feature_policy"
+    if rfecv_enabled and not rfecv_selected:
+        return "rfecv"
+    return "not_used"
 
 
 def _shap_rfecv_selected_features(feature_selection) -> pd.DataFrame:
