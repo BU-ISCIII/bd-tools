@@ -172,6 +172,38 @@ def run_training(args: argparse.Namespace) -> None:
 
     def _study_name(tag: str) -> str:
         return f"{study_prefix}_{tag}_rs{args.random_state}"
+    
+    def _format_report_with_confusion(
+        *,
+        title: str,
+        report_label: str,
+        report: str,
+        confusion,
+        predicted_counts: dict,
+        actual_counts: dict,
+        binary_labels: Optional[tuple] = None,
+    ) -> str:
+        text = (
+            f"{title}\n\n"
+            f"{report_label} classification report:\n"
+            f"{report}\n"
+        )
+
+        if binary_labels is not None:
+            neg, pos = binary_labels
+            text += "\nConfusion matrix [TN, FP; FN, TP]:\n"
+            text += f"{confusion}\n"
+            text += f"predicted_true: {predicted_counts.get(pos, 0)}\n"
+            text += f"predicted_false: {predicted_counts.get(neg, 0)}\n"
+            text += f"real_true: {actual_counts.get(pos, 0)}\n"
+            text += f"real_false: {actual_counts.get(neg, 0)}\n"
+        else:
+            text += "\nConfusion matrix:\n"
+            text += f"{confusion}\n"
+            text += f"predicted_counts: {predicted_counts}\n"
+            text += f"actual_counts: {actual_counts}\n"
+
+        return text
 
 
     class _NoOptunaStudy:
@@ -302,10 +334,10 @@ def run_training(args: argparse.Namespace) -> None:
             + f"actual_counts: {l1_true_counts}\n"
         )
 
-        (l1_dir / "report.txt").write_text(l1_report)
-        (l1_dir / "report_stage1_sepsis.txt").write_text(l1_report_text)
+        # Level 1
+        (l1_dir / f"report_{args.sepsis_target}.txt").write_text(l1_report_text)
         (l1_dir / "summary.json").write_text(json.dumps({
-            "target": args.sep_target,
+            "target": args.sepsis_target,
             "params": l1_params,
             "threshold": l1_threshold,
             "macro_f1": l1_f1,
@@ -330,7 +362,7 @@ def run_training(args: argparse.Namespace) -> None:
         }, index=X_l1_test.index).to_csv(l1_dir / "predictions.csv", index_label="row_index")
 
         all_summaries["level1_sepsis"] = {
-            "target": args.sep_target,
+            "target": args.sepsis_target,
             "macro_f1": l1_f1,
             "roc_auc": l1_auc,
             "pr_auc": l1_pr_auc,
@@ -494,7 +526,42 @@ def run_training(args: argparse.Namespace) -> None:
                 + f"  |  Precision: {l2_precision:.3f}  |  Recall: {l2_recall:.3f}"
             )
 
-            (l2_dir / "report.txt").write_text(l2_report)
+            l2_confusion = confusion_matrix(
+                y2_test,
+                l2_test_pred,
+                labels=np.arange(len(l2_target_names)),
+            ).tolist()
+            l2_pred_counts = pd.Series(l2_test_pred).map(
+                {i: le_l2.classes_[i] for i in range(len(le_l2.classes_))}
+            ).value_counts().to_dict()
+            l2_true_counts = pd.Series(y2_test).map(
+                {i: le_l2.classes_[i] for i in range(len(le_l2.classes_))}
+            ).value_counts().to_dict()
+            l2_report_text = _format_report_with_confusion(
+                title="Level 2 Target Report",
+                report_label="Target",
+                report=l2_report,
+                confusion=l2_confusion,
+                predicted_counts=l2_pred_counts,
+                actual_counts=l2_true_counts,
+                binary_labels=(l2_target_names[0], l2_target_names[1]) if is_binary_subtype else None,
+            )
+
+            stage_pred_df = pd.DataFrame(index=X2_test_scaled.index)
+            stage_pred_df["true"] = y2_test.values
+            stage_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_test.values]
+            stage_pred_df["pred"] = l2_test_pred
+            stage_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
+
+            if is_binary_subtype:
+                stage_pred_df["proba_positive"] = l2_test_proba[:, 1]
+            else:
+                for idx, class_name in enumerate(le_l2.classes_):
+                    stage_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
+
+            stage_pred_counts = stage_pred_df["pred_label"].value_counts().to_dict()
+            stage_true_counts = stage_pred_df["true_label"].value_counts().to_dict()
+
             stage2_summary = {
                 "mode": "binary" if is_binary_subtype else "multiclass",
                 "classes": l2_target_names,
@@ -505,42 +572,38 @@ def run_training(args: argparse.Namespace) -> None:
                 "pr_auc": l2_pr_auc,
                 "precision": l2_precision,
                 "recall": l2_recall,
+                "predicted_counts": stage_pred_counts,
+                "actual_counts": stage_true_counts,
+                "confusion_matrix": l2_confusion,
                 "shaprfecv_features": l2_shap_feats,
                 "features": l2_features,
             }
+
             if is_binary_subtype:
                 stage2_summary["negative_label"] = l2_target_names[0]
                 stage2_summary["positive_label"] = l2_target_names[1]
-
+            
+            # Level 2
+            (l2_dir / f"report_{args.hemo_target}.txt").write_text(l2_report_text)
             (l2_dir / "summary.json").write_text(json.dumps({
                 "mode": "direct_binary" if is_binary_subtype else "direct_multiclass",
-                "params": l2_params,
-                "threshold": l2_threshold,
-                "macro_f1": l2_f1,
-                "roc_auc": l2_auc,
-                "pr_auc": l2_pr_auc,
-                "precision": l2_precision,
-                "recall": l2_recall,
-                "classes": l2_target_names,
-                "shaprfecv_features": l2_shap_feats,
-                "features": l2_features,
+                "target": args.hemo_target,
+                **stage2_summary,
             }, indent=2))
-            l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_direct_etiology.csv", index=False)
 
-            stage_pred_df = pd.DataFrame(index=X2_test_scaled.index)
-            stage_pred_df["true"] = y2_test.values
-            stage_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_test.values]
-            stage_pred_df["pred"] = l2_test_pred
-            stage_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
-            if is_binary_subtype:
-                stage_pred_df["proba_positive"] = l2_test_proba[:, 1]
-            else:
-                for idx, class_name in enumerate(le_l2.classes_):
-                    stage_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
-            stage_pred_df.to_csv(l2_dir / "predictions_direct_etiology.csv", index_label="row_index")
+            l2_study.trials_dataframe().to_csv(
+                l2_dir / "optuna_trials_direct_etiology.csv",
+                index=False,
+            )
+
+            stage_pred_df.to_csv(
+                l2_dir / "predictions_direct_etiology.csv",
+                index_label="row_index",
+            )
 
             all_summaries["level2_hemo"] = {
                 "mode": "direct_binary" if is_binary_subtype else "direct_multiclass",
+                "target": args.hemo_target,
                 "classes": l2_target_names,
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
@@ -548,7 +611,11 @@ def run_training(args: argparse.Namespace) -> None:
                 "pr_auc": l2_pr_auc,
                 "precision": l2_precision,
                 "recall": l2_recall,
+                "predicted_counts": stage_pred_counts,
+                "actual_counts": stage_true_counts,
+                "confusion_matrix": l2_confusion,
             }
+
             all_summaries["l2_gate_rfecv_scores"] = l2_rfecv_history
 
         else:
@@ -606,9 +673,15 @@ def run_training(args: argparse.Namespace) -> None:
             l2_gate_model = _fit_calibrated_or_base(
                 l2_gate_base, X2_gate_train_scaled, y2_gate_train, max_cv=5, method="isotonic"
             )
-            l2_gate_train_proba = l2_gate_model.predict_proba(X2_gate_train_scaled)[:, 1]
             l2_gate_train_proba = pd.Series(
-                l2_gate_train_proba,
+                generate_oof_probas_binary(
+                    X=X2_gate_train_scaled,
+                    y=y2_gate_train,
+                    best_params=l2_gate_params,
+                    model_type=args.model_type,
+                    n_splits=args.cv_splits,
+                    random_state=args.random_state,
+                ),
                 index=X2_gate_train_scaled.index,
                 name="l2_gate_proba",
             )
@@ -620,6 +693,10 @@ def run_training(args: argparse.Namespace) -> None:
             )
             l2_gate_test_pred = (l2_gate_test_proba >= l2_gate_threshold).astype(int)
             l2_gate_test_pred = pd.Series(l2_gate_test_pred, index=X2_gate_test_scaled.index, name="l2_gate_pred")
+            l2_gate_train_pred = (l2_gate_train_proba >= l2_gate_threshold).astype(int)
+            l2_gate_train_pred = pd.Series(
+                l2_gate_train_pred, index=X2_gate_train_scaled.index, name="l2_gate_pred"
+            )
             l2_gate_f1 = f1_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
             l2_gate_precision = precision_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
             l2_gate_recall = recall_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
@@ -629,10 +706,10 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_gate_auc = float(roc_auc_score(y2_gate_test, l2_gate_test_proba))
                 l2_gate_pr_auc = float(average_precision_score(y2_gate_test, l2_gate_test_proba))
 
-            # Stage 2: predict the full Level-2 target among gate-positive rows, keeping NEGATIVE as a valid class.
-            subtype_train_mask = hemo_valid_train & hemo_gate_valid_train & (
-                y_hemo_gate_train.astype(str) != args.hemo_gate_negative_label
-            )
+
+            # Stage 2: predict the full Level-2 target among rows predicted gate-positive.
+            # This keeps NEGATIVE as a valid subtype label (for gate false positives).
+            subtype_train_mask = hemo_valid_train & hemo_gate_valid_train & (l2_gate_train_pred == 1)
             subtype_test_mask = (
                 hemo_valid_test & hemo_gate_valid_test
                 & (l2_gate_test_pred == 1)
@@ -665,7 +742,9 @@ def run_training(args: argparse.Namespace) -> None:
             )
 
             subtype_test_mask = subtype_test_mask & y2_sub_test_raw.isin(le_l2.classes_)
-            X2_sub_test_base = X_test.loc[subtype_test_mask].copy()
+
+            X2_sub_test_base = X2_sub_test_base.loc[subtype_test_mask].copy()
+
             y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
             y2_sub_test = pd.Series(
                 le_l2.transform(y2_sub_test_raw),
@@ -781,30 +860,67 @@ def run_training(args: argparse.Namespace) -> None:
             )
 
             stage1_confusion = confusion_matrix(y2_gate_test, l2_gate_test_pred, labels=[0, 1]).tolist()
-            stage1_pred_true = int((l2_gate_test_pred == 1).sum())
-            stage1_pred_false = int((l2_gate_test_pred == 0).sum())
-            stage1_real_true = int((y2_gate_test == 1).sum())
-            stage1_real_false = int((y2_gate_test == 0).sum())
-            stage1_report_text = (
-                "Stage 1 Gate Report\n\n"
-                + "Binary gate classification report:\n"
-                + classification_report(
+            stage1_pred_counts = {
+                "gate_negative": int((l2_gate_test_pred == 0).sum()),
+                "gate_positive": int((l2_gate_test_pred == 1).sum()),
+            }
+            stage1_true_counts = {
+                "gate_negative": int((y2_gate_test == 0).sum()),
+                "gate_positive": int((y2_gate_test == 1).sum()),
+            }
+
+            stage1_report_text = _format_report_with_confusion(
+                title="Stage 1 Gate Report",
+                report_label="Binary gate",
+                report=classification_report(
                     y2_gate_test,
                     l2_gate_test_pred,
                     target_names=["gate_negative", "gate_positive"],
                     zero_division=0,
-                )
-                + "\nConfusion matrix [TN, FP; FN, TP]:\n"
-                + f"{stage1_confusion}\n"
-                + f"predicted_true: {stage1_pred_true}\n"
-                + f"predicted_false: {stage1_pred_false}\n"
-                + f"real_true: {stage1_real_true}\n"
-                + f"real_false: {stage1_real_false}\n"
+                ),
+                confusion=stage1_confusion,
+                predicted_counts=stage1_pred_counts,
+                actual_counts=stage1_true_counts,
+                binary_labels=("gate_negative", "gate_positive"),
             )
-            (l2_dir / "report_stage1_gate.txt").write_text(stage1_report_text)
-            (l2_dir / "report.txt").write_text(l2_report)
+
+            (l2_dir / f"report_gate_{args.hemo_gate_target}.txt").write_text(stage1_report_text)
+
+            l2_gate_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage1_gate.csv", index=False)
+            l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage2_subtype.csv", index=False)
+
+            stage2_pred_df = pd.DataFrame(index=X2_test_scaled.index)
+            stage2_pred_df["true"] = y2_sub_test.values
+            stage2_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_sub_test.values]
+            stage2_pred_df["pred"] = l2_test_pred
+            stage2_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
+
+            if is_binary_subtype:
+                stage2_pred_df["proba_positive"] = l2_test_proba[:, 1]
+            else:
+                for idx, class_name in enumerate(le_l2.classes_):
+                    stage2_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
+
             stage2_pred_counts = stage2_pred_df["pred_label"].value_counts().to_dict()
             stage2_true_counts = stage2_pred_df["true_label"].value_counts().to_dict()
+
+            stage2_confusion = confusion_matrix(
+                y2_sub_test,
+                l2_test_pred,
+                labels=np.arange(len(l2_target_names)),
+            ).tolist()
+
+            stage2_report_text = _format_report_with_confusion(
+                title="Stage 2 Staged Target Report",
+                report_label="Staged target",
+                report=l2_report,
+                confusion=stage2_confusion,
+                predicted_counts=stage2_pred_counts,
+                actual_counts=stage2_true_counts,
+                binary_labels=(l2_target_names[0], l2_target_names[1]) if is_binary_subtype else None,
+            )
+
+            (l2_dir / f"report_staged_{args.hemo_target}.txt").write_text(stage2_report_text)
 
             stage2_summary = {
                 "mode": "binary" if is_binary_subtype else "multiclass",
@@ -819,17 +935,20 @@ def run_training(args: argparse.Namespace) -> None:
                 "gate_proba_feature": args.l2_gate_proba_as_feature,
                 "predicted_counts": stage2_pred_counts,
                 "actual_counts": stage2_true_counts,
+                "confusion_matrix": stage2_confusion,
                 "shaprfecv_features": l2_shap_feats,
                 "features": l2_features,
             }
+
             if is_binary_subtype:
                 stage2_summary["negative_label"] = l2_target_names[0]
                 stage2_summary["positive_label"] = l2_target_names[1]
 
             (l2_dir / "summary.json").write_text(json.dumps({
-                "mode": "two_stage_multiclass" if not is_binary_subtype else "two_stage_binary",
+                "mode": "two_stage_binary" if is_binary_subtype else "two_stage_multiclass",
                 "stage1_gate": {
-                    "negative_label": args.hemo_negative_label,
+                    "negative_label": args.hemo_gate_negative_label,
+                    "positive_label": f"not_{args.hemo_gate_negative_label}",
                     "params": l2_gate_params,
                     "threshold": l2_gate_threshold,
                     "macro_f1": l2_gate_f1,
@@ -837,31 +956,39 @@ def run_training(args: argparse.Namespace) -> None:
                     "pr_auc": l2_gate_pr_auc,
                     "precision": l2_gate_precision,
                     "recall": l2_gate_recall,
+                    "predicted_true": stage1_pred_counts["gate_positive"],
+                    "predicted_false": stage1_pred_counts["gate_negative"],
+                    "real_true": stage1_true_counts["gate_positive"],
+                    "real_false": stage1_true_counts["gate_negative"],
+                    "confusion_matrix": stage1_confusion,
                     "shaprfecv_features": l2_gate_shap_feats,
                     "features": l2_gate_features,
                 },
                 "stage2_subtype": stage2_summary,
             }, indent=2))
-            l2_gate_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage1_gate.csv", index=False)
-            l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage2_subtype.csv", index=False)
 
-            stage2_pred_df = pd.DataFrame(index=X2_test_scaled.index)
-            stage2_pred_df["true"] = y2_sub_test.values
-            stage2_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_sub_test.values]
-            stage2_pred_df["pred"] = l2_test_pred
-            stage2_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
-            if is_binary_subtype:
-                stage2_pred_df["proba_positive"] = l2_test_proba[:, 1]
-            else:
-                for idx, class_name in enumerate(le_l2.classes_):
-                    stage2_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
+            l2_gate_study.trials_dataframe().to_csv(
+                l2_dir / "optuna_trials_stage1_gate.csv",
+                index=False,
+            )
+            l2_study.trials_dataframe().to_csv(
+                l2_dir / "optuna_trials_stage2_subtype.csv",
+                index=False,
+            )
 
             pd.DataFrame({
                 "true": y2_gate_test.values,
-                "pred": l2_gate_test_pred,
-                "proba": l2_gate_test_proba,
-            }, index=X2_gate_test_scaled.index).to_csv(l2_dir / "predictions_stage1_gate.csv", index_label="row_index")
-            stage2_pred_df.to_csv(l2_dir / "predictions_stage2_subtype.csv", index_label="row_index")
+                "pred": l2_gate_test_pred.values,
+                "proba": l2_gate_test_proba.values,
+            }, index=X2_gate_test_scaled.index).to_csv(
+                l2_dir / "predictions_stage1_gate.csv",
+                index_label="row_index",
+            )
+
+            stage2_pred_df.to_csv(
+                l2_dir / "predictions_stage2_subtype.csv",
+                index_label="row_index",
+            )
 
             all_summaries["level2_hemo"] = {
                 "mode": "two_stage_binary" if is_binary_subtype else "two_stage_multiclass_positive_gate",
@@ -875,10 +1002,10 @@ def run_training(args: argparse.Namespace) -> None:
                     "positive_label": f"not_{args.hemo_gate_negative_label}",
                     "threshold": l2_gate_threshold,
                     "gate_proba_feature": args.l2_gate_proba_as_feature,
-                    "predicted_true": stage1_pred_true,
-                    "predicted_false": stage1_pred_false,
-                    "real_true": stage1_real_true,
-                    "real_false": stage1_real_false,
+                    "predicted_true": stage1_pred_counts["gate_positive"],
+                    "predicted_false": stage1_pred_counts["gate_negative"],
+                    "real_true": stage1_true_counts["gate_positive"],
+                    "real_false": stage1_true_counts["gate_negative"],
                     "confusion_matrix": stage1_confusion,
                 },
                 "stage2_subtype": {
@@ -893,6 +1020,7 @@ def run_training(args: argparse.Namespace) -> None:
                     "actual_counts": stage2_true_counts,
                 },
             }
+
             all_summaries["l2_gate_rfecv_scores"] = l2_gate_rfecv_history
     # ==================================================================
     # LEVEL 3 – resistente_cefalosporina
@@ -973,9 +1101,15 @@ def run_training(args: argparse.Namespace) -> None:
         )
         gnb_base = build_binary_model(args.model_type, gnb_params.copy())
         gnb_model = _fit_calibrated_or_base(gnb_base, Xg_train_scaled, pd.Series(yg_train, index=Xg_train_scaled.index), max_cv=5, method="isotonic")
-        gnb_train_proba = gnb_model.predict_proba(Xg_train_scaled)[:, 1]
         gnb_train_proba = pd.Series(
-            gnb_train_proba,
+            generate_oof_probas_binary(
+                X=Xg_train_scaled,
+                y=pd.Series(yg_train, index=Xg_train_scaled.index),
+                best_params=gnb_params,
+                model_type=args.model_type,
+                n_splits=args.cv_splits,
+                random_state=args.random_state,
+            ),
             index=Xg_train_scaled.index,
             name="l3_gnb_gate_proba",
         )
@@ -985,7 +1119,11 @@ def run_training(args: argparse.Namespace) -> None:
             index=Xg_test_scaled.index,
             name="l3_gnb_gate_proba",
         )
-        gnb_test_pred = (gnb_test_proba >= gnb_threshold).astype(int)
+        gnb_test_pred = pd.Series(
+            (gnb_test_proba >= gnb_threshold).astype(int),
+            index=Xg_test_scaled.index,
+            name="l3_gnb_gate_pred",
+        )
 
         # Stage-2 resistance uses true GNB positives in train and predicted GNB positives in test.
         gnb_pos_train_idx = Xg_train_scaled.index[pd.Series(yg_train, index=Xg_train_scaled.index) == 1]
@@ -1006,6 +1144,33 @@ def run_training(args: argparse.Namespace) -> None:
             gnb_roc_auc = float(roc_auc_score(yg_test, gnb_test_proba))
             gnb_pr_auc = float(average_precision_score(yg_test, gnb_test_proba))
 
+        gnb_confusion = confusion_matrix(yg_test, gnb_test_pred, labels=[0, 1]).tolist()
+        gnb_pred_counts = {
+            "gate_negative": int((gnb_test_pred == 0).sum()),
+            "gate_positive": int((gnb_test_pred == 1).sum()),
+        }
+        gnb_true_counts = {
+            "gate_negative": int((pd.Series(yg_test, index=Xg_test_scaled.index) == 0).sum()),
+            "gate_positive": int((pd.Series(yg_test, index=Xg_test_scaled.index) == 1).sum()),
+        }
+
+        gnb_report_text = _format_report_with_confusion(
+            title="Level 3 GNB Gate Report",
+            report_label="Binary gate",
+            report=classification_report(
+                yg_test,
+                gnb_test_pred,
+                target_names=["gate_negative", "gate_positive"],
+                zero_division=0,
+            ),
+            confusion=gnb_confusion,
+            predicted_counts=gnb_pred_counts,
+            actual_counts=gnb_true_counts,
+            binary_labels=("gate_negative", "gate_positive"),
+        )
+
+        (l3_dir / f"report_gate_{args.cef_target}.txt").write_text(gnb_report_text)
+
         (l3_dir / "gnb_gate_summary.json").write_text(json.dumps({
             "target_positive_label": args.l3_gnb_positive_label,
             "params": gnb_params,
@@ -1019,6 +1184,9 @@ def run_training(args: argparse.Namespace) -> None:
             "shaprfecv_features": gnb_feats,
             "feature_as_signal": args.l3_gnb_gate_proba_as_feature,
             "gate_mode": "proba_feature" if args.l3_gnb_gate_proba_as_feature else "hard_subset",
+            "confusion_matrix": gnb_confusion,
+            "predicted_counts": gnb_pred_counts,
+            "actual_counts": gnb_true_counts,
         }, indent=2))
         gnb_study.trials_dataframe().to_csv(l3_dir / "gnb_gate_optuna_trials.csv", index=False)
         pd.DataFrame({
@@ -1143,7 +1311,6 @@ def run_training(args: argparse.Namespace) -> None:
         target_names=l3_target_names,
         zero_division=0,
     )
-    (l3_dir / "report.txt").write_text(l3_report)
     (l3_dir / "summary.json").write_text(json.dumps({
         "mode": "direct_binary" if is_l3_binary else "direct_multiclass",
         "target": args.cef_target,
@@ -1178,15 +1345,17 @@ def run_training(args: argparse.Namespace) -> None:
     ).tolist()
     l3_pred_counts = l3_pred_df["pred_label"].value_counts().to_dict()
     l3_true_counts = l3_pred_df["true_label"].value_counts().to_dict()
-    l3_report_text = (
-        "Level 3 Cefalosporina Report\n\n"
-        + l3_report
-        + "\nConfusion matrix:\n"
-        + f"{l3_confusion}\n"
-        + f"predicted_counts: {l3_pred_counts}\n"
-        + f"actual_counts: {l3_true_counts}\n"
+    l3_report_text = _format_report_with_confusion(
+        title="Level 3 Target Report",
+        report_label="Target",
+        report=l3_report,
+        confusion=l3_confusion,
+        predicted_counts=l3_pred_counts,
+        actual_counts=l3_true_counts,
+        binary_labels=(l3_target_names[0], l3_target_names[1]) if is_l3_binary else None,
     )
-    (l3_dir / "report_stage3_cefalosporina.txt").write_text(l3_report_text)
+    (l3_dir / f"report_{args.cef_target}.txt").write_text(l3_report_text)
+
 
     all_summaries["level3_cefalosporina"] = {
         "mode": "direct_binary" if is_l3_binary else "direct_multiclass",

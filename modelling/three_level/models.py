@@ -1,9 +1,10 @@
 """Model builders and fitting helpers."""
 
-from .base import *
-from .config import algorithm_params
 import contextlib
 import io
+
+from .base import *
+from .config import algorithm_params
 
 _ALGO_PARAMS = algorithm_params()
 
@@ -14,52 +15,82 @@ def _with_fixed_params(model_type: str, task: str, params: Dict) -> Dict:
     merged.update(params)
     return merged
 
+
 def build_binary_model(model_type: str, params: Dict) -> object:
-    cls_map = {
-        "xgb": XGBClassifier,
-        "lgbm": LGBMClassifier,
-        "rf": RandomForestClassifier,
-        "catb": CatBoostClassifier,
-    }
-    if model_type not in cls_map:
-        raise ValueError(f"Unknown model_type '{model_type}'.")
-    return cls_map[model_type](**_with_fixed_params(model_type, "binary", params))
+    if model_type == "xgb":
+        return XGBClassifier(
+            **_with_fixed_params(model_type, "binary", params)
+        )
+
+    if model_type == "lgbm":
+        return LGBMClassifier(
+            **_with_fixed_params(model_type, "binary", params)
+        )
+
+    if model_type == "rf":
+        return RandomForestClassifier(
+            **_with_fixed_params(model_type, "binary", params)
+        )
+
+    if model_type == "catb":
+        params = _with_fixed_params(model_type, "binary", params)
+
+        params.setdefault("verbose", False)
+        params.setdefault("logging_level", "Silent")
+        params.setdefault("thread_count", N_CPUS)
+        params.setdefault("random_state", 42)
+
+        return CatBoostClassifier(**params)
+
+    raise ValueError(f"Unknown model_type '{model_type}'.")
 
 
 def build_multiclass_model(model_type: str, params: Dict, num_classes: int) -> object:
     params = _with_fixed_params(model_type, "multiclass", params)
+
     if model_type == "xgb":
         params.setdefault("objective", "multi:softprob")
         params["num_class"] = num_classes
         return XGBClassifier(**params)
-    elif model_type == "lgbm":
+
+    if model_type == "lgbm":
         params.setdefault("objective", "multiclass")
         params["num_class"] = num_classes
         return LGBMClassifier(**params)
-    elif model_type == "rf":
+
+    if model_type == "rf":
         params.setdefault("class_weight", "balanced")
         return RandomForestClassifier(**params)
-    elif model_type == "catb":
+
+    if model_type == "catb":
+        # CatBoost infers class count from y; num_class is not a valid CatBoost parameter.
+        params.pop("num_class", None)
         params.setdefault("loss_function", "MultiClass")
         params.setdefault("auto_class_weights", "Balanced")
         params.setdefault("verbose", False)
-        params.setdefault("custom_metric", "PRAUC")
         params.setdefault("thread_count", N_CPUS)
         params.setdefault("random_state", 42)
+        params.setdefault("logging_level", "Silent")
+
+        # CatBoost's PRAUC custom metric can be problematic in multiclass mode.
+        # Keep it only if you know your installed CatBoost version supports it.
+        params.pop("custom_metric", None)
+
         return CatBoostClassifier(**params)
-    else:
-        raise ValueError(f"Unsupported model type for multiclass: '{model_type}'.")
+
+    raise ValueError(f"Unsupported model type for multiclass: '{model_type}'.")
 
 
 def _fit_model(model, model_type: str, X_tr, y_tr, X_va=None, y_va=None, sample_weight=None) -> None:
     """Fit a model; CatBoost uses early-stopping with the validation fold."""
     sw = sample_weight
+
     if model_type == "catb" and X_va is not None:
         n_iter = getattr(model, "iterations", 500)
-        # Suppress CatBoost stdout/stderr during fitting to avoid noisy logs
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             model.fit(
-                X_tr, y_tr,
+                X_tr,
+                y_tr,
                 eval_set=(X_va, y_va),
                 early_stopping_rounds=max(20, int(0.05 * n_iter)),
                 verbose=False,
@@ -82,6 +113,7 @@ def _fit_calibrated_or_base(
 ):
     """Fit calibrated model when feasible; otherwise fit and return base model."""
     class_counts = pd.Series(y_tr).value_counts()
+
     if class_counts.empty or int(class_counts.min()) < 2:
         print(
             "  Warning: skipping calibration because at least one class has <2 samples "
@@ -96,15 +128,9 @@ def _fit_calibrated_or_base(
     return model
 
 
-# ---------------------------------------------------------------------------
-# Optuna optimisation
-# ---------------------------------------------------------------------------
-
-
 def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
-    """Find the probability threshold that maximises Youden's J (sensitivity + specificity - 1)."""
+    """Find the probability threshold that maximises Youden's J."""
     fpr, tpr, thresholds = roc_curve(y_true, y_proba)
     j_scores = tpr - fpr
     best_idx = int(np.argmax(j_scores))
     return float(np.clip(thresholds[best_idx], 0.05, 0.95))
-

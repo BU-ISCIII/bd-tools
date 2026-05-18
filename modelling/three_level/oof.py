@@ -1,7 +1,7 @@
 """Out-of-fold probability generation utilities."""
 
 from .base import *
-from .models import build_binary_model, build_multiclass_model, _fit_model
+from .models import build_binary_model, build_multiclass_model, _fit_calibrated_or_base, _fit_model
 
 def generate_oof_probas_binary(
     X: pd.DataFrame,
