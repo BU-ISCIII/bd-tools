@@ -472,7 +472,7 @@ def _write_prediction_diagnostics(
             y_binary,
             y_score,
             ax=ax,
-            curve_kwargs={"color": REPORT_TEST_COLOR},
+            color=REPORT_TEST_COLOR,
         )
         ax.set_title(f"{split.title()} Precision-Recall\n{job_slug}")
         fig.tight_layout()
