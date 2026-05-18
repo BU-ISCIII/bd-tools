@@ -86,9 +86,15 @@ def _write_feature_selection_cache_index(base_output_dir: Path) -> Path | None:
                 "cache_file": str(path),
                 "status": "ok",
                 "ranking_feature_count": len(payload.get("ranking_features", [])),
+                "ranking_importance_count": len(
+                    payload.get("ranking_importances", [])
+                ),
                 "history_rounds": len(payload.get("history", [])),
                 "best_score": payload.get("best_score"),
                 "best_feature_count": payload.get("best_feature_count"),
+                "schema_version": metadata.get(
+                    "schema_version", payload.get("schema_version")
+                ),
                 "input_feature_count": metadata.get("input_feature_count"),
                 "selector_rows": metadata.get("selector_rows"),
                 "cv_splits": metadata.get("cv_splits"),
@@ -1032,13 +1038,22 @@ def _build_and_write_audit(
     feature_selection = final_estimator.named_steps["feature_selection"]
 
     transformed_train = preprocess.transform(split_data["X_train"])
-    transformed_train = _as_dataframe(transformed_train, preprocess.get_feature_names_out())
-    final_features = final_estimator[:-1].get_feature_names_out().tolist()
-
-    final_features_path = output_dir / "final_features.csv"
-    pd.DataFrame({"feature": final_features}).to_csv(final_features_path, index=False)
+    transformed_train = _as_dataframe(
+        transformed_train, preprocess.get_feature_names_out()
+    )
+    final_features = _ranked_final_features(
+        final_estimator[:-1].get_feature_names_out().tolist(),
+        feature_selection,
+    )
 
     shap_selected_features = _shap_rfecv_selected_features(feature_selection)
+
+    final_features_path = output_dir / "final_features.csv"
+    _final_features_report(final_features, shap_selected_features).to_csv(
+        final_features_path,
+        index=False,
+    )
+
     shap_selected_features_path = output_dir / "shap_rfecv_selected_features.csv"
     shap_selected_features.to_csv(shap_selected_features_path, index=False)
 
@@ -1381,17 +1396,79 @@ def _categorical_encoding_summary(preprocess) -> Dict[str, Any]:
     }
 
 
+def _ranked_final_features(final_features: list[str], feature_selection) -> list[str]:
+    selected_features = list(getattr(feature_selection, "selected_features_", []))
+    if (
+        getattr(feature_selection, "strategy", None) == "shap_rfecv"
+        and selected_features
+    ):
+        return selected_features
+    return final_features
+
+
+def _final_features_report(
+    final_features: list[str],
+    shap_selected_features: pd.DataFrame,
+) -> pd.DataFrame:
+    if shap_selected_features.empty or "feature" not in shap_selected_features.columns:
+        return pd.DataFrame({"feature": final_features})
+
+    by_feature = shap_selected_features.set_index("feature", drop=False)
+    rows = []
+    for position, feature in enumerate(final_features, start=1):
+        if feature in by_feature.index:
+            item = by_feature.loc[feature]
+            rows.append(
+                {
+                    "position": position,
+                    "rank": item.get("rank"),
+                    "feature": feature,
+                    "mean_abs_shap": item.get("mean_abs_shap"),
+                    "score_available": item.get("score_available"),
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "position": position,
+                    "rank": None,
+                    "feature": feature,
+                    "mean_abs_shap": None,
+                    "score_available": False,
+                }
+            )
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "position",
+            "rank",
+            "feature",
+            "mean_abs_shap",
+            "score_available",
+        ],
+    )
+
+
 def _shap_rfecv_selected_features(feature_selection) -> pd.DataFrame:
     ranking_features = list(getattr(feature_selection, "ranking_features_", []))
+    ranking_importances = list(getattr(feature_selection, "ranking_importances_", []))
+    scores_by_feature = {
+        item.get("feature"): item.get("mean_abs_shap")
+        for item in ranking_importances
+        if isinstance(item, dict) and item.get("feature") is not None
+    }
     selected_feature_list = list(getattr(feature_selection, "selected_features_", []))
     selected_features = set(selected_feature_list)
     dropped_features = set(getattr(feature_selection, "dropped_features_", []))
     rows = []
     for rank, feature in enumerate(ranking_features, start=1):
+        score = scores_by_feature.get(feature)
         rows.append(
             {
                 "rank": rank,
                 "feature": feature,
+                "mean_abs_shap": score,
+                "score_available": score is not None,
                 "selected": feature in selected_features,
                 "dropped": feature in dropped_features,
             }
@@ -1403,6 +1480,8 @@ def _shap_rfecv_selected_features(feature_selection) -> pd.DataFrame:
                 {
                     "rank": rank,
                     "feature": feature,
+                    "mean_abs_shap": None,
+                    "score_available": False,
                     "selected": True,
                     "dropped": False,
                 }
@@ -1410,7 +1489,14 @@ def _shap_rfecv_selected_features(feature_selection) -> pd.DataFrame:
 
     return pd.DataFrame(
         rows,
-        columns=["rank", "feature", "selected", "dropped"],
+        columns=[
+            "rank",
+            "feature",
+            "mean_abs_shap",
+            "score_available",
+            "selected",
+            "dropped",
+        ],
     )
 
 

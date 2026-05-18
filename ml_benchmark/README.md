@@ -381,10 +381,12 @@ feature_sets:
     max_features: 20
 ```
 
-The final pipeline feature list is written to `final_features.csv`. The
-ranked SHAP-RFECV selected-feature list is written to
-`shap_rfecv_selected_features.csv`; the recursive elimination trace is written
-to `shap_rfecv_history.csv` when available.
+The final pipeline feature list is written to `final_features.csv`; for
+SHAP-RFECV jobs it includes the RFECV rank and final mean absolute SHAP score.
+The ranked SHAP-RFECV selected-feature list is written to
+`shap_rfecv_selected_features.csv` with `mean_abs_shap` and `score_available`
+columns; the recursive elimination trace is written to `shap_rfecv_history.csv`
+when available.
 
 ## Hyperparameter Tuning
 

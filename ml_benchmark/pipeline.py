@@ -32,6 +32,9 @@ from sklearn.preprocessing import (
 from .types import BenchmarkJob, ModelSpec, PipelineBuildResult, ShapRFECVSpec
 
 
+SHAP_RFECV_CACHE_SCHEMA_VERSION = 2
+
+
 class CorrelationFilter(BaseEstimator, TransformerMixin):
     """Drop highly correlated columns using training data only.
 
@@ -184,6 +187,10 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         self.cache_status_ = "not_applicable"
         self.cache_path_ = None
         self.ranking_features_ = list(self.feature_names_in_)
+        self.ranking_importances_ = [
+            {"feature": feature, "mean_abs_shap": None}
+            for feature in self.feature_names_in_
+        ]
         self.best_score_ = None
         self.selector_rows_ = None
         self.selector_estimator_params_ = dict(self.selector_estimator_params or {})
@@ -213,6 +220,7 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
             for feature in cached.get("ranking_features", [])
             if feature in self.feature_names_in_
         ]
+        self.ranking_importances_ = self._cached_ranking_importances(cached)
         self.best_score_ = cached.get("best_score")
         if not self.ranking_features_:
             self.status_ = "empty_cached_ranking"
@@ -266,15 +274,25 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         final_importances = self._shap_importance(frame[best_features], y)
         if final_importances.empty:
             ranking_features = list(best_features)
+            ranking_importances = [
+                {"feature": feature, "mean_abs_shap": None}
+                for feature in ranking_features
+            ]
         else:
             ranking_features = final_importances["feature"].tolist()
+            ranking_importances = final_importances[
+                ["feature", "mean_abs_shap"]
+            ].to_dict(orient="records")
         self.cache_status_ = "created"
         return {
+            "schema_version": SHAP_RFECV_CACHE_SCHEMA_VERSION,
             "ranking_features": ranking_features,
+            "ranking_importances": ranking_importances,
             "history": self.history_,
             "best_score": None if best_score == -np.inf else float(best_score),
             "best_feature_count": len(best_features),
             "metadata": {
+                "schema_version": SHAP_RFECV_CACHE_SCHEMA_VERSION,
                 "input_feature_count": len(self.feature_names_in_),
                 "selector_rows": len(frame),
                 "cv_splits": self.cv_splits,
@@ -306,6 +324,24 @@ class ShapRFECVSelector(BaseEstimator, TransformerMixin):
         if self.max_features is None:
             return list(ranking_features)
         return list(ranking_features[: max(1, int(self.max_features))])
+
+    def _cached_ranking_importances(
+        self,
+        cached: dict[str, object],
+    ) -> list[dict[str, object]]:
+        ranking_importances = cached.get("ranking_importances") or []
+        scores_by_feature = {
+            str(item.get("feature")): item.get("mean_abs_shap")
+            for item in ranking_importances
+            if isinstance(item, dict) and item.get("feature") is not None
+        }
+        return [
+            {
+                "feature": feature,
+                "mean_abs_shap": scores_by_feature.get(feature),
+            }
+            for feature in self.ranking_features_
+        ]
 
     def _load_cache(self, X: pd.DataFrame, y) -> dict[str, object] | None:
         cache_path = self._cache_path(X, y)
@@ -930,6 +966,7 @@ def _selection_fingerprint(
 ) -> str:
     payload = {
         "columns": list(X.columns),
+        "schema_version": SHAP_RFECV_CACHE_SCHEMA_VERSION,
         "shape": list(X.shape),
         "task_type": task_type,
         "cv_splits": int(cv_splits),
