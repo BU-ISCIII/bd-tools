@@ -28,12 +28,14 @@
     "resultado_hemo",
     "resultado_hemo_grouped",
     "resultado_hemo_mo",
-    "all_cult_org",
+    "resultado_hemo_multilabel",
+    "resultado_hemo_gnb_selected",
+    "resultado_hemo_gnb_all",
+    "dominant_all_cult_org",
     "infected_yes_no",
     "bmr_etiologia",
     "fenotipo_resistencia",
     "fenotipo_resistencia_individual",
-    "fenotipo_resistencia_grouped",
     "resistente_cefalosporina",
     "resistente_cefalosporina_multi"
   ],
@@ -43,5 +45,5 @@
     "n_neighbors": 10,
     "weights": "distance"
   },
-  "drop_helper_columns": ["resultado_hemo_multilabel", "dominant_all_cult_org"]
+  "drop_helper_columns": []
 }

@@ -2,6 +2,8 @@
 
 from .base import *
 from .config import algorithm_params
+import contextlib
+import io
 
 _ALGO_PARAMS = algorithm_params()
 
@@ -54,13 +56,15 @@ def _fit_model(model, model_type: str, X_tr, y_tr, X_va=None, y_va=None, sample_
     sw = sample_weight
     if model_type == "catb" and X_va is not None:
         n_iter = getattr(model, "iterations", 500)
-        model.fit(
-            X_tr, y_tr,
-            eval_set=(X_va, y_va),
-            early_stopping_rounds=max(20, int(0.05 * n_iter)),
-            verbose=False,
-            sample_weight=sw,
-        )
+        # Suppress CatBoost stdout/stderr during fitting to avoid noisy logs
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            model.fit(
+                X_tr, y_tr,
+                eval_set=(X_va, y_va),
+                early_stopping_rounds=max(20, int(0.05 * n_iter)),
+                verbose=False,
+                sample_weight=sw,
+            )
     else:
         if sw is not None:
             model.fit(X_tr, y_tr, sample_weight=sw)

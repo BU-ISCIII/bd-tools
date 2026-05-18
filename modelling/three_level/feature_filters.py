@@ -13,6 +13,7 @@ def shap_rfecv(
         max_features: int = 50,
         scoring: str = "roc_auc",
         random_state: int = 42,
+        output_csv_path: Optional[Path] = None,
     ) -> Tuple[List[str], Dict[str, Dict[str, object]]]:
     """
     SHAP-based Recursive Feature Elimination with Cross Validation.
@@ -133,17 +134,22 @@ def shap_rfecv(
             "features": remaining_features.copy(),
         }
         primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
-        primary_val = metrics.get(primary_metric, 0.0)
         print(
             f"Features: {len(remaining_features)} | "
             f"ROC_AUC: {metrics['roc_auc']:.4f} | PR_AUC: {metrics['pr_auc']:.4f} | "
-            f"{primary_metric.upper()}: {primary_val:.4f} | F1: {metrics['f1_macro']:.4f} | "
+            f"F1: {metrics['f1_macro']:.4f} | "
             f"Precision: {metrics['precision_macro']:.4f} | Recall: {metrics['recall_macro']:.4f}"
         )
 
         # Remove the globally least important feature
         removed = _global_worst_feature(remaining_features)
         remaining_features.remove(removed)
+        # Track the removed feature in history for CSV export
+        n_after_removal = len(remaining_features)
+        if str(n_after_removal) not in history:
+            history[str(n_after_removal)] = {"removed_feature": removed}
+        else:
+            history[str(n_after_removal)]["removed_feature"] = removed
         print(f"Removed feature: {removed}")
 
     # Score and record the final minimal feature set
@@ -153,11 +159,10 @@ def shap_rfecv(
         "features": remaining_features.copy(),
     }
     primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
-    primary_val = final_metrics.get(primary_metric, 0.0)
     print(
         f"Features: {len(remaining_features)} | "
         f"ROC_AUC: {final_metrics['roc_auc']:.4f} | PR_AUC: {final_metrics['pr_auc']:.4f} | "
-        f"{primary_metric.upper()}: {primary_val:.4f} | F1: {final_metrics['f1_macro']:.4f} | "
+        f"F1: {final_metrics['f1_macro']:.4f} | "
         f"Precision: {final_metrics['precision_macro']:.4f} | Recall: {final_metrics['recall_macro']:.4f}"
     )
 
@@ -174,6 +179,29 @@ def shap_rfecv(
         f"Best CV score ({primary_metric}): {best_score:.4f} at {best_n} features → "
         f"Selected {len(best_features)} features."
     )
+    
+    # Export RFECV history to CSV if output path provided
+    if output_csv_path:
+        output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        rfecv_records = []
+        for n_feat_str in sorted(history.keys(), key=lambda x: -int(x)):
+            entry = history[n_feat_str]
+            if "metrics" in entry:
+                metrics = entry["metrics"]
+                removed = entry.get("removed_feature", None)
+                rfecv_records.append({
+                    "n_features": n_feat_str,
+                    "removed_feature": removed,
+                    "roc_auc": metrics["roc_auc"],
+                    "pr_auc": metrics["pr_auc"],
+                    "f1_macro": metrics["f1_macro"],
+                    "precision_macro": metrics["precision_macro"],
+                    "recall_macro": metrics["recall_macro"],
+                })
+        df_rfecv = pd.DataFrame(rfecv_records)
+        df_rfecv.to_csv(output_csv_path, index=False)
+        print(f"  Saved RFECV history to {output_csv_path}")
+    
     return best_features, history
 
 # ---------------------------------------------------------------------------
@@ -184,6 +212,7 @@ def shap_rfecv(
 def remove_correlated_features(
     X: pd.DataFrame,
     threshold: float = 0.90,
+    output_csv_path: Optional[Path] = None,
 ) -> List[str]:
     """Return the subset of *X.columns* that survives a Spearman correlation filter.
 
@@ -292,6 +321,22 @@ def remove_correlated_features(
                 f"var_kept={item['kept_variance']:.6g} | "
                 f"var_dropped={item['dropped_variance']:.6g}"
             )
+        
+        # Save to CSV if output path provided
+        if output_csv_path:
+            output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+            df_audit = pd.DataFrame([
+                {
+                    "feature_dropped": item["dropped_col"],
+                    "correlated_feature": item["kept_col"],
+                    "abs_spearman": item["spearman_abs_corr"],
+                    "var_kept": item["kept_variance"],
+                    "var_dropped": item["dropped_variance"],
+                }
+                for item in drop_audit_sorted
+            ])
+            df_audit.to_csv(output_csv_path, index=False)
+            print(f"  Saved correlation-drop audit to {output_csv_path}")
 
     # Return names in the original DataFrame column order.
     # Keep all numeric columns that survived correlation filter, plus all non-numeric columns

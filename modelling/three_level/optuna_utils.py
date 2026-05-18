@@ -2,7 +2,7 @@
 
 from .base import *
 from .config import algorithm_params, optuna_search_spaces
-from .models import build_binary_model, build_multiclass_model, _fit_model
+from .models import build_binary_model, build_multiclass_model, _fit_model, _find_best_threshold
 
 _ALGO_PARAMS = algorithm_params()
 _SEARCH_SPACES = optuna_search_spaces()

@@ -5,11 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Dict, Optional
 
 import numpy as np
 import optuna
 import pandas as pd
 from sklearn.metrics import (
+    average_precision_score,
     classification_report,
     confusion_matrix,
     f1_score,
@@ -18,7 +20,7 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler, label_binarize
 
 from .utils import (
     DELETE_COLUMNS,
@@ -26,15 +28,16 @@ from .utils import (
     JOB_ID,
     TODAY,
     TARGET_REMOVE,
+    compute_balanced_sample_weight,
     load_processed_dataframe,
     preprocess_train_test_features,
 )
 from .config import runtime_defaults
-from .models import _find_best_threshold, _fit_calibrated_or_base
+from .models import _find_best_threshold, _fit_calibrated_or_base, build_binary_model, build_multiclass_model
 from .optuna_utils import optimise_binary_model, optimise_multiclass_model
 from .oof import generate_oof_probas_binary, generate_oof_probas_multiclass
 from .feature_filters import shap_rfecv, remove_correlated_features
-from .feature_selection import cap_features
+from .feature_selection import cap_features, _build_ranking_model
 
 def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -100,12 +103,23 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 2a. Leakage-safe preprocessing (fit on train, apply on test)
     # ------------------------------------------------------------------
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create processing folder for data processing artifacts
+    processing_dir = output_dir / "processing"
+    processing_dir.mkdir(parents=True, exist_ok=True)
+
     cat_cols = runtime_defaults().get("categorical_for_dummies", ["foco", "ultimo_antib"])
     X_train, X_test = preprocess_train_test_features(
         X_train, X_test,
         na_perc_limit=args.na_perc_limit,
         impute_missing=args.impute_missing,
         categorical_for_dummies=cat_cols,
+        output_csv_paths={
+            "nan_dropped": output_dir / "processing" / "nan_dropped_features.csv",
+            "imputed": output_dir / "processing" / "imputed_features.csv",
+        },
     )
     # Align targets/weights after row filtering caused by no-impute mode
     y_sep_train, y_hemo_train, y_cef_train, y_bmr_train, w_train = (
@@ -129,7 +143,11 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     if args.max_corr < 1.0:
         print(f"\nRemoving features with |Spearman corr| > {args.max_corr} …")
-        kept_cols = remove_correlated_features(X_train, threshold=args.max_corr)
+        kept_cols = remove_correlated_features(
+            X_train, 
+            threshold=args.max_corr,
+            output_csv_path=output_dir / "processing" / "correlation_dropped_features.csv",
+        )
         n_removed = len(X_train.columns) - len(kept_cols)
         if n_removed:
             print(f"  Dropped {n_removed} redundant features → {len(kept_cols)} remain.")
@@ -140,8 +158,6 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     # 3. Output directory
     # ------------------------------------------------------------------
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
     all_summaries: Dict = {"args": {str(k): str(v) for k,v in args.__dict__.items()}}
     optuna_storage = args.optuna_storage or None
@@ -216,7 +232,8 @@ def run_training(args: argparse.Namespace) -> None:
         else:
             print("  Selecting Level 1 features by SHAP importance …")
             selected_features, l1_rfecv_history = shap_rfecv(
-                rank_model_l1, X_train, y_sep_train_enc, min_features=2, max_features=args.max_features, scoring="pr_auc"
+                rank_model_l1, X_train, y_sep_train_enc, min_features=2, max_features=args.max_features, scoring="pr_auc",
+                output_csv_path=output_dir / "processing" / "l1_rfecv_features.csv",
             )
         l1_features = cap_features(
             selected_features, X_train, y_sep_train_enc,
@@ -259,13 +276,24 @@ def run_training(args: argparse.Namespace) -> None:
             zero_division=0,
         )
         l1_auc = roc_auc_score(y_sep_test_enc, l1_test_proba)
+        l1_pr_auc = average_precision_score(y_sep_test_enc, l1_test_proba)
         l1_f1 = f1_score(y_sep_test_enc, l1_test_pred, average="macro", zero_division=0)
-        print(f"  Level 1 – Macro F1: {l1_f1:.3f}  |  ROC-AUC: {l1_auc:.3f}")
+        l1_precision = precision_score(y_sep_test_enc, l1_test_pred, average="macro", zero_division=0)
+        l1_recall = recall_score(y_sep_test_enc, l1_test_pred, average="macro", zero_division=0)
+        print(
+            f"  Level 1 – Macro F1: {l1_f1:.3f}  |  ROC-AUC: {l1_auc:.3f}  |  PR-AUC: {l1_pr_auc:.3f}"
+            f"  |  Precision: {l1_precision:.3f}  |  Recall: {l1_recall:.3f}"
+        )
 
         (l1_dir / "report.txt").write_text(l1_report)
         (l1_dir / "summary.json").write_text(json.dumps({
-            "params": l1_params, "threshold": l1_threshold,
-            "macro_f1": l1_f1, "roc_auc": l1_auc,
+            "params": l1_params,
+            "threshold": l1_threshold,
+            "macro_f1": l1_f1,
+            "roc_auc": l1_auc,
+            "pr_auc": l1_pr_auc,
+            "precision": l1_precision,
+            "recall": l1_recall,
             "classes": le_sep.classes_.tolist(),
             "shaprfecv_features": selected_features,
             "features": l1_features,
@@ -278,7 +306,13 @@ def run_training(args: argparse.Namespace) -> None:
         }, index=X_l1_test.index).to_csv(l1_dir / "predictions.csv", index_label="row_index")
 
         confusion_matrix(y_sep_test_enc, l1_test_pred, labels=[0, 1])
-        all_summaries["level1_sepsis"] = {"macro_f1": l1_f1, "roc_auc": l1_auc}
+        all_summaries["level1_sepsis"] = {
+            "macro_f1": l1_f1,
+            "roc_auc": l1_auc,
+            "pr_auc": l1_pr_auc,
+            "precision": l1_precision,
+            "recall": l1_recall,
+        }
 
     # ==================================================================
     # LEVEL 2 – two-stage binary hemo model
@@ -347,7 +381,8 @@ def run_training(args: argparse.Namespace) -> None:
             else:
                 print("  Selecting Level 2 direct etiology features by SHAP importance …")
                 l2_shap_feats, l2_rfecv_history = shap_rfecv(
-                    rank_model_l2, X2_train_base, y2_train, min_features=2, max_features=args.max_features, scoring="pr_auc"
+                    rank_model_l2, X2_train_base, y2_train, min_features=2, max_features=args.max_features, scoring="pr_auc",
+                    output_csv_path=output_dir / "processing" / "l2_direct_rfecv_features.csv",
                 )
             l2_features = cap_features(
                 l2_shap_feats, X2_train_base, y2_train,
@@ -400,12 +435,21 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_test_pred = np.argmax(l2_test_proba, axis=1)
 
             l2_f1 = f1_score(y2_test, l2_test_pred, average="macro", zero_division=0)
+            l2_precision = precision_score(y2_test, l2_test_pred, average="macro", zero_division=0)
+            l2_recall = recall_score(y2_test, l2_test_pred, average="macro", zero_division=0)
+            l2_pr_auc: Optional[float] = None
             l2_auc: Optional[float] = None
             if y2_test.nunique() > 1:
                 if is_binary_subtype:
                     l2_auc = float(roc_auc_score(y2_test, l2_test_proba[:, 1]))
+                    l2_pr_auc = float(average_precision_score(y2_test, l2_test_proba[:, 1]))
                 else:
                     l2_auc = float(roc_auc_score(y2_test, l2_test_proba, multi_class="ovr", average="macro"))
+                    l2_pr_auc = float(average_precision_score(
+                        label_binarize(y2_test, classes=np.arange(len(le_l2.classes_))),
+                        l2_test_proba,
+                        average="macro"
+                    ))
 
             l2_report = classification_report(
                 y2_test, l2_test_pred,
@@ -415,6 +459,8 @@ def run_training(args: argparse.Namespace) -> None:
             print(
                 f"  Level 2 direct etiology – Macro F1: {l2_f1:.3f}"
                 + (f"  |  ROC-AUC: {l2_auc:.3f}" if l2_auc is not None else "")
+                + (f"  |  PR-AUC: {l2_pr_auc:.3f}" if l2_pr_auc is not None else "")
+                + f"  |  Precision: {l2_precision:.3f}  |  Recall: {l2_recall:.3f}"
             )
 
             (l2_dir / "report.txt").write_text(l2_report)
@@ -425,6 +471,9 @@ def run_training(args: argparse.Namespace) -> None:
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
                 "roc_auc": l2_auc,
+                "pr_auc": l2_pr_auc,
+                "precision": l2_precision,
+                "recall": l2_recall,
                 "shaprfecv_features": l2_shap_feats,
                 "features": l2_features,
             }
@@ -438,6 +487,9 @@ def run_training(args: argparse.Namespace) -> None:
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
                 "roc_auc": l2_auc,
+                "pr_auc": l2_pr_auc,
+                "precision": l2_precision,
+                "recall": l2_recall,
                 "classes": l2_target_names,
                 "shaprfecv_features": l2_shap_feats,
                 "features": l2_features,
@@ -462,6 +514,9 @@ def run_training(args: argparse.Namespace) -> None:
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
                 "roc_auc": l2_auc,
+                "pr_auc": l2_pr_auc,
+                "precision": l2_precision,
+                "recall": l2_recall,
             }
             all_summaries["l2_gate_rfecv_scores"] = l2_rfecv_history
 
@@ -517,10 +572,13 @@ def run_training(args: argparse.Namespace) -> None:
             l2_gate_test_proba = l2_gate_model.predict_proba(X2_gate_test_scaled)[:, 1]
             l2_gate_test_pred = (l2_gate_test_proba >= l2_gate_threshold).astype(int)
             l2_gate_f1 = f1_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
-            l2_gate_auc: Optional[float] = (
-                float(roc_auc_score(y2_gate_test, l2_gate_test_proba))
-                if y2_gate_test.nunique() > 1 else None
-            )
+            l2_gate_precision = precision_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
+            l2_gate_recall = recall_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
+            l2_gate_pr_auc: Optional[float] = None
+            l2_gate_auc: Optional[float] = None
+            if y2_gate_test.nunique() > 1:
+                l2_gate_auc = float(roc_auc_score(y2_gate_test, l2_gate_test_proba))
+                l2_gate_pr_auc = float(average_precision_score(y2_gate_test, l2_gate_test_proba))
 
             # Stage 2: subtype among positives only
             subtype_train_mask = hemo_valid_train & (y_hemo_train.astype(str) != args.hemo_negative_label)
@@ -626,12 +684,21 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_test_pred = np.argmax(l2_test_proba, axis=1)
 
             l2_f1 = f1_score(y2_sub_test, l2_test_pred, average="macro", zero_division=0)
+            l2_precision = precision_score(y2_sub_test, l2_test_pred, average="macro", zero_division=0)
+            l2_recall = recall_score(y2_sub_test, l2_test_pred, average="macro", zero_division=0)
+            l2_pr_auc: Optional[float] = None
             l2_auc: Optional[float] = None
             if y2_sub_test.nunique() > 1:
                 if is_binary_subtype:
                     l2_auc = float(roc_auc_score(y2_sub_test, l2_test_proba[:, 1]))
+                    l2_pr_auc = float(average_precision_score(y2_sub_test, l2_test_proba[:, 1]))
                 else:
                     l2_auc = float(roc_auc_score(y2_sub_test, l2_test_proba, multi_class="ovr", average="macro"))
+                    l2_pr_auc = float(average_precision_score(
+                        label_binarize(y2_sub_test, classes=np.arange(len(le_l2.classes_))),
+                        l2_test_proba,
+                        average="macro"
+                    ))
 
             l2_report = classification_report(
                 y2_sub_test, l2_test_pred,
@@ -641,10 +708,14 @@ def run_training(args: argparse.Namespace) -> None:
             print(
                 f"  Level 2 Stage-1 gate – Macro F1: {l2_gate_f1:.3f}"
                 + (f"  |  ROC-AUC: {l2_gate_auc:.3f}" if l2_gate_auc is not None else "")
+                + (f"  |  PR-AUC: {l2_gate_pr_auc:.3f}" if l2_gate_pr_auc is not None else "")
+                + f"  |  Precision: {l2_gate_precision:.3f}  |  Recall: {l2_gate_recall:.3f}"
             )
             print(
                 f"  Level 2 Stage-2 subtype – Macro F1: {l2_f1:.3f}"
                 + (f"  |  ROC-AUC: {l2_auc:.3f}" if l2_auc is not None else "")
+                + (f"  |  PR-AUC: {l2_pr_auc:.3f}" if l2_pr_auc is not None else "")
+                + f"  |  Precision: {l2_precision:.3f}  |  Recall: {l2_recall:.3f}"
             )
 
             (l2_dir / "report.txt").write_text(l2_report)
@@ -670,6 +741,9 @@ def run_training(args: argparse.Namespace) -> None:
                     "threshold": l2_gate_threshold,
                     "macro_f1": l2_gate_f1,
                     "roc_auc": l2_gate_auc,
+                    "pr_auc": l2_gate_pr_auc,
+                    "precision": l2_gate_precision,
+                    "recall": l2_gate_recall,
                     "shaprfecv_features": l2_gate_shap_feats,
                     "features": l2_gate_features,
                 },
@@ -701,12 +775,18 @@ def run_training(args: argparse.Namespace) -> None:
                 "stage1_gate": {
                     "macro_f1": l2_gate_f1,
                     "roc_auc": l2_gate_auc,
+                    "pr_auc": l2_gate_pr_auc,
+                    "precision": l2_gate_precision,
+                    "recall": l2_gate_recall,
                     "negative_label": args.hemo_negative_label,
                     "threshold": l2_gate_threshold,
                 },
                 "stage2_subtype": {
                     "macro_f1": l2_f1,
                     "roc_auc": l2_auc,
+                    "pr_auc": l2_pr_auc,
+                    "precision": l2_precision,
+                    "recall": l2_recall,
                     "classes": l2_target_names,
                     "threshold": l2_threshold,
                 },
@@ -801,12 +881,24 @@ def run_training(args: argparse.Namespace) -> None:
         cef_valid_train_mask = cef_valid_train_mask & X_train.index.isin(gnb_pos_train_idx)
         cef_valid_test_mask = cef_valid_test_mask & X_test.index.isin(gnb_pos_test_idx)
 
+        gnb_f1 = float(f1_score(yg_test, gnb_test_pred, average="macro", zero_division=0))
+        gnb_precision = float(precision_score(yg_test, gnb_test_pred, average="macro", zero_division=0))
+        gnb_recall = float(recall_score(yg_test, gnb_test_pred, average="macro", zero_division=0))
+        gnb_pr_auc: Optional[float] = None
+        gnb_roc_auc: Optional[float] = None
+        if pd.Series(yg_test).nunique() > 1:
+            gnb_roc_auc = float(roc_auc_score(yg_test, gnb_test_proba))
+            gnb_pr_auc = float(average_precision_score(yg_test, gnb_test_proba))
+
         (l3_dir / "gnb_gate_summary.json").write_text(json.dumps({
             "target_positive_label": args.l3_gnb_positive_label,
             "params": gnb_params,
             "threshold": gnb_threshold,
-            "macro_f1": float(f1_score(yg_test, gnb_test_pred, average="macro", zero_division=0)),
-            "roc_auc": float(roc_auc_score(yg_test, gnb_test_proba)) if pd.Series(yg_test).nunique() > 1 else None,
+            "macro_f1": gnb_f1,
+            "roc_auc": gnb_roc_auc,
+            "pr_auc": gnb_pr_auc,
+            "precision": gnb_precision,
+            "recall": gnb_recall,
             "features": gnb_features,
             "shaprfecv_features": gnb_feats,
         }, indent=2))
@@ -909,12 +1001,21 @@ def run_training(args: argparse.Namespace) -> None:
         l3_test_pred = np.argmax(l3_test_proba, axis=1)
 
     l3_f1 = f1_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
+    l3_precision = precision_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
+    l3_recall = recall_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
+    l3_pr_auc: Optional[float] = None
     l3_auc: Optional[float] = None
     if y3_test_enc.nunique() > 1:
         if is_l3_binary:
             l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba[:, 1]))
+            l3_pr_auc = float(average_precision_score(y3_test_enc, l3_test_proba[:, 1]))
         else:
             l3_auc = float(roc_auc_score(y3_test_enc, l3_test_proba, multi_class="ovr", average="macro"))
+            l3_pr_auc = float(average_precision_score(
+                label_binarize(y3_test_enc, classes=np.arange(len(le_cef.classes_))),
+                l3_test_proba,
+                average="macro"
+            ))
 
     l3_report = classification_report(
         y3_test_enc, l3_test_pred,
@@ -930,6 +1031,9 @@ def run_training(args: argparse.Namespace) -> None:
         "threshold": l3_threshold,
         "macro_f1": l3_f1,
         "roc_auc": l3_auc,
+        "pr_auc": l3_pr_auc,
+        "precision": l3_precision,
+        "recall": l3_recall,
         "features": l3_features,
         "shaprfecv_features": l3_shap_feats,
         "hemo_positive_filter": True,
@@ -953,6 +1057,9 @@ def run_training(args: argparse.Namespace) -> None:
         "target": args.cef_target,
         "macro_f1": l3_f1,
         "roc_auc": l3_auc,
+        "pr_auc": l3_pr_auc,
+        "precision": l3_precision,
+        "recall": l3_recall,
         "classes": l3_target_names,
         "threshold": l3_threshold,
     }

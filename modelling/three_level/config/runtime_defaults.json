@@ -5,7 +5,7 @@
   },
   "targets": {
     "sepsis_target": "sepsis",
-    "hemo_target": "resultado_hemo_grouped",
+    "hemo_target": "resultado_hemo_gnb_selected",
     "hemo_negative_label": "NEGATIVE",
     "hemo_coco_label": "Coco gram+",
     "hemo_bacilo_label": "Bacilo gram-",
@@ -16,22 +16,28 @@
     "weight_column": "sample_weight"
   },
   "training": {
-    "model_type": "lgbm",
-    "binary_trials": 500,
+    "model_type": "catb",
+    "binary_trials": 10,
     "cv_splits": 5,
     "test_size": 0.35,
-    "random_state": 99,
+    "random_state": 42,
     "na_perc_limit": 0.2,
-    "max_features": null,
+    "max_features": 200,
     "l3_min_positive": 30,
-    "max_corr": 0.9,
+    "max_corr": 0.99,
     "impute_missing": true,
     "optuna_storage": "",
-    "optuna_study_prefix": "three_level",
-    "optuna_load_if_exists": false,
+    "optuna_study_prefix": "three_level_catb",
+    "optuna_load_if_exists": true,
     "skip_rfecv": false,
+    "skip_optuna": false,
+    "skip_level1": false,
+    "skip_level2": false,
+    "skip_level3": false,
     "skip_l2_gate": false,
-    "skip_l3_hemo_filter": false
+    "skip_l3_hemo_filter": false,
+    "l3_use_gnb_gate": false,
+    "l3_gnb_positive_label": "GNBSelected"
   },
   "categorical_for_dummies": ["foco", "ultimo_antib"]
 }

@@ -92,10 +92,15 @@ def preprocess_train_test_features(
     na_perc_limit: float,
     impute_missing: bool,
     categorical_for_dummies: List[str],
+    output_csv_paths: Optional[Dict[str, Path]] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Leakage-safe feature preprocessing: fit on train, transform test."""
     X_train = X_train_raw.copy()
     X_test = X_test_raw.copy()
+    
+    # Track NaN and imputation info for CSV export
+    nan_dropped_records: List[Dict[str, object]] = []
+    imputation_records: List[Dict[str, object]] = []
 
     # Drop target-related helper columns if present
     cols_to_drop = [c for c in _DROP_HELPER_COLUMNS if c in X_train.columns]
@@ -108,6 +113,9 @@ def preprocess_train_test_features(
     dropped_na = [col for col in X_train.columns if X_train[col].isna().mean() > na_perc_limit]
     if dropped_na:
         print(f"Dropping {len(dropped_na)} high-NA columns (train-based).")
+        for col in dropped_na:
+            nan_pct = X_train[col].isna().mean() * 100
+            nan_dropped_records.append({"feature": col, "nan_percentage": nan_pct})
         X_train = X_train.drop(columns=dropped_na)
         X_test = X_test.drop(columns=dropped_na, errors="ignore")
 
@@ -130,10 +138,26 @@ def preprocess_train_test_features(
             imp = SimpleImputer(strategy="most_frequent")
             X_train[binary_cols] = imp.fit_transform(X_train[binary_cols]).astype(int)
             X_test[binary_cols] = imp.transform(X_test[binary_cols]).astype(int)
+            for col in binary_cols:
+                n_imputed = X_train_raw[col].isna().sum()
+                if n_imputed > 0:
+                    imputation_records.append({
+                        "feature": col,
+                        "imputation_method": "most_frequent",
+                        "number_of_imputation": int(n_imputed)
+                    })
         if knn_cols:
             imp = KNNImputer(n_neighbors=_KNN_NEIGHBORS, weights=_KNN_WEIGHTS)
             X_train[knn_cols] = imp.fit_transform(X_train[knn_cols])
             X_test[knn_cols] = imp.transform(X_test[knn_cols])
+            for col in knn_cols:
+                n_imputed = X_train_raw[col].isna().sum()
+                if n_imputed > 0:
+                    imputation_records.append({
+                        "feature": col,
+                        "imputation_method": "knn",
+                        "number_of_imputation": int(n_imputed)
+                    })
             for col in knn_cols:
                 if X_train_raw[col].dropna().astype(float).apply(float.is_integer).all():
                     X_train[col] = X_train[col].round().astype(int)
@@ -142,6 +166,14 @@ def preprocess_train_test_features(
             imp = SimpleImputer(strategy="most_frequent")
             X_train[cat_cols] = imp.fit_transform(X_train[cat_cols]).astype(str)
             X_test[cat_cols] = imp.transform(X_test[cat_cols]).astype(str)
+            for col in cat_cols:
+                n_imputed = X_train_raw[col].isna().sum()
+                if n_imputed > 0:
+                    imputation_records.append({
+                        "feature": col,
+                        "imputation_method": "most_frequent",
+                        "number_of_imputation": int(n_imputed)
+                    })
         print("Imputed missing values with train-fitted imputers.")
     else:
         train_mask = X_train.notna().all(axis=1)
@@ -158,6 +190,20 @@ def preprocess_train_test_features(
         X_train.columns = X_train.columns.str.replace("[^0-9a-zA-Z_]+", "_", regex=True)
         X_test.columns = X_test.columns.str.replace("[^0-9a-zA-Z_]+", "_", regex=True)
         X_test = X_test.reindex(columns=X_train.columns, fill_value=0)
+
+    # Export NaN and imputation tracking CSVs if requested
+    if output_csv_paths:
+        if "nan_dropped" in output_csv_paths and nan_dropped_records:
+            Path(output_csv_paths["nan_dropped"]).parent.mkdir(parents=True, exist_ok=True)
+            df_nan = pd.DataFrame(nan_dropped_records)
+            df_nan.to_csv(output_csv_paths["nan_dropped"], index=False)
+            print(f"  Saved NaN-dropped features to {output_csv_paths['nan_dropped']}")
+        
+        if "imputed" in output_csv_paths and imputation_records:
+            Path(output_csv_paths["imputed"]).parent.mkdir(parents=True, exist_ok=True)
+            df_imputed = pd.DataFrame(imputation_records)
+            df_imputed.to_csv(output_csv_paths["imputed"], index=False)
+            print(f"  Saved imputed features to {output_csv_paths['imputed']}")
 
     return X_train, X_test
 
