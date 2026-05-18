@@ -36,6 +36,8 @@
     "skip_level3": false,
     "skip_l2_gate": false,
     "skip_l3_hemo_filter": false,
+    "l2_gate_proba_as_feature": false,
+    "l3_gnb_gate_proba_as_feature": false,
     "l3_use_gnb_gate": false,
     "l3_gnb_positive_label": "GNBSelected"
   },

@@ -569,7 +569,18 @@ def run_training(args: argparse.Namespace) -> None:
             l2_gate_model = _fit_calibrated_or_base(
                 l2_gate_base, X2_gate_train_scaled, y2_gate_train, max_cv=5, method="isotonic"
             )
+            l2_gate_train_proba = l2_gate_model.predict_proba(X2_gate_train_scaled)[:, 1]
+            l2_gate_train_proba = pd.Series(
+                l2_gate_train_proba,
+                index=X2_gate_train_scaled.index,
+                name="l2_gate_proba",
+            )
             l2_gate_test_proba = l2_gate_model.predict_proba(X2_gate_test_scaled)[:, 1]
+            l2_gate_test_proba = pd.Series(
+                l2_gate_test_proba,
+                index=X2_gate_test_scaled.index,
+                name="l2_gate_proba",
+            )
             l2_gate_test_pred = (l2_gate_test_proba >= l2_gate_threshold).astype(int)
             l2_gate_f1 = f1_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
             l2_gate_precision = precision_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
@@ -586,6 +597,14 @@ def run_training(args: argparse.Namespace) -> None:
 
             X2_sub_train_base = X_train.loc[subtype_train_mask].copy()
             X2_sub_test_base = X_test.loc[subtype_test_mask].copy()
+            if args.l2_gate_proba_as_feature:
+                print("  Adding Level 2 gate probability as a feature to Stage 2 subtype modelling.")
+                X2_sub_train_base = X2_sub_train_base.join(
+                    l2_gate_train_proba.loc[subtype_train_mask], how="left"
+                )
+                X2_sub_test_base = X2_sub_test_base.join(
+                    l2_gate_test_proba.loc[subtype_test_mask], how="left"
+                )
             y2_sub_train_raw = y_hemo_train.loc[subtype_train_mask].astype(str)
             y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
 
@@ -726,6 +745,7 @@ def run_training(args: argparse.Namespace) -> None:
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
                 "roc_auc": l2_auc,
+                "gate_proba_feature": args.l2_gate_proba_as_feature,
                 "shaprfecv_features": l2_shap_feats,
                 "features": l2_features,
             }
@@ -780,6 +800,7 @@ def run_training(args: argparse.Namespace) -> None:
                     "recall": l2_gate_recall,
                     "negative_label": args.hemo_negative_label,
                     "threshold": l2_gate_threshold,
+                    "gate_proba_feature": args.l2_gate_proba_as_feature,
                 },
                 "stage2_subtype": {
                     "macro_f1": l2_f1,
@@ -871,15 +892,29 @@ def run_training(args: argparse.Namespace) -> None:
         )
         gnb_base = build_binary_model(args.model_type, gnb_params.copy())
         gnb_model = _fit_calibrated_or_base(gnb_base, Xg_train_scaled, pd.Series(yg_train, index=Xg_train_scaled.index), max_cv=5, method="isotonic")
+        gnb_train_proba = gnb_model.predict_proba(Xg_train_scaled)[:, 1]
+        gnb_train_proba = pd.Series(
+            gnb_train_proba,
+            index=Xg_train_scaled.index,
+            name="l3_gnb_gate_proba",
+        )
         gnb_test_proba = gnb_model.predict_proba(Xg_test_scaled)[:, 1]
+        gnb_test_proba = pd.Series(
+            gnb_test_proba,
+            index=Xg_test_scaled.index,
+            name="l3_gnb_gate_proba",
+        )
         gnb_test_pred = (gnb_test_proba >= gnb_threshold).astype(int)
 
         # Stage-2 resistance uses true GNB positives in train and predicted GNB positives in test.
         gnb_pos_train_idx = Xg_train_scaled.index[pd.Series(yg_train, index=Xg_train_scaled.index) == 1]
         gnb_pos_test_idx = Xg_test_scaled.index[pd.Series(gnb_test_pred, index=Xg_test_scaled.index) == 1]
 
-        cef_valid_train_mask = cef_valid_train_mask & X_train.index.isin(gnb_pos_train_idx)
-        cef_valid_test_mask = cef_valid_test_mask & X_test.index.isin(gnb_pos_test_idx)
+        if args.l3_gnb_gate_proba_as_feature:
+            print("  Passing L3 GNB gate probability as an extra feature to the resistance model.")
+        else:
+            cef_valid_train_mask = cef_valid_train_mask & X_train.index.isin(gnb_pos_train_idx)
+            cef_valid_test_mask = cef_valid_test_mask & X_test.index.isin(gnb_pos_test_idx)
 
         gnb_f1 = float(f1_score(yg_test, gnb_test_pred, average="macro", zero_division=0))
         gnb_precision = float(precision_score(yg_test, gnb_test_pred, average="macro", zero_division=0))
@@ -901,6 +936,8 @@ def run_training(args: argparse.Namespace) -> None:
             "recall": gnb_recall,
             "features": gnb_features,
             "shaprfecv_features": gnb_feats,
+            "feature_as_signal": args.l3_gnb_gate_proba_as_feature,
+            "gate_mode": "proba_feature" if args.l3_gnb_gate_proba_as_feature else "hard_subset",
         }, indent=2))
         gnb_study.trials_dataframe().to_csv(l3_dir / "gnb_gate_optuna_trials.csv", index=False)
         pd.DataFrame({
@@ -920,6 +957,9 @@ def run_training(args: argparse.Namespace) -> None:
     # train/predict resistance target only on positive hemoculture rows.
     X3_train_base = X_train.loc[cef_valid_train_mask].copy()
     X3_test_base = X_test.loc[cef_valid_test_mask].copy()
+    if args.l3_use_gnb_gate and args.l3_gnb_gate_proba_as_feature:
+        X3_train_base = X3_train_base.join(gnb_train_proba, how="left")
+        X3_test_base = X3_test_base.join(gnb_test_proba, how="left")
     y3_train_raw = y_cef_train.loc[cef_valid_train_mask].astype(str)
     y3_test_raw = y_cef_test.loc[cef_valid_test_mask].astype(str)
 
