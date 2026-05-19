@@ -18,9 +18,15 @@ import pandas as pd
 ROOT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT_DIR.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "playground" / "db_bacthecom.db"
-DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "playground" / "preprocess_bathecomb.csv"
+DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "playground" / "preprocess_bacthecom_mortality.csv"
 DEFAULT_DROP_COLUMNS_PATH = ROOT_DIR / "config" / "preprocess_columns_to_drop.txt"
-ADMISSION_KEYS = ["record_id", "fecha_ingreso"]
+# Final ML row definition: one row per patient admission and the selected blood-culture date.
+# The selected blood culture is the earliest fecha_hemocultivo on/after admission,
+# allowing a 2-day pre-admission buffer.
+BASE_ADMISSION_KEYS = ["record_id", "fecha_ingreso"]
+EPISODE_KEYS = ["record_id", "fecha_ingreso", "fecha_hemocultivo"]
+ADMISSION_KEYS = EPISODE_KEYS
+HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS = 2
 
 
 @dataclass
@@ -239,20 +245,20 @@ def git_output(args: list[str]) -> str:
 
 def run_metadata(run_label: str) -> dict[str, str]:
     tracked = [
-        "bathecomb/preprocess_pipeline.py",
-        "bathecomb/config/preprocess_columns_to_drop.txt",
-        "bathecomb/config/preprocess_report.yml",
+        "bacthecom/preprocess_pipeline.py",
+        "bacthecom/config/preprocess_columns_to_drop.txt",
+        "bacthecom/config/preprocess_report.yml",
     ]
     dirty = git_output(["status", "--porcelain", "--", *tracked])
     return {
-        "config_name": "bathecomb_first_pass",
+        "config_name": "bacthecom_mortality_episode_level",
         "config_version": "0.1.0",
         "config_path": "",
         "git_head_commit": git_output(["rev-parse", "HEAD"]),
         "preprocess_script_commit": git_output(
-            ["log", "-1", "--format=%H", "--", "bathecomb/preprocess_pipeline.py"]
+            ["log", "-1", "--format=%H", "--", "bacthecom/preprocess_pipeline.py"]
         ),
-        "preprocess_script_blob": git_output(["hash-object", "bathecomb/preprocess_pipeline.py"]),
+        "preprocess_script_blob": git_output(["hash-object", "bacthecom/preprocess_pipeline.py"]),
         "preprocess_code_dirty": "yes" if dirty else "no",
         "run_label": run_label,
     }
@@ -357,12 +363,13 @@ def clean_missing_values(df: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def normalize_sex(value: Any) -> str | float:
+def normalize_sex(value: Any) -> int | float:
+    """Encode sex for modelling: M=1, F=0."""
     normalized = normalize_text(value)
     if normalized in {"hombre", "m", "male"}:
-        return "M"
+        return 1
     if normalized in {"mujer", "f", "female"}:
-        return "F"
+        return 0
     return np.nan
 
 
@@ -394,6 +401,63 @@ def duplicate_key_groups(df: pd.DataFrame, keys: list[str]) -> int:
     return int(df.loc[duplicated, keys].drop_duplicates().shape[0])
 
 
+def keep_first_hemoculture_with_buffer(
+    df: pd.DataFrame,
+    *,
+    buffer_days: int = HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """Return one selected hemoculture row per record_id + fecha_ingreso.
+
+    Selection rule:
+    - eligible hemocultures satisfy fecha_hemocultivo >= fecha_ingreso - buffer_days
+    - among eligible hemocultures, keep the earliest fecha_hemocultivo
+
+    Rows without fecha_ingreso or fecha_hemocultivo cannot define the requested ML
+    episode key and are excluded from the selected base cohort.
+    """
+    if df.empty:
+        return df.copy(), {
+            "input_rows": 0,
+            "rows_missing_required_dates": 0,
+            "rows_before_buffer": 0,
+            "selected_rows": 0,
+            "selected_admissions": 0,
+        }
+
+    work = df.copy()
+    work["fecha_ingreso"] = pd.to_datetime(work["fecha_ingreso"], errors="coerce")
+    work["fecha_hemocultivo"] = pd.to_datetime(work["fecha_hemocultivo"], errors="coerce")
+
+    required_ok = work["record_id"].notna() & work["fecha_ingreso"].notna() & work["fecha_hemocultivo"].notna()
+    rows_missing_required_dates = int((~required_ok).sum())
+    work = work.loc[required_ok].copy()
+
+    lower_bound = work["fecha_ingreso"] - pd.to_timedelta(buffer_days, unit="D")
+    eligible = work["fecha_hemocultivo"] >= lower_bound
+    rows_before_buffer = int((~eligible).sum())
+    work = work.loc[eligible].copy()
+
+    work["days_hemoculture_from_admission"] = (
+        work["fecha_hemocultivo"] - work["fecha_ingreso"]
+    ).dt.days
+
+    # Stable deterministic choice: earliest hemoculture; ties resolved by original row order.
+    work["__original_order"] = np.arange(len(work))
+    work = work.sort_values(
+        ["record_id", "fecha_ingreso", "fecha_hemocultivo", "__original_order"]
+    )
+    selected = work.drop_duplicates(subset=BASE_ADMISSION_KEYS, keep="first").drop(columns="__original_order")
+
+    stats = {
+        "input_rows": int(len(df)),
+        "rows_missing_required_dates": rows_missing_required_dates,
+        "rows_before_buffer": rows_before_buffer,
+        "selected_rows": int(len(selected)),
+        "selected_admissions": int(selected[BASE_ADMISSION_KEYS].drop_duplicates().shape[0]),
+    }
+    return selected, stats
+
+
 def validate_result(result: PreprocessResult) -> PreprocessResult:
     missing = [key for key in result.log.merge_keys if key not in result.df.columns]
     if missing:
@@ -406,6 +470,17 @@ def validate_result(result: PreprocessResult) -> PreprocessResult:
         )
     result.log.validation_checks.append(f"row_count:{len(result.df)}")
     return result
+
+
+def normalize_merge_key_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Ensure merge keys have identical dtypes in all preprocessed tables."""
+    df = df.copy()
+    if "record_id" in df.columns:
+        df["record_id"] = pd.to_numeric(df["record_id"], errors="coerce").astype("Int64")
+    for column in ["fecha_ingreso", "fecha_hemocultivo"]:
+        if column in df.columns:
+            df[column] = pd.to_datetime(df[column], errors="coerce").dt.normalize()
+    return df
 
 
 def aggregate_binary_max(df: pd.DataFrame, keys: list[str], columns: list[str]) -> pd.DataFrame:
@@ -430,7 +505,7 @@ def preprocess_paciente(tables: dict[str, pd.DataFrame], metadata: dict[str, str
         "recoded_variables",
         source="sexo",
         target="sexo",
-        how="normalize Hombre/Mujer/M/F values to M/F",
+        how="normalize Hombre/Mujer/M/F values to binary sexo: M=1, F=0",
     )
     return validate_result(PreprocessResult(df=df, log=log))
 
@@ -443,6 +518,14 @@ def preprocess_episodio_ingreso(
     for column in ["fecha_ingreso", "fecha_alta", "fecha_hemocultivo", "fecha_mortalidad"]:
         if column in df.columns:
             df[column] = pd.to_datetime(df[column], errors="coerce")
+
+    # Enforce one ML episode per admission: choose the first hemoculture since admission,
+    # allowing a 2-day pre-admission buffer.
+    df, selection_stats = keep_first_hemoculture_with_buffer(
+        df,
+        buffer_days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+    )
+
     binary_columns = [
         "foco_controlable",
         "foco_controlado",
@@ -458,10 +541,10 @@ def preprocess_episodio_ingreso(
         "duracion_UCI",
         "dias_hemocultivo_ingresoUCI",
         "dias_hemocultivo_salidaUCI",
+        "days_hemoculture_from_admission",
     ]
     categorical_columns = [
         "fecha_alta",
-        "fecha_hemocultivo",
         "organo_aparato",
         "control_foco",
         "IRAs_nosocomial",
@@ -472,6 +555,7 @@ def preprocess_episodio_ingreso(
     agg.update({column: "max" for column in binary_columns if column in df.columns})
     agg.update({column: "max" for column in numeric_columns if column in df.columns})
     agg.update({column: first_notna for column in categorical_columns if column in df.columns})
+
     result = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(agg)
     result["admission_id"] = (
         result["record_id"].astype("Int64").astype(str)
@@ -490,11 +574,22 @@ def preprocess_episodio_ingreso(
         "transformed_variables",
         source=source.columns.tolist(),
         target=result.columns.tolist(),
-        how="aggregate duplicate admission rows to one row per record_id and fecha_ingreso",
+        how=(
+            "select earliest fecha_hemocultivo per record_id + fecha_ingreso using "
+            f">= fecha_ingreso - {HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS} days buffer, "
+            "then aggregate duplicate selected episode rows"
+        ),
     )
-    log.notes.append("Admission level is defined as record_id + fecha_ingreso.")
+    log.metadata.update({f"hemoculture_selection_{k}": v for k, v in selection_stats.items()})
+    log.notes.append(
+        "ML unit is one row per record_id + fecha_ingreso + selected fecha_hemocultivo; "
+        f"selection allows {HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS} pre-admission days."
+    )
+    log.validation_checks.append(
+        "selected_hemoculture_duplicate_admissions:"
+        f"{duplicate_key_groups(result, BASE_ADMISSION_KEYS)}"
+    )
     return validate_result(PreprocessResult(df=result, log=log))
-
 
 def preprocess_simple_admission_table(
     tables: dict[str, pd.DataFrame],
@@ -539,6 +634,8 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
     source = clean_missing_values(tables["laboratorio"])
     df = source.copy()
     df["fecha_ingreso"] = pd.to_datetime(df["fecha_ingreso"], errors="coerce")
+    if "fecha_hemocultivo" in df.columns:
+        df["fecha_hemocultivo"] = pd.to_datetime(df["fecha_hemocultivo"], errors="coerce")
     lab_columns = [
         column
         for column in df.columns
@@ -546,14 +643,12 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
     ]
     for column in lab_columns:
         df[column] = pd.to_numeric(df[column], errors="coerce")
-    grouped = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False)
-    result = grouped[lab_columns].agg(["mean", "max"])
-    result.columns = [
-        "_".join(part for part in column if part) if isinstance(column, tuple) else str(column)
-        for column in result.columns
-    ]
-    result = result.reset_index()
-    result["laboratorio_n_rows"] = grouped.size()["size"].to_numpy()
+
+    # Keep one value per lab feature. Do not create *_mean / *_max features and do not
+    # add laboratorio_n_rows; those summaries are not meaningful for this mortality model.
+    result = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(
+        {column: first_notna for column in lab_columns}
+    )
     log = finalize_log(table_name="laboratorio", input_df=source, output_df=result, merge_keys=ADMISSION_KEYS)
     attach_metadata(log, metadata)
     add_change(
@@ -561,7 +656,7 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
         "transformed_variables",
         source=lab_columns,
         target=[column for column in result.columns if column not in ADMISSION_KEYS],
-        how="aggregate repeated laboratory rows per admission using mean and max",
+        how="collapse laboratory rows to one value per selected hemoculture using first non-missing value; no *_mean, *_max, or row-count features",
     )
     return validate_result(PreprocessResult(df=result, log=log))
 
@@ -597,6 +692,8 @@ def preprocess_episodio_infeccion(
     df = source.copy()
     df["fecha_ingreso"] = pd.to_datetime(df["fecha_ingreso"], errors="coerce")
     df["fecha_cultivo"] = pd.to_datetime(df["fecha_cultivo"], errors="coerce")
+    # Harmonize infection culture date with the pipeline merge key.
+    df["fecha_hemocultivo"] = df["fecha_cultivo"]
     df["days_culture_from_admission"] = (
         df["fecha_cultivo"] - df["fecha_ingreso"]
     ).dt.days
@@ -671,8 +768,10 @@ def preprocess_antibiograma(
     tables: dict[str, pd.DataFrame], metadata: dict[str, str]
 ) -> PreprocessResult:
     source = clean_missing_values(tables["antibiograma"])
-    infections = tables["episodio_infeccion"][["episode_id", "record_id", "fecha_ingreso"]].copy()
+    infections = tables["episodio_infeccion"][["episode_id", "record_id", "fecha_ingreso", "fecha_cultivo"]].copy()
     infections["fecha_ingreso"] = pd.to_datetime(infections["fecha_ingreso"], errors="coerce")
+    infections["fecha_hemocultivo"] = pd.to_datetime(infections["fecha_cultivo"], errors="coerce")
+    infections = infections.drop(columns=["fecha_cultivo"])
     df = source.merge(infections, on="episode_id", how="left")
     df["family"] = df["antimicrobiano"].map(antimicrobial_family)
     df["is_resistant"] = df["interpretacion"].eq("R").astype(int)
@@ -720,8 +819,10 @@ def preprocess_tto_antimicrobiano(
     tables: dict[str, pd.DataFrame], metadata: dict[str, str]
 ) -> PreprocessResult:
     source = clean_missing_values(tables["tto_antimicrobiano"])
-    infections = tables["episodio_infeccion"][["episode_id", "record_id", "fecha_ingreso"]].copy()
+    infections = tables["episodio_infeccion"][["episode_id", "record_id", "fecha_ingreso", "fecha_cultivo"]].copy()
     infections["fecha_ingreso"] = pd.to_datetime(infections["fecha_ingreso"], errors="coerce")
+    infections["fecha_hemocultivo"] = pd.to_datetime(infections["fecha_cultivo"], errors="coerce")
+    infections = infections.drop(columns=["fecha_cultivo"])
     df = source.merge(infections, on="episode_id", how="left")
     df["dias_tratamiento"] = pd.to_numeric(df["dias_tratamiento"], errors="coerce")
     df["treatment_family"] = df["antimicrobiano"].map(antimicrobial_family)
@@ -759,20 +860,22 @@ def preprocess_tto_antimicrobiano(
 
 
 def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]) -> PreprocessResult:
-    base = results["episodio_ingreso"].df.copy()
+    base = normalize_merge_key_dtypes(results["episodio_ingreso"].df.copy())
     input_df = base.copy()
     for name, result in results.items():
         if name == "episodio_ingreso":
             continue
+        right = normalize_merge_key_dtypes(result.df)
         if result.log.merge_keys == ["record_id"]:
-            base = base.merge(result.df, on="record_id", how="left")
+            base = base.merge(right, on="record_id", how="left")
         else:
-            base = base.merge(result.df, on=ADMISSION_KEYS, how="left")
+            base = base.merge(right, on=ADMISSION_KEYS, how="left")
+
     base["fecha_ingreso"] = pd.to_datetime(base["fecha_ingreso"], errors="coerce")
     if "fecha_nacimiento" in base.columns:
-        base["age_at_admission"] = (
-            (base["fecha_ingreso"] - base["fecha_nacimiento"]).dt.days / 365.25
-        ).round(1)
+        base["age"] = ((base["fecha_ingreso"] - base["fecha_nacimiento"]).dt.days / 365.25).round(1)
+
+    # Fill count-like variables created before the selected hemoculture.
     count_defaults = [
         column
         for column in base.columns
@@ -794,10 +897,34 @@ def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]
         "resistance_mechanism_labels",
         "antibiogram_resistant_drugs",
         "antibiogram_resistant_families",
-        "treatment_drug_list",
     ]:
         if column in base.columns:
             base[column] = base[column].fillna("[]")
+
+    columns_to_drop = [
+        "index",
+        "episode_key",
+        "fecha_nacimiento",
+        "age_at_admission",
+        "age_at_hemoculture",
+        "tipo_cancer",
+        "tipo_hepatopatia",
+        "causa_inmunosupresion",
+        "clasificacion_quemadura",
+        "duracion_sintoma",
+        "laboratorio_n_rows",
+    ]
+    columns_to_drop.extend([c for c in base.columns if c.endswith("_mean") or c.endswith("_max")])
+    columns_to_drop.extend([c for c in base.columns if c.startswith("treatment_")])
+    base = base.drop(columns=[c for c in columns_to_drop if c in base.columns], errors="ignore")
+
+    duplicate_selected_admissions = duplicate_key_groups(base, BASE_ADMISSION_KEYS)
+    if duplicate_selected_admissions:
+        raise ValueError(
+            "Final dataset is not one row per record_id + fecha_ingreso after hemoculture selection: "
+            f"{duplicate_selected_admissions} duplicated admission groups."
+        )
+
     log = finalize_log(
         table_name="merged_dataset",
         input_df=input_df,
@@ -809,16 +936,27 @@ def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]
         log,
         "created_variables",
         source=["fecha_ingreso", "fecha_nacimiento"],
-        target="age_at_admission",
-        how="calculate patient age at each admission date",
+        target="age",
+        how="calculate patient age at admission date only; no age_at_hemoculture variable is created",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=columns_to_drop,
+        target=base.columns.tolist(),
+        how="drop leakage/non-modelling columns and non-informative text or aggregation artifacts",
     )
     add_change(
         log,
         "transformed_variables",
         source=list(results.keys()),
         target=base.columns.tolist(),
-        how="left-join all admission-level tables to episodio_ingreso base",
+        how=(
+            "left-join all episode-level tables to selected episodio_ingreso base; "
+            "final base contains one selected hemoculture per admission"
+        ),
     )
+    log.validation_checks.append(f"duplicate_selected_admissions:{duplicate_selected_admissions}")
     return validate_result(PreprocessResult(df=base, log=log))
 
 
@@ -826,6 +964,22 @@ def export_dataset_outputs(
     df: pd.DataFrame, output_path: Path, drop_columns_path: Path
 ) -> tuple[pd.DataFrame, list[str], Path]:
     serializable = df.copy()
+    automatic_drop_columns = [
+        "index",
+        "episode_key",
+        "fecha_nacimiento",
+        "age_at_admission",
+        "age_at_hemoculture",
+        "tipo_cancer",
+        "tipo_hepatopatia",
+        "causa_inmunosupresion",
+        "clasificacion_quemadura",
+        "duracion_sintoma",
+        "laboratorio_n_rows",
+    ]
+    automatic_drop_columns.extend([c for c in serializable.columns if c.endswith("_mean") or c.endswith("_max")])
+    automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("treatment_")])
+    serializable = serializable.drop(columns=[c for c in automatic_drop_columns if c in serializable.columns], errors="ignore")
     for column in serializable.select_dtypes(include=["datetime64[ns]"]).columns:
         serializable[column] = serializable[column].dt.strftime("%Y-%m-%d")
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -834,7 +988,7 @@ def export_dataset_outputs(
     filtered = serializable.drop(columns=drop_columns, errors="ignore")
     filtered_path = output_path.with_name(f"{output_path.stem}_filtered.csv")
     filtered.to_csv(filtered_path, index=False)
-    return filtered, drop_columns, filtered_path
+    return filtered, sorted(set(drop_columns + [c for c in automatic_drop_columns if c in df.columns])), filtered_path
 
 
 def build_run_log(
@@ -857,7 +1011,8 @@ def build_run_log(
             f"input_file_path={input_path}",
             f"output_file_path={output_path}",
             f"drop_columns_path={drop_columns_path}",
-            "aggregation_level=record_id + fecha_ingreso",
+            "aggregation_level=one selected fecha_hemocultivo per record_id + fecha_ingreso",
+            "antimicrobial_treatment_exposure=excluded_to_avoid_post_hemoculture_leakage",
         ]
     )
     return log
@@ -934,11 +1089,7 @@ def run_pipeline(
             "gran_quemado",
         ],
         categorical_columns=[
-            "tipo_cancer",
             "puntaje_child_pugh",
-            "tipo_hepatopatia",
-            "causa_inmunosupresion",
-            "clasificacion_quemadura",
         ],
     )
     results["factores_riesgo_infeccion_bmr"] = preprocess_simple_admission_table(
@@ -989,7 +1140,6 @@ def run_pipeline(
         ],
         numeric_max_columns=[
             "qsofa",
-            "duracion_sintoma",
             "indice_de_charlson",
             "escala_karnofsky",
             "barthel_inf_90",
@@ -1006,7 +1156,8 @@ def run_pipeline(
     results["episodio_uci"] = preprocess_episodio_uci(tables, metadata)
     results["episodio_infeccion"] = preprocess_episodio_infeccion(tables, metadata)
     results["antibiograma"] = preprocess_antibiograma(tables, metadata)
-    results["tto_antimicrobiano"] = preprocess_tto_antimicrobiano(tables, metadata)
+    # Do not include antimicrobial treatment exposures: antibiotics given after the
+    # hemoculture are post-index information and can leak outcome/severity.
     merged = merge_results(results, metadata)
 
     filtered_df, dropped_columns, filtered_path = export_dataset_outputs(
@@ -1042,7 +1193,7 @@ def run_pipeline(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Preprocess BATHECOMB SQLite data into an admission-level dataset."
+        description="Preprocess BAcTHECOM SQLite data into a blood-culture episode-level mortality modelling dataset."
     )
     parser.add_argument("--input-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--output-path", type=Path, default=DEFAULT_OUTPUT_PATH)
