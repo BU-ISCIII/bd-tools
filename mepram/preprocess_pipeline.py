@@ -273,6 +273,7 @@ def load_config_module(config_file_path: Path) -> dict[str, Any]:
     return config
 
 
+
 def load_tables(db_file_path: Path) -> dict[str, pd.DataFrame]:
     with sqlite3.connect(db_file_path) as conn:
         table_names = pd.read_sql_query(
@@ -3145,6 +3146,133 @@ def build_targets(
         ),
     )
 
+    other_culture_resolutions = pd.DataFrame(
+        [
+            {
+                "person_id": int(key.split("|", 1)[0]),
+                "_fecha_ingreso_urgencias_key": key.split("|", 1)[1],
+                "other_culture_etiology": etiology,
+            }
+            for key, etiology in config["OTHER_CULTURE_ETIOLOGY_RESOLUTIONS"].items()
+        ]
+    )
+    result["resultado_inf_mo"] = result["resultado_hemo_mo"]
+    if other_culture_resolutions.empty:
+        log.warnings.append(
+            "No clinician-resolved other-culture etiologies configured; "
+            "resultado_inf_mo matches resultado_hemo_mo."
+        )
+        matched_other_culture_resolutions = 0
+    else:
+        result["_fecha_ingreso_urgencias_key"] = (
+            pd.to_datetime(result["fecha_ingreso_urgencias"], errors="coerce")
+            .dt.strftime("%Y-%m-%d")
+        )
+        result = result.merge(
+            other_culture_resolutions,
+            on=["person_id", "_fecha_ingreso_urgencias_key"],
+            how="left",
+        )
+        use_other_culture = (
+            result["resultado_hemo_mo"].eq("NEGATIVE")
+            & result["other_culture_etiology"].notna()
+        )
+        result.loc[use_other_culture, "resultado_inf_mo"] = result.loc[
+            use_other_culture,
+            "other_culture_etiology",
+        ]
+        matched_other_culture_resolutions = int(use_other_culture.sum())
+        result = result.drop(columns=["_fecha_ingreso_urgencias_key", "other_culture_etiology"])
+    log.validation_checks.append(
+        f"matched_configured_other_culture_etiology_resolutions:{matched_other_culture_resolutions}"
+    )
+    add_change(
+        log,
+        "created_variables",
+        source=["resultado_hemo_mo", "OTHER_CULTURE_ETIOLOGY_RESOLUTIONS"],
+        target="resultado_inf_mo",
+        how=(
+            "infection microorganism target: keep hemoculture microorganism when "
+            "hemoculture is positive; for NEGATIVE hemoculture admissions, use the "
+            "clinician-resolved other-culture etiology configured in "
+            "OTHER_CULTURE_ETIOLOGY_RESOLUTIONS when available."
+        ),
+        variable_type="target",
+        n_classes=variable_class_count(result["resultado_inf_mo"]),
+        descriptions=describe_columns(
+            "resultado_inf_mo",
+            "Prediction target or target-support variable derived during target building.",
+        ),
+    )
+
+
+    missing_inf_gnb_classes = sorted(
+        set(result["resultado_inf_mo"].dropna().astype(str).unique()) - set(gnb_class_map)
+    )
+    if missing_inf_gnb_classes:
+        raise ValueError(
+            "Missing HEMOCULTURE_MICROORGANISM_GNB_CLASS entries for "
+            f"{missing_inf_gnb_classes}"
+        )
+    resultado_inf_gnb_class = result["resultado_inf_mo"].map(gnb_class_map)
+    result["resultado_inf_gnbselected"] = np.select(
+        [
+            result["resultado_inf_mo"] == "NEGATIVE",
+            resultado_inf_gnb_class == "GNBSelected",
+        ],
+        [
+            "NEGATIVE",
+            "GNBSelected",
+        ],
+        default="other_etiology",
+    )
+    result["resultado_inf_gnball"] = np.select(
+        [
+            result["resultado_inf_mo"] == "NEGATIVE",
+            resultado_inf_gnb_class.isin(["GNBSelected", "GNB"]),
+        ],
+        [
+            "NEGATIVE",
+            "GNBAll",
+        ],
+        default="other_etiology",
+    )
+    result["infected_yes_no_wother_cultures"] = np.where(
+        result["resultado_inf_mo"] == "NEGATIVE",
+        "NEGATIVE",
+        "POSITIVE",
+    )
+    add_change(
+        log,
+        "created_variables",
+        source="resultado_inf_mo",
+        target=[
+            "infected_yes_no_wother_cultures",
+            "resultado_inf_gnbselected",
+            "resultado_inf_gnball",
+        ],
+        how=(
+            "derive infection targets from the hemoculture-or-other-culture "
+            "microorganism target: POSITIVE if not NEGATIVE; selected GNB only "
+            "for configured GNBSelected labels; all GNB for configured GNBSelected "
+            "or generic GNB labels; all other detected etiologies become other_etiology."
+        ),
+        variable_type="target",
+        n_classes={
+            "infected_yes_no_wother_cultures": variable_class_count(result["infected_yes_no_wother_cultures"]),
+            "resultado_inf_gnbselected": variable_class_count(result["resultado_inf_gnbselected"]),
+            "resultado_inf_gnball": variable_class_count(result["resultado_inf_gnball"]),
+        },
+        descriptions=describe_columns(
+            [
+                "infected_yes_no_wother_cultures",
+                "resultado_inf_gnbselected",
+                "resultado_inf_gnball",
+            ],
+            "Prediction target or target-support variable derived during target building.",
+        ),
+    )
+
     result["infected_yes_no"] = np.where(
         result["resultado_hemo"] == "NEGATIVE",
         "NEGATIVE",
@@ -3430,7 +3558,11 @@ def run_pipeline(
 
     merged = merge_preprocessed_tables(results, config)
     cross_features = build_cross_table_features(merged.df, config)
-    targets = build_targets(cross_features.df, maps, config)
+    targets = build_targets(
+        cross_features.df,
+        maps,
+        config,
+    )
 
     logs = [
         build_run_log(

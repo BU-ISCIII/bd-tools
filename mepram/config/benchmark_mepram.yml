@@ -31,13 +31,17 @@ data:
     - sepsis
     - resultado_hemo
     - resultado_hemo_mo
+    - resultado_inf_mo
     - resultado_hemo_grouped
     - resultado_hemo_gnb_selected
     - resultado_hemo_gnb_all
+    - resultado_inf_gnbselected
+    - resultado_inf_gnball
     - resultado_hemo_multilabel
     - all_cult_org
     - dominant_all_cult_org
     - infected_yes_no
+    - infected_yes_no_wother_cultures
     - bmr_etiologia
     - fenotipo_resistencia
     - fenotipo_resistencia_individual
@@ -140,6 +144,18 @@ targets:
     main_metric: log_loss
 
   - name: resultado_hemo_gnb_all
+    type: multiclass
+    main_metric: log_loss
+
+  - name: infected_yes_no_wother_cultures
+    type: binary
+    main_metric: roc_auc
+
+  - name: resultado_inf_gnbselected
+    type: multiclass
+    main_metric: log_loss
+
+  - name: resultado_inf_gnball
     type: multiclass
     main_metric: log_loss
 

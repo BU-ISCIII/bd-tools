@@ -63,7 +63,40 @@ predictive_targets:
       GNBAll: All Gram-negative bacillus etiologies
       other_etiology: Other detected etiology
 
-  - model: Model 5 - Resistance
+
+  - model: Model 5 - Infection with other cultures
+    target_column: infected_yes_no_wother_cultures
+    notes: >-
+      Binary infection target using hemoculture etiology first and clinician-resolved
+      other-culture etiology when hemoculture is negative.
+    class_labels:
+      NEGATIVE: No detected etiology
+      POSITIVE: Detected etiology in hemoculture or other cultures
+
+  - model: Model 6 - Infection GNB selected etiology
+    target_column: resultado_inf_gnbselected
+    notes: >-
+      Hemoculture-or-other-culture etiology target. Selected Gram-negative
+      organisms are grouped as GNBSelected, NEGATIVE stays NEGATIVE, and all
+      other detected etiologies, including polimicrobiana and generic GNB, are
+      grouped as other_etiology.
+    class_labels:
+      NEGATIVE: No detected etiology
+      GNBSelected: Selected Gram-negative bacillus etiology
+      other_etiology: Other detected etiology
+
+  - model: Model 7 - Infection GNB all etiology
+    target_column: resultado_inf_gnball
+    notes: >-
+      Hemoculture-or-other-culture etiology target. Configured selected GNB and
+      generic GNB clinician labels are grouped as GNBAll, NEGATIVE stays
+      NEGATIVE, and all other detected etiologies are grouped as other_etiology.
+    class_labels:
+      NEGATIVE: No detected etiology
+      GNBAll: All Gram-negative bacillus etiologies
+      other_etiology: Other detected etiology
+
+  - model: Model 8 - Resistance
     target_column: resistente_cefalosporina
     notes: >-
       Restricted to grouped positive blood cultures
@@ -119,6 +152,34 @@ target_evolution:
     notes: >-
       Pipeline target grouped into NEGATIVE, all configured Gram-negative
       bacilli/coccobacilli (GNBAll), and other_etiology.
+
+
+  - domain: Etiology
+    target_version: Infection microorganism with other cultures
+    target_columns:
+      - resultado_inf_mo
+    count_mode: single
+    notes: >-
+      Infection microorganism target using hemoculture etiology first and
+      clinician-resolved other-culture etiology when hemoculture is negative.
+
+  - domain: Etiology
+    target_version: Infection GNB selected with other cultures
+    target_columns:
+      - resultado_inf_gnbselected
+    count_mode: single
+    notes: >-
+      Combined infection target grouped into NEGATIVE, selected Gram-negative
+      organisms (GNBSelected), and other_etiology.
+
+  - domain: Etiology
+    target_version: Infection GNB all with other cultures
+    target_columns:
+      - resultado_inf_gnball
+    count_mode: single
+    notes: >-
+      Combined infection target grouped into NEGATIVE, all configured
+      Gram-negative bacilli/coccobacilli (GNBAll), and other_etiology.
 
   - domain: Resistance
     target_version: Individual phenotype labels
@@ -185,6 +246,46 @@ prediction_detail_sections:
     target_column: resultado_hemo_gnb_all
     class_labels:
       NEGATIVE: Negative blood culture
+      GNBAll: All Gram-negative bacillus etiologies
+      other_etiology: Other detected etiology
+
+
+  - section: Infection - microorganisms with other cultures
+    description: >-
+      Microorganism target using hemoculture etiology first and clinician-resolved
+      other-culture etiology when hemoculture is negative; shown as top 50
+      classes plus Other.
+    target_column: resultado_inf_mo
+    top_n: 50
+
+  - section: Infection - yes/no with other cultures
+    description: >-
+      Binary infection target based on detected etiology in hemoculture or
+      clinician-resolved other cultures.
+    target_column: infected_yes_no_wother_cultures
+    class_labels:
+      NEGATIVE: No detected etiology
+      POSITIVE: Detected etiology in hemoculture or other cultures
+
+  - section: Infection - GNB selected with other cultures
+    description: >-
+      Hemoculture-or-other-culture etiology grouped as GNBSelected for selected
+      Gram-negative organisms, other_etiology for other detected etiologies, and
+      NEGATIVE.
+    target_column: resultado_inf_gnbselected
+    class_labels:
+      NEGATIVE: No detected etiology
+      GNBSelected: Selected Gram-negative bacillus etiology
+      other_etiology: Other detected etiology
+
+  - section: Infection - GNB all with other cultures
+    description: >-
+      Hemoculture-or-other-culture etiology grouped as GNBAll for all configured
+      Gram-negative bacilli/coccobacilli, other_etiology for other detected
+      etiologies, and NEGATIVE.
+    target_column: resultado_inf_gnball
+    class_labels:
+      NEGATIVE: No detected etiology
       GNBAll: All Gram-negative bacillus etiologies
       other_etiology: Other detected etiology
 
