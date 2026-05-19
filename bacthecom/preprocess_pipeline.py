@@ -187,6 +187,48 @@ def antimicrobial_family(value: Any) -> str:
     return ANTIMICROBIAL_FAMILY_BY_NORMALIZED_NAME.get(normalized, "Other/Unmapped")
 
 
+
+def classify_microorganism(value: Any) -> str:
+    """Classify raw microorganism names into the BactHeCom modelling groups.
+
+    This mirrors the original exploratory preprocessing but keeps it local to this
+    script so the pipeline does not depend on notebook-only utils.py.
+    """
+    text = normalize_text(value)
+    if not text:
+        return "Other"
+    if "escherichia coli" in text or text.startswith("e coli"):
+        return "E_coli"
+    if "klebsiella pneumoniae" in text or text.startswith("k pneumoniae"):
+        return "K_pneumoniae"
+    if "pseudomonas aeruginosa" in text or text.startswith("p aeruginosa"):
+        return "P_aeruginosa"
+    if "staphylococcus aureus" in text or text.startswith("s aureus"):
+        return "S_aureus"
+    if "enterococcus" in text:
+        return "Enterococcus"
+    enterobacterales_tokens = [
+        "enterobacter", "serratia", "proteus", "citrobacter", "morganella",
+        "providencia", "raoultella", "hafnia", "kluyvera", "salmonella",
+        "shigella", "yersinia", "klebsiella", "escherichia",
+    ]
+    if any(token in text for token in enterobacterales_tokens):
+        return "Enterobacterias"
+    return "Other"
+
+
+def microorganism_species_label(value: Any) -> str:
+    """Return first two tokens joined by underscore, as in the original notebook."""
+    text = str(value).strip() if not pd.isna(value) else ""
+    if not text:
+        return ""
+    return "_".join(text.split()[:2])
+
+
+def safe_set_literal(values: Iterable[Any]) -> str:
+    return repr(sorted({str(v) for v in values if not pd.isna(v) and str(v).strip()}))
+
+
 def add_change(
     log: TableLog,
     section: str,
@@ -510,6 +552,7 @@ def preprocess_paciente(tables: dict[str, pd.DataFrame], metadata: dict[str, str
     return validate_result(PreprocessResult(df=df, log=log))
 
 
+
 def preprocess_episodio_ingreso(
     tables: dict[str, pd.DataFrame], metadata: dict[str, str]
 ) -> PreprocessResult:
@@ -519,6 +562,20 @@ def preprocess_episodio_ingreso(
         if column in df.columns:
             df[column] = pd.to_datetime(df[column], errors="coerce")
 
+    # Original notebook logic: when duplicate admission rows exist, keep the row
+    # with the largest observed days-to-mortality or days-to-ICU signal.
+    if {"dias_hemocultivo_mortalidad", "dias_hemocultivo_ingresoUCI"}.issubset(df.columns):
+        df["priority_days"] = np.where(
+            df["dias_hemocultivo_mortalidad"].notna(),
+            df["dias_hemocultivo_mortalidad"],
+            df["dias_hemocultivo_ingresoUCI"],
+        )
+        df = (
+            df.sort_values(["record_id", "fecha_ingreso", "priority_days"], ascending=[True, True, False])
+            .drop_duplicates(subset=BASE_ADMISSION_KEYS, keep="first")
+            .drop(columns="priority_days")
+        )
+
     # Enforce one ML episode per admission: choose the first hemoculture since admission,
     # allowing a 2-day pre-admission buffer.
     df, selection_stats = keep_first_hemoculture_with_buffer(
@@ -526,15 +583,33 @@ def preprocess_episodio_ingreso(
         buffer_days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
     )
 
+    # Original notebook target recode: mortality within 14 days from admission.
+    if {"fecha_mortalidad", "fecha_ingreso"}.issubset(df.columns):
+        delta = df["fecha_mortalidad"] - df["fecha_ingreso"]
+        df["mortalidad_14_dias"] = np.where(delta <= pd.Timedelta(days=14), 1, 0)
+        df.loc[df["fecha_mortalidad"].isna(), "mortalidad_14_dias"] = 0
+
+    if "en_uci_antes_del_hemocultivo" in df.columns:
+        df["en_uci_antes_del_hemocultivo"] = df["en_uci_antes_del_hemocultivo"].fillna(0)
+    if "IRAs_nosocomial" in df.columns:
+        df["IRAs_nosocomial"] = df["IRAs_nosocomial"].map({"No": 0, "Si": 1, "NO": 0, "SI": 1, "no": 0, "si": 1})
+
+    # Keep infection focus as model-ready dummy variables. The raw text column is
+    # renamed to foco, one-hot encoded after aggregation, and then dropped.
+    if "organo_aparato" in df.columns:
+        df["foco"] = df["organo_aparato"].map(lambda v: normalize_text(v).replace(" ", "_") if not pd.isna(v) else np.nan)
+
     binary_columns = [
         "foco_controlable",
         "foco_controlado",
         "mortalidad",
         "mortalidad_30_dias",
+        "mortalidad_14_dias",
         "uci_por_el_episodio",
         "en_uci_antes_del_hemocultivo",
         "mujer_gestante",
         "paciente_residencia",
+        "IRAs_nosocomial",
     ]
     numeric_columns = [
         "dias_hemocultivo_mortalidad",
@@ -545,23 +620,20 @@ def preprocess_episodio_ingreso(
     ]
     categorical_columns = [
         "fecha_alta",
-        "organo_aparato",
         "control_foco",
-        "IRAs_nosocomial",
         "fecha_mortalidad",
-        "codigo_postal",
+        "foco",
     ]
-    agg: dict[str, str] = {}
+    agg: dict[str, Any] = {}
     agg.update({column: "max" for column in binary_columns if column in df.columns})
     agg.update({column: "max" for column in numeric_columns if column in df.columns})
     agg.update({column: first_notna for column in categorical_columns if column in df.columns})
 
     result = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(agg)
-    result["admission_id"] = (
-        result["record_id"].astype("Int64").astype(str)
-        + "_"
-        + pd.to_datetime(result["fecha_ingreso"]).dt.strftime("%Y%m%d")
-    )
+    if "foco" in result.columns:
+        foco_dummies = pd.get_dummies(result["foco"], prefix="foco", dtype=int)
+        result = pd.concat([result.drop(columns=["foco"]), foco_dummies], axis=1)
+
     log = finalize_log(
         table_name="episodio_ingreso",
         input_df=source,
@@ -575,10 +647,17 @@ def preprocess_episodio_ingreso(
         source=source.columns.tolist(),
         target=result.columns.tolist(),
         how=(
-            "select earliest fecha_hemocultivo per record_id + fecha_ingreso using "
-            f">= fecha_ingreso - {HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS} days buffer, "
-            "then aggregate duplicate selected episode rows"
+            "deduplicate admissions using priority_days as in original notebook; select earliest "
+            f"fecha_hemocultivo per record_id + fecha_ingreso using >= fecha_ingreso - {HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS} days buffer; "
+            "derive mortalidad_14_dias and recode IRAs_nosocomial"
         ),
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=["codigo_postal", "organo_aparato", "foco", "admission_id", "episode_key"],
+        target=result.columns.tolist(),
+        how="drop non-modelling identifiers/location and organ-system text fields from episode table",
     )
     log.metadata.update({f"hemoculture_selection_{k}": v for k, v in selection_stats.items()})
     log.notes.append(
@@ -590,6 +669,90 @@ def preprocess_episodio_ingreso(
         f"{duplicate_key_groups(result, BASE_ADMISSION_KEYS)}"
     )
     return validate_result(PreprocessResult(df=result, log=log))
+
+
+def preprocess_comorbilidad(tables: dict[str, pd.DataFrame], metadata: dict[str, str]) -> PreprocessResult:
+    """Process comorbidity table using the original notebook recodes.
+
+    Adds has_cancer and num_comorbilidades, fills hepatopathy indicators with 0,
+    and drops free-text/detail variables not used for modelling.
+    """
+    source = clean_missing_values(tables["comorbilidad"])
+    df = source.copy()
+    df = normalize_merge_key_dtypes(df)
+
+    dropped_detail_columns = [
+        "tipo_hepatopatia",
+        "causa_inmunosupresion",
+        "tipo_cancer",
+        "fecha_TOS",
+        "fecha_TPH",
+        "clasificacion_quemadura",
+        "puntaje_child_pugh",
+    ]
+
+    for col in ["hepatopatia_ligera", "hepatopatia_moderada_o_grave"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    cancer_cols = [
+        "neoplasia_tratamiento_activo",
+        "neoplasia_solida_metastasica",
+        "neoplasia_solida_no_metastasica",
+    ]
+    for col in cancer_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    available_cancer_cols = [c for c in cancer_cols if c in df.columns]
+    if available_cancer_cols:
+        df["has_cancer"] = (df[available_cancer_cols].sum(axis=1) > 0).astype(int)
+
+    df = df.drop(columns=[c for c in dropped_detail_columns if c in df.columns], errors="ignore")
+
+    binary_cols = [
+        c for c in df.columns
+        if c not in ADMISSION_KEYS and c not in {"fecha_hemocultivo"}
+        and c not in {"has_cancer"}
+        and not c.startswith("fecha_")
+    ]
+    for col in binary_cols:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    comorbidity_cols = [
+        c for c in binary_cols
+        if c not in {"record_id", "fecha_ingreso", "fecha_hemocultivo"}
+    ]
+    if comorbidity_cols:
+        df["num_comorbilidades"] = df[comorbidity_cols].fillna(0).sum(axis=1)
+
+    agg: dict[str, Any] = {}
+    for col in df.columns:
+        if col in ADMISSION_KEYS:
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]):
+            agg[col] = "max"
+        else:
+            agg[col] = first_notna
+
+    result = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(agg)
+    log = finalize_log(table_name="comorbilidad", input_df=source, output_df=result, merge_keys=ADMISSION_KEYS)
+    attach_metadata(log, metadata)
+    add_change(
+        log,
+        "created_variables",
+        source=cancer_cols,
+        target=["has_cancer", "num_comorbilidades"],
+        how="create has_cancer and count total comorbidities as in original notebook",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=dropped_detail_columns,
+        target=result.columns.tolist(),
+        how="drop detailed/free-text comorbidity descriptors not used by mortality model",
+    )
+    return validate_result(PreprocessResult(df=result, log=log))
+
 
 def preprocess_simple_admission_table(
     tables: dict[str, pd.DataFrame],
@@ -630,6 +793,110 @@ def preprocess_simple_admission_table(
     return validate_result(PreprocessResult(df=result, log=log))
 
 
+
+def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[str, str]) -> PreprocessResult:
+    """Process symptoms and vital signs using the original notebook recodes."""
+    source = clean_missing_values(tables["signos_sintomas"])
+    df = source.copy()
+    df = normalize_merge_key_dtypes(df)
+
+    # Keep first hemoculture row per admission/table, then aggregate to selected key.
+    df = df.sort_values(["record_id", "fecha_ingreso", "fecha_hemocultivo"])
+    df = df.drop_duplicates(subset=ADMISSION_KEYS, keep="first")
+
+    if "situacion_funcional_basal" in df.columns:
+        df = df.drop(columns=["situacion_funcional_basal"])
+    if "somnolencia_estupor_coma" in df.columns:
+        df["somnolencia_estupor_coma"] = np.where(
+            df["somnolencia_estupor_coma"].astype(str).str.lower().eq("normal"),
+            0,
+            np.where(df["somnolencia_estupor_coma"].isna(), np.nan, 1),
+        )
+
+    symptom_cols = [
+        "somnolencia_estupor_coma", "fiebre", "tos", "dificultad_respirar",
+        "dolor_costal", "disuria", "polaquiuria", "tenesmo_vejiga", "tenesmo_ano_recto",
+        "dolor_fosa_renal", "nauseas", "vomitos", "dolor_abdominal", "diarrea",
+        "lesiones_piel", "lesiones_mucosas", "cefalea", "dolores_articulares",
+    ]
+    available_symptom_cols = [c for c in symptom_cols if c in df.columns]
+    if available_symptom_cols:
+        df["missing_symptoms"] = df[available_symptom_cols].isna().all(axis=1).astype(int)
+        df[available_symptom_cols] = df[available_symptom_cols].fillna(0).astype(int)
+
+    # Vital sign abnormality indicators from original notebook.
+    if "temperatura" in df.columns:
+        df["temperatura"] = pd.to_numeric(df["temperatura"], errors="coerce")
+        df["hipertermia"] = np.where(df["temperatura"].isna(), np.nan, np.where(df["temperatura"] >= 38, 1, 0))
+        df["hipotermia"] = np.where(df["temperatura"].isna(), np.nan, np.where(df["temperatura"] < 36, 1, 0))
+    if {"tension_arterial_sist", "tension_arterial_diast"}.issubset(df.columns):
+        df["tension_arterial_sist"] = pd.to_numeric(df["tension_arterial_sist"], errors="coerce")
+        df["tension_arterial_diast"] = pd.to_numeric(df["tension_arterial_diast"], errors="coerce")
+        missing_bp = df["tension_arterial_sist"].isna() | df["tension_arterial_diast"].isna()
+        df["hipotension"] = np.where(
+            missing_bp,
+            np.nan,
+            np.where((df["tension_arterial_sist"] <= 90) & (df["tension_arterial_diast"] <= 60), 1, 0),
+        )
+        df["hipertension"] = np.where(
+            missing_bp,
+            np.nan,
+            np.where((df["tension_arterial_sist"] >= 140) & (df["tension_arterial_diast"] >= 90), 1, 0),
+        )
+    if "frecuencia_respiratoria" in df.columns:
+        df["frecuencia_respiratoria"] = pd.to_numeric(df["frecuencia_respiratoria"], errors="coerce")
+        df["taquipnea"] = np.where(df["frecuencia_respiratoria"].isna(), np.nan, np.where(df["frecuencia_respiratoria"] > 20, 1, 0))
+    if "frec_cardiaca" in df.columns:
+        df["frec_cardiaca"] = pd.to_numeric(df["frec_cardiaca"], errors="coerce")
+        df["taquicardia"] = np.where(df["frec_cardiaca"].isna(), np.nan, np.where(df["frec_cardiaca"] > 90, 1, 0))
+    if "saturacion_pO2" in df.columns:
+        df["saturacion_pO2"] = pd.to_numeric(df["saturacion_pO2"], errors="coerce")
+        # Preserve the original threshold. If values are stored as 90-100 instead of 0.90-1.00,
+        # this will almost always be 0 and should be reviewed upstream.
+        df["hipoxemia"] = np.where(df["saturacion_pO2"].isna(), np.nan, np.where(df["saturacion_pO2"] < 0.90, 1, 0))
+
+    signs_cols = ["hipertermia", "hipotermia", "hipotension", "hipertension", "taquipnea", "taquicardia", "hipoxemia"]
+    available_signs_cols = [c for c in signs_cols if c in df.columns]
+    if available_signs_cols:
+        df["missing_signs"] = df[available_signs_cols].isna().all(axis=1).astype(int)
+        # Keep abnormality indicators, but fill missing as 0 after creating the missingness flag.
+        df[available_signs_cols] = df[available_signs_cols].fillna(0).astype(int)
+
+    drop_raw_vitals = [
+        "barthel_inf_90", "temperatura", "tension_arterial_sist", "tension_arterial_diast",
+        "frec_cardiaca", "saturacion_pO2", "frecuencia_respiratoria", "duracion_sintoma",
+    ]
+    df = df.drop(columns=[c for c in drop_raw_vitals if c in df.columns], errors="ignore")
+
+    agg: dict[str, Any] = {}
+    for col in df.columns:
+        if col in ADMISSION_KEYS:
+            continue
+        if pd.api.types.is_numeric_dtype(df[col]):
+            agg[col] = "max"
+        else:
+            agg[col] = first_notna
+    result = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(agg)
+
+    log = finalize_log(table_name="signos_sintomas", input_df=source, output_df=result, merge_keys=ADMISSION_KEYS)
+    attach_metadata(log, metadata)
+    add_change(
+        log,
+        "created_variables",
+        source=["symptoms", "vital_signs"],
+        target=["missing_symptoms", "hipertermia", "hipotermia", "hipotension", "hipertension", "taquipnea", "taquicardia", "hipoxemia", "missing_signs"],
+        how="reproduce original notebook symptom missingness and vital-sign abnormality recodes",
+    )
+    add_change(
+        log,
+        "dropped_variables",
+        source=drop_raw_vitals + ["situacion_funcional_basal"],
+        target=result.columns.tolist(),
+        how="drop raw vital signs after deriving clinical abnormality flags",
+    )
+    return validate_result(PreprocessResult(df=result, log=log))
+
+
 def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, str]) -> PreprocessResult:
     source = clean_missing_values(tables["laboratorio"])
     df = source.copy()
@@ -644,8 +911,16 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
     for column in lab_columns:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    # Keep one value per lab feature. Do not create *_mean / *_max features and do not
-    # add laboratorio_n_rows; those summaries are not meaningful for this mortality model.
+    # Normalize laboratory values with log1p in-place. This reduces right-skew
+    # without fitting distributional parameters on the full dataset. Negative
+    # values, if any, are treated as invalid and set to NaN before log1p.
+    for column in lab_columns:
+        df.loc[df[column] < 0, column] = np.nan
+        df[column] = np.log1p(df[column])
+
+    # Keep one normalized value per lab feature. Do not create *_mean / *_max
+    # features and do not add laboratorio_n_rows; those summaries are not
+    # meaningful for this mortality model.
     result = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(
         {column: first_notna for column in lab_columns}
     )
@@ -656,7 +931,7 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
         "transformed_variables",
         source=lab_columns,
         target=[column for column in result.columns if column not in ADMISSION_KEYS],
-        how="collapse laboratory rows to one value per selected hemoculture using first non-missing value; no *_mean, *_max, or row-count features",
+        how="log1p-normalize laboratory values and collapse to one value per selected hemoculture using first non-missing value; no *_mean, *_max, or row-count features",
     )
     return validate_result(PreprocessResult(df=result, log=log))
 
@@ -685,27 +960,68 @@ def preprocess_episodio_uci(tables: dict[str, pd.DataFrame], metadata: dict[str,
     return validate_result(PreprocessResult(df=result, log=log))
 
 
+
 def preprocess_episodio_infeccion(
     tables: dict[str, pd.DataFrame], metadata: dict[str, str]
 ) -> PreprocessResult:
+    """Process infection episodes using the original BactHeCom microorganism logic.
+
+    Keeps only the first blood-culture date per admission for the current episode,
+    derives microorganism groups and previous-episode summaries, and returns one
+    row per record_id + fecha_ingreso + selected fecha_hemocultivo.
+    """
     source = clean_missing_values(tables["episodio_infeccion"])
     df = source.copy()
     df["fecha_ingreso"] = pd.to_datetime(df["fecha_ingreso"], errors="coerce")
     df["fecha_cultivo"] = pd.to_datetime(df["fecha_cultivo"], errors="coerce")
-    # Harmonize infection culture date with the pipeline merge key.
     df["fecha_hemocultivo"] = df["fecha_cultivo"]
-    df["days_culture_from_admission"] = (
-        df["fecha_cultivo"] - df["fecha_ingreso"]
-    ).dt.days
+
+    df = df.sort_values(["record_id", "fecha_ingreso", "fecha_cultivo", "episode_id"])
+    df["microorganismo_recoded"] = df["microorganismo"].map(microorganism_species_label)
+    df["microorganismo_group"] = df["microorganismo"].map(classify_microorganism)
+    df["resistance_mechanism"] = df["fenotipo_resistencia"].fillna("NEGATIVE")
+    df.loc[df["resistance_mechanism"].astype(str).str.strip().eq(""), "resistance_mechanism"] = "NEGATIVE"
+    df["blood_culture"] = df["especimen"].fillna("").eq("Sangre").astype(int)
+    df["days_culture_from_admission"] = (df["fecha_cultivo"] - df["fecha_ingreso"]).dt.days
     df["infection_before_admission"] = (df["days_culture_from_admission"] < 0).astype(int)
     df["infection_same_day_admission"] = (df["days_culture_from_admission"] == 0).astype(int)
     df["infection_after_admission"] = (df["days_culture_from_admission"] > 0).astype(int)
-    df["blood_culture"] = (df["especimen"].fillna("") == "Sangre").astype(int)
-    df["resistance_mechanism"] = df["fenotipo_resistencia"].fillna("NEGATIVE")
-    df.loc[df["resistance_mechanism"].eq(""), "resistance_mechanism"] = "NEGATIVE"
+
+    blood = df.loc[df["blood_culture"].eq(1)].copy()
+    current, selection_stats = keep_first_hemoculture_with_buffer(
+        blood,
+        buffer_days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+    )
+    selected_keys = current[ADMISSION_KEYS].drop_duplicates()
+    current_rows = blood.merge(selected_keys, on=ADMISSION_KEYS, how="inner")
+
+    grouped = current_rows.groupby(ADMISSION_KEYS, as_index=False, dropna=False)
+    result = grouped.agg(
+        episode_id=("episode_id", lambda x: ", ".join(map(str, pd.Series(x).dropna().unique()))),
+        area_hosp=("area_hosp", first_notna),
+        id_cultivo=("id_cultivo", lambda x: ", ".join(sorted_unique_list(x))),
+        especimen=("especimen", first_notna),
+        microorganismo_group=("microorganismo_group", lambda x: ", ".join(sorted(set(filter(None, map(str, x.dropna())))))),
+        fenotipo_resistencia=("resistance_mechanism", lambda x: ", ".join(sorted(set(filter(None, map(str, x.dropna()))))) or "NEGATIVE"),
+        microorganismo_recoded=("microorganismo_recoded", lambda x: ", ".join(sorted(set(filter(None, map(str, x.dropna())))))),
+        organism_count=("microorganismo", lambda values: len(set(values.dropna()))),
+        organism_list=("microorganismo", lambda values: list_literal(sorted_unique_list(values))),
+        dominant_microorganism=("microorganismo", dominant_label),
+        blood_culture_episode_count=("blood_culture", "sum"),
+        resistance_mechanism_labels=("resistance_mechanism", lambda values: list_literal(label for label in values if label != "NEGATIVE")),
+        fecha_cultivo_min=("fecha_cultivo", "min"),
+        fecha_cultivo_max=("fecha_cultivo", "max"),
+        days_first_culture_from_admission=("days_culture_from_admission", "min"),
+        days_last_culture_from_admission=("days_culture_from_admission", "max"),
+    )
+
+    result["n_microorganismos"] = result["microorganismo_group"].map(lambda x: len([p for p in str(x).split(", ") if p]))
+    result["n_microorganismos_unique"] = result["microorganismo_group"].map(lambda x: len(set([p for p in str(x).split(", ") if p])))
+    dummies = result["microorganismo_group"].str.get_dummies(sep=", ").add_prefix("microorganismo_")
+    result = pd.concat([result, dummies], axis=1)
 
     def mechanism_target(values: pd.Series) -> str:
-        labels = sorted({str(value) for value in values.dropna() if str(value) != "NEGATIVE"})
+        labels = sorted({str(value) for value in values.dropna() if str(value) != "NEGATIVE" and str(value).strip()})
         if not labels:
             return "NEGATIVE"
         carbapenemase = {"KPC", "VIM", "OXA-48", "IMP"}
@@ -721,26 +1037,55 @@ def preprocess_episodio_infeccion(
             return "MR"
         return "OTHER_RESISTANCE"
 
-    grouped = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False)
-    result = grouped.agg(
-        infection_episode_count=("episode_id", "nunique"),
-        organism_count=("microorganismo", lambda values: len(set(values.dropna()))),
-        organism_list=("microorganismo", lambda values: list_literal(sorted_unique_list(values))),
-        dominant_microorganism=("microorganismo", dominant_label),
-        blood_culture_episode_count=("blood_culture", "sum"),
-        resistance_mechanism_labels=(
-            "resistance_mechanism",
-            lambda values: list_literal(label for label in values if label != "NEGATIVE"),
-        ),
-        resistance_mechanism_target=("resistance_mechanism", mechanism_target),
-        fecha_cultivo_min=("fecha_cultivo", "min"),
-        fecha_cultivo_max=("fecha_cultivo", "max"),
-        days_first_culture_from_admission=("days_culture_from_admission", "min"),
-        days_last_culture_from_admission=("days_culture_from_admission", "max"),
-        infection_before_admission_count=("infection_before_admission", "sum"),
-        infection_same_day_admission_count=("infection_same_day_admission", "sum"),
-        infection_after_admission_count=("infection_after_admission", "sum"),
+    resistance_target = current_rows.groupby(ADMISSION_KEYS, as_index=False, dropna=False).agg(
+        resistance_mechanism_target=("resistance_mechanism", mechanism_target)
     )
+    result = result.merge(resistance_target, on=ADMISSION_KEYS, how="left")
+
+    # Previous episode summaries: previous hemocultures before fecha_ingreso - 2 days.
+    prev_records: list[dict[str, Any]] = []
+    all_blood = blood.copy()
+    for _, row in selected_keys.iterrows():
+        rid = row["record_id"]
+        ingreso = pd.to_datetime(row["fecha_ingreso"])
+        hc = pd.to_datetime(row["fecha_hemocultivo"])
+        cutoff = ingreso - pd.Timedelta(days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS)
+        prev = all_blood.loc[(all_blood["record_id"].eq(rid)) & (all_blood["fecha_cultivo"] < cutoff)].copy()
+        prev = prev.sort_values(["fecha_cultivo", "episode_id"], ascending=[False, True]).head(5)
+        days_since = (hc - prev["fecha_cultivo"]).dt.days if not prev.empty else pd.Series(dtype=float)
+        groups = sorted(set(prev["microorganismo_group"].dropna().astype(str))) if not prev.empty else []
+        species = sorted(set(prev["microorganismo_recoded"].dropna().astype(str))) if not prev.empty else []
+        last_group = prev["microorganismo_group"].dropna().astype(str).iloc[0] if not prev.empty and prev["microorganismo_group"].notna().any() else ""
+        had_res = int(prev["resistance_mechanism"].fillna("NEGATIVE").ne("NEGATIVE").any()) if not prev.empty else 0
+        rec = {
+            "record_id": rid,
+            "fecha_ingreso": ingreso,
+            "fecha_hemocultivo": hc,
+            "prev_episode_count": int(prev["fecha_cultivo"].nunique()) if not prev.empty else 0,
+            "n_microorganismos_specie_prev": int(len(species)),
+            "n_microorganismos_group_prev": int(len(groups)),
+            "n_microorganismos_unique_specie_prev": int(len(species)),
+            "n_microorganismos_unique_group_prev": int(len(groups)),
+            "had_resistance_prev": had_res,
+            "prev_within_30day": int((days_since <= 30).any()) if not days_since.empty else 0,
+            "prev_within_90day": int((days_since <= 90).any()) if not days_since.empty else 0,
+            "last_microorganismo_group_prev": last_group,
+        }
+        prev_records.append(rec)
+    if prev_records:
+        prev_df = pd.DataFrame(prev_records)
+        last_dummies = pd.get_dummies(prev_df["last_microorganismo_group_prev"], dtype=int).add_prefix("last_prev_")
+        prev_df = pd.concat([prev_df.drop(columns=["last_microorganismo_group_prev"]), last_dummies], axis=1)
+        result = result.merge(prev_df, on=ADMISSION_KEYS, how="left")
+
+    prev_cols = [c for c in result.columns if "prev" in c]
+    if prev_cols:
+        result[prev_cols] = result[prev_cols].fillna(0)
+    result["has_had_resistance"] = (
+        result.get("had_resistance_prev", pd.Series(0, index=result.index)).fillna(0).astype(int).eq(1)
+        | result["fenotipo_resistencia"].fillna("NEGATIVE").astype(str).str.strip().ne("NEGATIVE")
+    ).astype(int)
+
     log = finalize_log(
         table_name="episodio_infeccion",
         input_df=source,
@@ -751,18 +1096,15 @@ def preprocess_episodio_infeccion(
     add_change(
         log,
         "created_variables",
-        source=["fecha_cultivo", "microorganismo", "fenotipo_resistencia", "especimen"],
+        source=["microorganismo", "fenotipo_resistencia", "especimen", "fecha_cultivo"],
         target=[
-            "dominant_microorganism",
-            "resistance_mechanism_target",
-            "infection_*_admission_count",
-            "blood_culture_episode_count",
+            "microorganismo_recoded", "microorganismo_group", "microorganismo_*",
+            "prev_*", "has_had_resistance", "resistance_mechanism_target",
         ],
-        how="aggregate infection episodes to admission level and derive timing, organism, and coarse resistance mechanism targets",
-        variable_type="target",
+        how="reproduce original notebook microorganism grouping, first blood culture selection, and previous episode summary features",
     )
+    log.metadata.update({f"infection_hemoculture_selection_{k}": v for k, v in selection_stats.items()})
     return validate_result(PreprocessResult(df=result, log=log))
-
 
 def preprocess_antibiograma(
     tables: dict[str, pd.DataFrame], metadata: dict[str, str]
@@ -888,15 +1230,13 @@ def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]
     for column in [
         "dominant_microorganism",
         "resistance_mechanism_target",
-        "resistente_cefalosporina",
+        "fenotipo_resistencia",
     ]:
         if column in base.columns:
             base[column] = base[column].fillna("NEGATIVE")
     for column in [
         "organism_list",
         "resistance_mechanism_labels",
-        "antibiogram_resistant_drugs",
-        "antibiogram_resistant_families",
     ]:
         if column in base.columns:
             base[column] = base[column].fillna("[]")
@@ -916,6 +1256,9 @@ def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]
     ]
     columns_to_drop.extend([c for c in base.columns if c.endswith("_mean") or c.endswith("_max")])
     columns_to_drop.extend([c for c in base.columns if c.startswith("treatment_")])
+    columns_to_drop.extend([c for c in base.columns if c.startswith("antibiogram_")])
+    columns_to_drop.extend([c for c in base.columns if c.startswith("infection_") and c.endswith("_count")])
+    columns_to_drop.extend([c for c in base.columns if c == "resistente_cefalosporina"])
     base = base.drop(columns=[c for c in columns_to_drop if c in base.columns], errors="ignore")
 
     duplicate_selected_admissions = duplicate_key_groups(base, BASE_ADMISSION_KEYS)
@@ -979,6 +1322,9 @@ def export_dataset_outputs(
     ]
     automatic_drop_columns.extend([c for c in serializable.columns if c.endswith("_mean") or c.endswith("_max")])
     automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("treatment_")])
+    automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("antibiogram_")])
+    automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("infection_") and c.endswith("_count")])
+    automatic_drop_columns.extend([c for c in serializable.columns if c == "resistente_cefalosporina"])
     serializable = serializable.drop(columns=[c for c in automatic_drop_columns if c in serializable.columns], errors="ignore")
     for column in serializable.select_dtypes(include=["datetime64[ns]"]).columns:
         serializable[column] = serializable[column].dt.strftime("%Y-%m-%d")
@@ -1057,41 +1403,7 @@ def run_pipeline(
     results: dict[str, PreprocessResult] = {}
     results["episodio_ingreso"] = preprocess_episodio_ingreso(tables, metadata)
     results["paciente"] = preprocess_paciente(tables, metadata)
-    results["comorbilidad"] = preprocess_simple_admission_table(
-        tables,
-        "comorbilidad",
-        metadata,
-        binary_columns=[
-            "infarto",
-            "insuficiencia_cardiaca",
-            "evp",
-            "e_cerebrovascular",
-            "demencia",
-            "e_pulmonar_cronica",
-            "ulcera_peptica",
-            "colagenopatia",
-            "hemiplejia",
-            "erc",
-            "neoplasia_tratamiento_activo",
-            "neoplasia_solida_metastasica",
-            "neoplasia_solida_no_metastasica",
-            "linfoma",
-            "leucemia",
-            "sida",
-            "hepatopatia_ligera",
-            "hepatopatia_moderada_o_grave",
-            "diabetes",
-            "diabetes_sin_lesion_organo_diana",
-            "diabetes_con_lesion_organo_diana",
-            "inmunosupresion",
-            "TOS",
-            "TPH",
-            "gran_quemado",
-        ],
-        categorical_columns=[
-            "puntaje_child_pugh",
-        ],
-    )
+    results["comorbilidad"] = preprocess_comorbilidad(tables, metadata)
     results["factores_riesgo_infeccion_bmr"] = preprocess_simple_admission_table(
         tables,
         "factores_riesgo_infeccion_bmr",
@@ -1113,49 +1425,13 @@ def run_pipeline(
             "portador_otros_disposit",
         ],
     )
-    results["signos_sintomas"] = preprocess_simple_admission_table(
-        tables,
-        "signos_sintomas",
-        metadata,
-        binary_columns=[
-            "sepsis",
-            "shock_septico",
-            "fiebre",
-            "tos",
-            "dificultad_respirar",
-            "dolor_costal",
-            "disuria",
-            "polaquiuria",
-            "tenesmo_vejiga",
-            "tenesmo_ano_recto",
-            "dolor_fosa_renal",
-            "nauseas",
-            "vomitos",
-            "dolor_abdominal",
-            "diarrea",
-            "lesiones_piel",
-            "lesiones_mucosas",
-            "cefalea",
-            "dolores_articulares",
-        ],
-        numeric_max_columns=[
-            "qsofa",
-            "indice_de_charlson",
-            "escala_karnofsky",
-            "barthel_inf_90",
-            "temperatura",
-            "frec_cardiaca",
-            "frecuencia_respiratoria",
-            "tension_arterial_sist",
-            "tension_arterial_diast",
-            "saturacion_pO2",
-        ],
-        categorical_columns=["somnolencia_estupor_coma", "situacion_funcional_basal"],
-    )
+    results["signos_sintomas"] = preprocess_signos_sintomas(tables, metadata)
     results["laboratorio"] = preprocess_laboratorio(tables, metadata)
     results["episodio_uci"] = preprocess_episodio_uci(tables, metadata)
     results["episodio_infeccion"] = preprocess_episodio_infeccion(tables, metadata)
-    results["antibiograma"] = preprocess_antibiograma(tables, metadata)
+    # Do not include antibiogram-derived features or cefalosporin-resistance targets
+    # for this mortality model. They are post-culture microbiology outputs and can
+    # introduce leakage or answer a different prediction task.
     # Do not include antimicrobial treatment exposures: antibiotics given after the
     # hemoculture are post-index information and can leak outcome/severity.
     merged = merge_results(results, metadata)

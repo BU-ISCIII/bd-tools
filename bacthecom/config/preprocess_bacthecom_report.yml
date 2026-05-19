@@ -1,0 +1,97 @@
+report_title: "BACTHECOM Mortality ML Preprocessing Report"
+
+report_description: >
+  Preprocessing report for the BACTHECOM mortality prediction workflow.
+  The pipeline creates one row per admission and selected first hemoculture,
+  identified by record_id, fecha_ingreso, and fecha_hemocultivo.
+  The modelling workflow is staged: first predicting mortality, then predicting
+  mortality timing, such as 14-day or 30-day mortality, depending on model
+  performance.
+
+domain_by_stage:
+  _pipeline_run: Pipeline
+  paciente: Patient
+  episodio_ingreso: Admission
+  comorbilidad: Comorbidity
+  factores_riesgo_infeccion_bmr: BMR Risk Factors
+  signos_sintomas: Symptoms And Severity
+  laboratorio: Laboratory
+  episodio_uci: ICU
+  episodio_infeccion: Infection Episodes
+  merged_dataset: Merged Dataset
+  filtered_dataset: Model Dataset
+
+predictive_targets:
+  - model: "Stage 1 - Mortality"
+    target_column: mortalidad
+    notes: "Binary mortality prediction over the full cohort."
+    class_labels:
+      0: "Alive"
+      1: "Dead"
+      "0": "Alive"
+      "1": "Dead"
+
+  - model: "Candidate Stage 2 - Mortality 14 days"
+    target_column: mortalidad_14_dias
+    notes: "Candidate staged mortality timing target."
+    class_labels:
+      0: "No 14-day mortality"
+      1: "14-day mortality"
+      "0": "No 14-day mortality"
+      "1": "14-day mortality"
+
+  - model: "Candidate Stage 2 - Mortality 30 days"
+    target_column: mortalidad_30_dias
+    notes: "Candidate staged mortality timing target."
+    class_labels:
+      0: "No 30-day mortality"
+      1: "30-day mortality"
+      "0": "No 30-day mortality"
+      "1": "30-day mortality"
+
+target_evolution:
+  - domain: "Mortality"
+    target_version: "Raw mortality"
+    target_columns: [mortalidad]
+    count_mode: single
+    notes: "Raw binary mortality target."
+
+  - domain: "Mortality"
+    target_version: "14-day mortality"
+    target_columns: [mortalidad_14_dias]
+    count_mode: single
+    notes: "Mortality within 14 days from admission or hemoculture depending on preprocessing definition."
+
+  - domain: "Mortality"
+    target_version: "30-day mortality"
+    target_columns: [mortalidad_30_dias]
+    count_mode: single
+    notes: "Mortality within 30 days from admission or hemoculture depending on preprocessing definition."
+
+prediction_detail_sections:
+  - section: "Stage 1 - Mortality"
+    description: "Binary mortality prediction target over the full cohort."
+    target_column: mortalidad
+    class_labels:
+      0: "Alive"
+      1: "Dead"
+      "0": "Alive"
+      "1": "Dead"
+
+  - section: "Candidate Stage 2 - Mortality 14 days"
+    description: "Candidate staged target for early mortality."
+    target_column: mortalidad_14_dias
+    class_labels:
+      0: "No 14-day mortality"
+      1: "14-day mortality"
+      "0": "No 14-day mortality"
+      "1": "14-day mortality"
+
+  - section: "Candidate Stage 2 - Mortality 30 days"
+    description: "Candidate staged target for 30-day mortality."
+    target_column: mortalidad_30_dias
+    class_labels:
+      0: "No 30-day mortality"
+      1: "30-day mortality"
+      "0": "No 30-day mortality"
+      "1": "30-day mortality"
