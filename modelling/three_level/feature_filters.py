@@ -4,6 +4,70 @@ from .base import *
 from .models import build_binary_model, build_multiclass_model, _fit_model
 from .feature_selection import _build_ranking_model, _shap_importance
 
+def fit_iqr_bounds(
+    X: pd.DataFrame,
+    iqr_multiplier: float = 5.0,
+) -> Dict[str, tuple]:
+
+    bounds = {}
+
+    numeric_cols = X.select_dtypes(include=["number"]).columns.tolist()
+
+    for col in numeric_cols:
+
+        s = X[col]
+
+        q1 = s.quantile(0.25)
+        q3 = s.quantile(0.75)
+        iqr = q3 - q1
+
+        if pd.isna(iqr) or iqr == 0:
+            continue
+
+        lower = q1 - (iqr_multiplier * iqr)
+        upper = q3 + (iqr_multiplier * iqr)
+
+        bounds[col] = (lower, upper)
+
+    return bounds
+
+
+def apply_iqr_bounds_to_nan(
+    X: pd.DataFrame,
+    bounds: Dict[str, tuple],
+    output_csv_path: Optional[Path] = None,
+) -> pd.DataFrame:
+
+    X = X.copy()
+
+    audit = []
+
+    for col, (lower, upper) in bounds.items():
+
+        if col not in X.columns:
+            continue
+
+        mask = (X[col] < lower) | (X[col] > upper)
+
+        n_outliers = int(mask.sum())
+
+        if n_outliers > 0:
+
+            X.loc[mask, col] = np.nan
+
+            audit.append({
+                "feature": col,
+                "n_outliers": n_outliers,
+                "lower_bound": float(lower),
+                "upper_bound": float(upper),
+            })
+
+    if audit and output_csv_path:
+        output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(audit).to_csv(output_csv_path, index=False)
+
+    return X
+
 def shap_rfecv(
         model: BaseEstimator,
         X: pd.DataFrame,

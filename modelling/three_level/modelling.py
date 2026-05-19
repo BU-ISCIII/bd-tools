@@ -36,7 +36,7 @@ from .config import runtime_defaults
 from .models import _find_best_threshold, _fit_calibrated_or_base, build_binary_model, build_multiclass_model
 from .optuna_utils import optimise_binary_model, optimise_multiclass_model
 from .oof import generate_oof_probas_binary, generate_oof_probas_multiclass
-from .feature_filters import shap_rfecv, remove_correlated_features
+from .feature_filters import shap_rfecv, remove_correlated_features, fit_iqr_bounds, apply_iqr_bounds_to_nan
 from .feature_selection import cap_features, _build_ranking_model
 
 def run_training(args: argparse.Namespace) -> None:
@@ -112,6 +112,20 @@ def run_training(args: argparse.Namespace) -> None:
     # Create processing folder for data processing artifacts
     processing_dir = output_dir / "processing"
     processing_dir.mkdir(parents=True, exist_ok=True)
+
+    iqr_bounds = fit_iqr_bounds(X_train, iqr_multiplier=5.0)
+
+    X_train = apply_iqr_bounds_to_nan(
+        X_train,
+        iqr_bounds,
+        output_csv_path=output_dir / "processing" / "iqr_outliers_train.csv",
+    )
+
+    X_test = apply_iqr_bounds_to_nan(
+        X_test,
+        iqr_bounds,
+        output_csv_path=output_dir / "processing" / "iqr_outliers_test.csv",
+    )
 
     cat_cols = runtime_defaults().get("categorical_for_dummies", ["foco", "ultimo_antib"])
     X_train, X_test = preprocess_train_test_features(

@@ -35,7 +35,6 @@ def build_binary_model(model_type: str, params: Dict) -> object:
     if model_type == "catb":
         params = _with_fixed_params(model_type, "binary", params)
 
-        params.setdefault("verbose", False)
         params.setdefault("logging_level", "Silent")
         params.setdefault("thread_count", N_CPUS)
         params.setdefault("random_state", 42)
@@ -67,13 +66,10 @@ def build_multiclass_model(model_type: str, params: Dict, num_classes: int) -> o
         params.pop("num_class", None)
         params.setdefault("loss_function", "MultiClass")
         params.setdefault("auto_class_weights", "Balanced")
-        params.setdefault("verbose", False)
         params.setdefault("thread_count", N_CPUS)
         params.setdefault("random_state", 42)
         params.setdefault("logging_level", "Silent")
 
-        # CatBoost's PRAUC custom metric can be problematic in multiclass mode.
-        # Keep it only if you know your installed CatBoost version supports it.
         params.pop("custom_metric", None)
 
         return CatBoostClassifier(**params)
