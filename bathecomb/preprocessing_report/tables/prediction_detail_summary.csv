@@ -1,0 +1,6 @@
+section,description,target_column,rows,columns,classes
+Sepsis,Admission-level sepsis target.,sepsis,6440,153,2
+Dominant organism,Most frequent microorganism in the admission.,dominant_microorganism,6440,153,73
+Resistance mechanism,Coarse resistance mechanism target from infection phenotype labels.,resistance_mechanism_target,6440,153,6
+Antibiogram resistant families,Multilabel antimicrobial family resistance derived from antibiogram rows.,antibiogram_resistant_families,6440,153,22
+Cephalosporin resistance,Binary cephalosporin 3a/4a resistance target.,resistente_cefalosporina,6440,153,2

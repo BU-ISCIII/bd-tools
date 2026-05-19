@@ -1,0 +1,12 @@
+group,unfiltered_variables,filtered_variables,removed_by_filter
+Patient,3,3,0
+Admission,22,17,5
+Comorbidity,30,30,0
+BMR Risk Factors,14,14,0
+Symptoms And Severity,32,32,0
+Laboratory,30,30,0
+ICU,3,3,0
+Infection Episodes,14,10,4
+Antibiogram,8,7,1
+Antimicrobial Treatment,7,6,1
+Unmapped,1,1,0

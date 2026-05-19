@@ -1,0 +1,12 @@
+group,variables,0%,>0-10%,10-40%,40-80%,80-100%,max_missing_percent
+Patient,3,3,0,0,0,0,0.0
+Admission,17,4,5,3,1,4,99.5
+Comorbidity,30,0,0,23,1,6,99.0
+BMR Risk Factors,14,11,0,3,0,0,23.3
+Symptoms And Severity,32,19,1,5,4,3,95.7
+Laboratory,30,2,0,14,12,2,84.9
+ICU,3,2,0,0,0,1,88.1
+Infection Episodes,10,8,2,0,0,0,0.1
+Antibiogram,7,7,0,0,0,0,0.0
+Antimicrobial Treatment,6,3,0,2,1,0,41.6
+Unmapped,1,1,0,0,0,0,0.0

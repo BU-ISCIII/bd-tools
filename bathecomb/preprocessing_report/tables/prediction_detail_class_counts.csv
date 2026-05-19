@@ -1,0 +1,70 @@
+section,target_column,class,rows,percent
+Sepsis,sepsis,0,4465,69.3
+Sepsis,sepsis,1,1975,30.7
+Sepsis,sepsis,Total,6440,100.0
+Dominant organism,dominant_microorganism,Escherichia coli,2382,37.0
+Dominant organism,dominant_microorganism,Klebsiella pneumoniae,922,14.3
+Dominant organism,dominant_microorganism,Staphylococcus aureus,831,12.9
+Dominant organism,dominant_microorganism,Pseudomonas aeruginosa,626,9.7
+Dominant organism,dominant_microorganism,Enterobacter cloacae,190,3.0
+Dominant organism,dominant_microorganism,Proteus mirabilis,170,2.6
+Dominant organism,dominant_microorganism,Klebsiella pneumoniae ssp pneumoniae,157,2.4
+Dominant organism,dominant_microorganism,Serratia marcescens,128,2.0
+Dominant organism,dominant_microorganism,Staphylococcus aureus ssp aureus,122,1.9
+Dominant organism,dominant_microorganism,Klebsiella aerogenes,121,1.9
+Dominant organism,dominant_microorganism,Klebsiella oxytoca,120,1.9
+Dominant organism,dominant_microorganism,Enterobacter cloacae complex,82,1.3
+Dominant organism,dominant_microorganism,Escherichia coli BLEE,62,1.0
+Dominant organism,dominant_microorganism,Morganella morganii,51,0.8
+Dominant organism,dominant_microorganism,Stenotrophomonas maltophilia,46,0.7
+Dominant organism,dominant_microorganism,Acinetobacter baumannii,43,0.7
+Dominant organism,dominant_microorganism,Enterobacter cloacae ssp cloacae,39,0.6
+Dominant organism,dominant_microorganism,Klebsiella pneumoniae BLEE,34,0.5
+Dominant organism,dominant_microorganism,Citrobacter koseri,33,0.5
+Dominant organism,dominant_microorganism,Citrobacter freundii,32,0.5
+Dominant organism,dominant_microorganism,Raoultella ornithinolytica,23,0.4
+Dominant organism,dominant_microorganism,Staphylococcus aureus MR,19,0.3
+Dominant organism,dominant_microorganism,Serratia marcescens ssp marcescens,19,0.3
+Dominant organism,dominant_microorganism,Klebsiella variicola,17,0.3
+Dominant organism,dominant_microorganism,Salmonella enterica,17,0.3
+Dominant organism,dominant_microorganism,Pantoea agglomerans,16,0.2
+Dominant organism,dominant_microorganism,Enterobacter kobei,16,0.2
+Dominant organism,dominant_microorganism,Pseudomonas aeruginosa MR,15,0.2
+Dominant organism,dominant_microorganism,Acinetobacter lwoffii,9,0.1
+Dominant organism,dominant_microorganism,Morganella morganii ssp morganii,7,0.1
+Dominant organism,dominant_microorganism,Other,91,1.4
+Dominant organism,dominant_microorganism,Total,6440,100.0
+Resistance mechanism,resistance_mechanism_target,NEGATIVE,5649,87.7
+Resistance mechanism,resistance_mechanism_target,BLEE,578,9.0
+Resistance mechanism,resistance_mechanism_target,MR,129,2.0
+Resistance mechanism,resistance_mechanism_target,CARBAPENEMASE,39,0.6
+Resistance mechanism,resistance_mechanism_target,MRSA,35,0.5
+Resistance mechanism,resistance_mechanism_target,CARB,10,0.2
+Resistance mechanism,resistance_mechanism_target,Total,6440,100.0
+Antibiogram resistant families,antibiogram_resistant_families,NEGATIVE,3346,52.0
+Antibiogram resistant families,antibiogram_resistant_families,Penicilinas,2879,44.7
+Antibiogram resistant families,antibiogram_resistant_families,Sulfamidas,1297,20.1
+Antibiogram resistant families,antibiogram_resistant_families,Cefalosporinas 2 gen,1180,18.3
+Antibiogram resistant families,antibiogram_resistant_families,Cefalosporinas 3/4 gen,1119,17.4
+Antibiogram resistant families,antibiogram_resistant_families,Quinolonas,1041,16.2
+Antibiogram resistant families,antibiogram_resistant_families,Cefalosporinas 1 gen,866,13.4
+Antibiogram resistant families,antibiogram_resistant_families,Aminoglucosidos,729,11.3
+Antibiogram resistant families,antibiogram_resistant_families,Monobactamicos,569,8.8
+Antibiogram resistant families,antibiogram_resistant_families,Carbapenemas,426,6.6
+Antibiogram resistant families,antibiogram_resistant_families,Polimixinas,360,5.6
+Antibiogram resistant families,antibiogram_resistant_families,Fosfomicinas,355,5.5
+Antibiogram resistant families,antibiogram_resistant_families,Tetraciclinas,330,5.1
+Antibiogram resistant families,antibiogram_resistant_families,Nitrofuranos,266,4.1
+Antibiogram resistant families,antibiogram_resistant_families,Anfenicoles,224,3.5
+Antibiogram resistant families,antibiogram_resistant_families,Macrolidos,206,3.2
+Antibiogram resistant families,antibiogram_resistant_families,Lincosamidas,161,2.5
+Antibiogram resistant families,antibiogram_resistant_families,Other/Unmapped,30,0.5
+Antibiogram resistant families,antibiogram_resistant_families,Otros antibacterianos,22,0.3
+Antibiogram resistant families,antibiogram_resistant_families,Rifamicinas,12,0.2
+Antibiogram resistant families,antibiogram_resistant_families,Glicopeptidos,3,0.0
+Antibiogram resistant families,antibiogram_resistant_families,Oxazolidinonas,1,0.0
+Antibiogram resistant families,antibiogram_resistant_families,Total label assignments,15422,239.5
+Antibiogram resistant families,antibiogram_resistant_families,Total patients,6440,100.0
+Cephalosporin resistance,resistente_cefalosporina,NEGATIVE,5321,82.6
+Cephalosporin resistance,resistente_cefalosporina,RESIST_CEFALOSPORINAS_3a_4a,1119,17.4
+Cephalosporin resistance,resistente_cefalosporina,Total,6440,100.0

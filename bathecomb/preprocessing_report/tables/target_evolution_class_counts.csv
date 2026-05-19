@@ -1,0 +1,104 @@
+domain,target_version,target_column,class,samples,percent
+Etiology,Dominant organism,dominant_microorganism,Escherichia coli,2382,37.0
+Etiology,Dominant organism,dominant_microorganism,Klebsiella pneumoniae,922,14.3
+Etiology,Dominant organism,dominant_microorganism,Staphylococcus aureus,831,12.9
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas aeruginosa,626,9.7
+Etiology,Dominant organism,dominant_microorganism,Enterobacter cloacae,190,3.0
+Etiology,Dominant organism,dominant_microorganism,Proteus mirabilis,170,2.6
+Etiology,Dominant organism,dominant_microorganism,Klebsiella pneumoniae ssp pneumoniae,157,2.4
+Etiology,Dominant organism,dominant_microorganism,Serratia marcescens,128,2.0
+Etiology,Dominant organism,dominant_microorganism,Staphylococcus aureus ssp aureus,122,1.9
+Etiology,Dominant organism,dominant_microorganism,Klebsiella aerogenes,121,1.9
+Etiology,Dominant organism,dominant_microorganism,Klebsiella oxytoca,120,1.9
+Etiology,Dominant organism,dominant_microorganism,Enterobacter cloacae complex,82,1.3
+Etiology,Dominant organism,dominant_microorganism,Escherichia coli BLEE,62,1.0
+Etiology,Dominant organism,dominant_microorganism,Morganella morganii,51,0.8
+Etiology,Dominant organism,dominant_microorganism,Stenotrophomonas maltophilia,46,0.7
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter baumannii,43,0.7
+Etiology,Dominant organism,dominant_microorganism,Enterobacter cloacae ssp cloacae,39,0.6
+Etiology,Dominant organism,dominant_microorganism,Klebsiella pneumoniae BLEE,34,0.5
+Etiology,Dominant organism,dominant_microorganism,Citrobacter koseri,33,0.5
+Etiology,Dominant organism,dominant_microorganism,Citrobacter freundii,32,0.5
+Etiology,Dominant organism,dominant_microorganism,Raoultella ornithinolytica,23,0.4
+Etiology,Dominant organism,dominant_microorganism,Staphylococcus aureus MR,19,0.3
+Etiology,Dominant organism,dominant_microorganism,Serratia marcescens ssp marcescens,19,0.3
+Etiology,Dominant organism,dominant_microorganism,Klebsiella variicola,17,0.3
+Etiology,Dominant organism,dominant_microorganism,Salmonella enterica,17,0.3
+Etiology,Dominant organism,dominant_microorganism,Pantoea agglomerans,16,0.2
+Etiology,Dominant organism,dominant_microorganism,Enterobacter kobei,16,0.2
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas aeruginosa MR,15,0.2
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter lwoffii,9,0.1
+Etiology,Dominant organism,dominant_microorganism,Morganella morganii ssp morganii,7,0.1
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter ursingii,6,0.1
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter pittii,6,0.1
+Etiology,Dominant organism,dominant_microorganism,NEGATIVE,6,0.1
+Etiology,Dominant organism,dominant_microorganism,Enterobacter asburiae,5,0.1
+Etiology,Dominant organism,dominant_microorganism,Pantoea calida,5,0.1
+Etiology,Dominant organism,dominant_microorganism,Citrobacter braakii,5,0.1
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas putida,4,0.1
+Etiology,Dominant organism,dominant_microorganism,Serratia rubidaea,4,0.1
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter baumannii MR,3,0.0
+Etiology,Dominant organism,dominant_microorganism,Salmonella Typhimurium,3,0.0
+Etiology,Dominant organism,dominant_microorganism,Genus Pseudomonas,3,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas synxantha,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter junii,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Enterobacter hormaechei,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter baumannii complex,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Citrobacter youngae,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas oryzihabitans,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Enterobacter ludwigii,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Salmonella enterica.,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas mosselii,2,0.0
+Etiology,Dominant organism,dominant_microorganism,Klebsiella oxytoca BLEE,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Salmonella enterica grupo D,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter nosocomialis MR,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas cichorii,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas fulva,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas graminis,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Salmonella enterica grupo C,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Enterobacter cancerogenus,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Enterobacter hormaechei ssp hormaechei,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter venetianus,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter calcoaceticus,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas koreensis,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas mandelii,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Citrobacter sedlakii,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Salmonella enteritidis,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pantoea ananatis,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Acinetobacter sp.,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Serratia liquefaciens,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas alcaligenes,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pluralibacter gergoviae,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Staphylococcus capitis,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas alcaliphila,1,0.0
+Etiology,Dominant organism,dominant_microorganism,Pseudomonas fluorescens,1,0.0
+Resistance,Resistance mechanism,resistance_mechanism_target,NEGATIVE,5649,87.7
+Resistance,Resistance mechanism,resistance_mechanism_target,BLEE,578,9.0
+Resistance,Resistance mechanism,resistance_mechanism_target,MR,129,2.0
+Resistance,Resistance mechanism,resistance_mechanism_target,CARBAPENEMASE,39,0.6
+Resistance,Resistance mechanism,resistance_mechanism_target,MRSA,35,0.5
+Resistance,Resistance mechanism,resistance_mechanism_target,CARB,10,0.2
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,NEGATIVE,3346,52.0
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Penicilinas,2879,44.7
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Sulfamidas,1297,20.1
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Cefalosporinas 2 gen,1180,18.3
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Cefalosporinas 3/4 gen,1119,17.4
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Quinolonas,1041,16.2
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Cefalosporinas 1 gen,866,13.4
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Aminoglucosidos,729,11.3
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Monobactamicos,569,8.8
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Carbapenemas,426,6.6
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Polimixinas,360,5.6
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Fosfomicinas,355,5.5
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Tetraciclinas,330,5.1
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Nitrofuranos,266,4.1
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Anfenicoles,224,3.5
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Macrolidos,206,3.2
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Lincosamidas,161,2.5
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Other/Unmapped,30,0.5
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Otros antibacterianos,22,0.3
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Rifamicinas,12,0.2
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Glicopeptidos,3,0.0
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,Oxazolidinonas,1,0.0
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,NEGATIVE,5321,82.6
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,RESIST_CEFALOSPORINAS_3a_4a,1119,17.4

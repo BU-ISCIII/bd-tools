@@ -1,0 +1,13 @@
+# BATHECOMB first-pass filtered dataset.
+# Keep identifiers and audit/target-support columns in the full CSV; remove
+# direct IDs and free-text lists from the model-compatible filtered CSV by default.
+admission_id
+record_id
+fecha_ingreso
+fecha_alta
+fecha_hemocultivo
+fecha_cultivo_*
+organism_list
+resistance_mechanism_labels
+antibiogram_resistant_drugs
+treatment_drug_list

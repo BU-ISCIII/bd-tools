@@ -1,0 +1,14 @@
+table_name,created,recoded,transformed,dropped,warnings,notes
+_pipeline_run,0,0,0,0,0,4
+episodio_ingreso,0,0,22,0,0,1
+paciente,0,1,0,0,0,0
+comorbilidad,0,0,32,0,0,0
+factores_riesgo_infeccion_bmr,0,0,16,0,0,0
+signos_sintomas,0,0,34,0,0,0
+laboratorio,0,0,30,0,0,0
+episodio_uci,3,0,0,0,0,0
+episodio_infeccion,4,0,0,0,0,0
+antibiograma,2,0,0,0,0,0
+tto_antimicrobiano,0,0,7,0,1,0
+merged_dataset,1,0,164,0,0,0
+filtered_dataset,0,0,0,11,0,2

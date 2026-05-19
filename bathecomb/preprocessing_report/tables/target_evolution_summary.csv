@@ -1,0 +1,5 @@
+domain,target_version,target_column,samples,classes,majority_class,majority_class_count,majority_class_percent,top_classes,notes
+Etiology,Dominant organism,dominant_microorganism,6440,73,Escherichia coli,2382,37.0,"Escherichia coli: 2,382; Klebsiella pneumoniae: 922; Staphylococcus aureus: 831; Pseudomonas aeruginosa: 626",Most frequent microorganism among infection episodes in the admission.
+Resistance,Resistance mechanism,resistance_mechanism_target,6440,6,NEGATIVE,5649,87.7,"NEGATIVE: 5,649; BLEE: 578; MR: 129; CARBAPENEMASE: 39",Coarse phenotype mechanism from infection episodes; NEGATIVE if no phenotype is recorded.
+Resistance,Antibiogram resistant families,antibiogram_resistant_families,6440,22,NEGATIVE,3346,52.0,"NEGATIVE: 3,346; Penicilinas: 2,879; Sulfamidas: 1,297; Cefalosporinas 2 gen: 1,180",Antimicrobial families with at least one resistant antibiogram result in the admission.
+Resistance,Cephalosporin yes/no,resistente_cefalosporina,6440,2,NEGATIVE,5321,82.6,"NEGATIVE: 5,321; RESIST_CEFALOSPORINAS_3a_4a: 1,119",Binary third/fourth-generation cephalosporin resistance target.

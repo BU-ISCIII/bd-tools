@@ -1,0 +1,76 @@
+report_title: "BATHECOMB Preprocessing Report"
+report_description: >
+  First-pass admission-level preprocessing report for the BATHECOMB SQLite data.
+  The pipeline aggregates patient, admission, infection, antibiogram, treatment,
+  laboratory, symptom, comorbidity, and risk-factor tables to one row per
+  patient admission date.
+
+domain_by_stage:
+  _pipeline_run: Pipeline
+  paciente: Patient
+  episodio_ingreso: Admission
+  comorbilidad: Comorbidity
+  factores_riesgo_infeccion_bmr: BMR Risk Factors
+  signos_sintomas: Symptoms And Severity
+  laboratorio: Laboratory
+  episodio_uci: ICU
+  episodio_infeccion: Infection Episodes
+  antibiograma: Antibiogram
+  tto_antimicrobiano: Antimicrobial Treatment
+  merged_dataset: Merged Dataset
+  filtered_dataset: Filtered Dataset
+
+predictive_targets:
+  - model: "Sepsis"
+    target_column: sepsis
+    notes: "Binary sepsis flag from signos_sintomas aggregated at admission level."
+  - model: "Mortality 30 days"
+    target_column: mortalidad_30_dias
+    notes: "Admission-level 30-day mortality when available."
+  - model: "Resistance mechanism"
+    target_column: resistance_mechanism_target
+    notes: "Coarse resistance mechanism label from episodio_infeccion.fenotipo_resistencia."
+  - model: "Cephalosporin resistance"
+    target_column: resistente_cefalosporina
+    notes: "Derived from resistant antibiogram rows mapped to antimicrobial families."
+
+target_evolution:
+  - domain: "Etiology"
+    target_version: "Dominant organism"
+    target_columns: [dominant_microorganism]
+    count_mode: single
+    notes: "Most frequent microorganism among infection episodes in the admission."
+  - domain: "Resistance"
+    target_version: "Resistance mechanism"
+    target_columns: [resistance_mechanism_target]
+    count_mode: single
+    notes: "Coarse phenotype mechanism from infection episodes; NEGATIVE if no phenotype is recorded."
+  - domain: "Resistance"
+    target_version: "Antibiogram resistant families"
+    target_columns: [antibiogram_resistant_families]
+    count_mode: multilabel
+    notes: "Antimicrobial families with at least one resistant antibiogram result in the admission."
+  - domain: "Resistance"
+    target_version: "Cephalosporin yes/no"
+    target_columns: [resistente_cefalosporina]
+    count_mode: single
+    notes: "Binary third/fourth-generation cephalosporin resistance target."
+
+prediction_detail_sections:
+  - section: "Sepsis"
+    description: "Admission-level sepsis target."
+    target_column: sepsis
+  - section: "Dominant organism"
+    description: "Most frequent microorganism in the admission."
+    target_column: dominant_microorganism
+    top_n: 30
+  - section: "Resistance mechanism"
+    description: "Coarse resistance mechanism target from infection phenotype labels."
+    target_column: resistance_mechanism_target
+  - section: "Antibiogram resistant families"
+    description: "Multilabel antimicrobial family resistance derived from antibiogram rows."
+    target_column: antibiogram_resistant_families
+    count_mode: multilabel
+  - section: "Cephalosporin resistance"
+    description: "Binary cephalosporin 3a/4a resistance target."
+    target_column: resistente_cefalosporina
