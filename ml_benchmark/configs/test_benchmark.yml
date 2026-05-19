@@ -9,6 +9,8 @@ data:
   path: tests/data/example_filtered.csv
   # Optional sample-weight column. Leave empty/null if not used.
   weight_column:
+  # Optional identifier columns copied into prediction exports and removed from X.
+  id_variables: []
   # Outcome-like columns that must be removed from X for every target.
   target_like_columns:
     - example_outcome

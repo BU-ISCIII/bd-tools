@@ -483,6 +483,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         X=split_data["X_train"],
         y=split_data["y_train"],
         sample_weight=split_data["sample_weight_train"],
+        id_variables=split_data["id_train"],
     )
     validation_metrics = _aggregate_metrics(
         y_true=predictions["y_true"],
@@ -500,6 +501,7 @@ def run_job(config: BenchmarkConfig, job: BenchmarkJob, *, dry_run: bool = False
         X_test=split_data["X_test"],
         y_test=split_data["y_test"],
         sample_weight_train=split_data["sample_weight_train"],
+        id_test=split_data["id_test"],
     )
     metrics = {
         "validation_cv": validation_metrics,
@@ -613,6 +615,7 @@ def _split_train_test(
     X = prepared["X"]
     y = prepared["y"]
     sample_weight = prepared["sample_weight"]
+    id_variables = prepared.get("id_variables", pd.DataFrame(index=X.index))
     indices = np.arange(len(X))
     stratify = y if config.split.stratify and y.value_counts().min() >= 2 else None
     train_idx, test_idx = train_test_split(
@@ -635,6 +638,8 @@ def _split_train_test(
         "y_test": y.iloc[test_idx],
         "sample_weight_train": sample_weight_train,
         "sample_weight_test": sample_weight_test,
+        "id_train": id_variables.iloc[train_idx],
+        "id_test": id_variables.iloc[test_idx],
         "classes": sorted(pd.Series(y.iloc[train_idx]).dropna().unique().tolist(), key=str),
     }
 
@@ -661,9 +666,15 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
     df, cohort_filter_report = _apply_cohort_row_filters(df, config)
 
     y = df[target_column]
+    data_config = config.raw.get("data", {})
+    id_variable_names = list(data_config.get("id_variables", []))
+    present_id_variables = [column for column in id_variable_names if column in df.columns]
+    missing_id_variables = [column for column in id_variable_names if column not in df.columns]
+    id_variables = df[present_id_variables].copy() if present_id_variables else pd.DataFrame(index=df.index)
     reserved_columns = set(_all_target_columns(config))
     reserved_columns.update(target_columns)
-    weight_column = config.raw.get("data", {}).get("weight_column")
+    reserved_columns.update(present_id_variables)
+    weight_column = data_config.get("weight_column")
     sample_weight = None
     if weight_column and weight_column in df.columns:
         sample_weight = df[weight_column]
@@ -683,6 +694,7 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
     y = y.loc[X.index]
     if sample_weight is not None:
         sample_weight = sample_weight.loc[X.index]
+    id_variables = id_variables.loc[X.index]
     if X.empty:
         raise ValueError(
             f"Feature view '{job.feature_view.name}' produced no columns for job "
@@ -693,6 +705,9 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
         "X": X,
         "y": y,
         "sample_weight": sample_weight,
+        "id_variables": id_variables,
+        "id_variable_columns": present_id_variables,
+        "missing_id_variable_columns": missing_id_variables,
         "classes": sorted(pd.Series(y).dropna().unique().tolist(), key=str),
         "feature_columns": feature_columns,
         "feature_view_resolution": resolution,
@@ -926,6 +941,7 @@ def _cross_validate_job(
     X: pd.DataFrame,
     y: pd.Series,
     sample_weight: pd.Series | None,
+    id_variables: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     splitter = _build_splitter(config, y)
     fold_rows = []
@@ -973,6 +989,9 @@ def _cross_validate_job(
                 "y_pred": y_pred,
             }
         )
+        if id_variables is not None and not id_variables.empty:
+            id_frame = id_variables.iloc[validation_idx].reset_index(drop=True)
+            pred_frame = pd.concat([id_frame, pred_frame], axis=1)
         if proba is not None:
             for class_idx, class_value in enumerate(classes):
                 pred_frame[f"proba_{class_value}"] = proba[:, class_idx]
@@ -990,6 +1009,7 @@ def _fit_and_evaluate_test(
     X_test: pd.DataFrame,
     y_test: pd.Series,
     sample_weight_train: pd.Series | None,
+    id_test: pd.DataFrame | None = None,
 ) -> tuple[Dict[str, Any], pd.DataFrame]:
     estimator = clone(pipeline)
     fit_params = {}
@@ -1019,6 +1039,8 @@ def _fit_and_evaluate_test(
             "y_pred": y_pred.to_numpy(),
         }
     )
+    if id_test is not None and not id_test.empty:
+        predictions = pd.concat([id_test.reset_index(drop=True), predictions], axis=1)
     if proba is not None:
         for class_idx, class_value in enumerate(classes):
             predictions[f"proba_{class_value}"] = proba[:, class_idx]
@@ -1130,6 +1152,12 @@ def _build_and_write_audit(
             "target_removed_features": {
                 "count": len(prepared["target_removed_columns"]),
                 "columns": prepared["target_removed_columns"],
+            },
+            "id_variables": {
+                "count": len(prepared.get("id_variable_columns", [])),
+                "columns": prepared.get("id_variable_columns", []),
+                "missing_columns": prepared.get("missing_id_variable_columns", []),
+                "usage": "removed_from_X_and_copied_to_prediction_exports",
             },
             "candidate_features_after_target_removal": prepared[
                 "candidate_features_after_target_removal"

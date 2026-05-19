@@ -24,6 +24,12 @@ data:
   # sample_weight to estimators that accept it.
   weight_column: sample_weight
 
+  # Identifier columns retained for audit/prediction exports. They are removed
+  # from model features before training.
+  id_variables:
+    - person_id
+    - fecha_ingreso_urgencias
+
   # Columns that represent outcomes or target-like information. The active
   # target is removed automatically, and all columns listed here are also
   # removed from X to avoid leakage when a different target is being modeled.
