@@ -140,3 +140,112 @@ def make_report(training_dir: Path):
 ├── processing/
 ├── *.out
 └── *.err
+```
+# Global Summary
+
+| Level   | Mode                   | Macro F1                        | ROC-AUC                        | PR-AUC                        |
+| ------- | ---------------------- | ------------------------------- | ------------------------------ | ----------------------------- |
+| Level 1 | binary                 | {metric(l1, "macro_f1")}        | {metric(l1, "roc_auc")}        | {metric(l1, "pr_auc")}        |
+| Level 2 | {l2.get("mode", "NA")} | {metric(l2_stage2, "macro_f1")} | {metric(l2_stage2, "roc_auc")} | {metric(l2_stage2, "pr_auc")} |
+| Level 3 | {l3.get("mode", "NA")} | {metric(l3, "macro_f1")}        | {metric(l3, "roc_auc")}        | {metric(l3, "pr_auc")}        |
+
+## Level 1
+### Summary
+| Field    | Value                                   |
+| -------- | --------------------------------------- |
+| Target   | `{l1_summary.get("target", "sepsis")}`  |
+| Features | `{len(l1_summary.get("features", []))}` |
+| Model    | `{l1_summary.get("model", "NA")}`       |
+
+### Report
+{l1_report}
+
+### Selected Features
+{format_feature_block(l1_summary.get("features", []))}
+
+## Level 2
+{l2.get("mode", "NA")}
+
+### Stage 1: Gate
+#### Summary
+| Metric    | Value                            |
+| --------- | -------------------------------- |
+| Macro F1  | {metric(l2_stage1, "macro_f1")}  |
+| ROC-AUC   | {metric(l2_stage1, "roc_auc")}   |
+| PR-AUC    | {metric(l2_stage1, "pr_auc")}    |
+| Precision | {metric(l2_stage1, "precision")} |
+| Recall    | {metric(l2_stage1, "recall")}    |
+
+#### Report
+{l2_gate_report}
+
+### Stage 2: Etiology
+| Metric    | Value                            |
+| --------- | -------------------------------- |
+| Macro F1  | {metric(l2_stage2, "macro_f1")}  |
+| ROC-AUC   | {metric(l2_stage2, "roc_auc")}   |
+| PR-AUC    | {metric(l2_stage2, "pr_auc")}    |
+| Precision | {metric(l2_stage2, "precision")} |
+| Recall    | {metric(l2_stage2, "recall")}    |
+
+#### Report
+{l2_staged_report}
+
+### Selected Features
+{format_feature_block(
+    l2_summary.get("stage2_subtype", l2_summary).get("features", [])
+)}
+
+## Level 3
+### Summary
+| Metric    | Value                     |
+| --------- | ------------------------- |
+| Macro F1  | {metric(l3, "macro_f1")}  |
+| ROC-AUC   | {metric(l3, "roc_auc")}   |
+| PR-AUC    | {metric(l3, "pr_auc")}    |
+| Precision | {metric(l3, "precision")} |
+| Recall    | {metric(l3, "recall")}    |
+
+### Report
+{l3_report}
+
+### Selected Features
+{format_feature_block(l3_summary.get("features", []))}
+
+## Processing Files
+| File                             | Exists                                                                        |
+| -------------------------------- | ----------------------------------------------------------------------------- |
+| nan_dropped_features.csv         | {(training_dir / "processing" / "nan_dropped_features.csv").exists()}         |
+| imputed_features.csv             | {(training_dir / "processing" / "imputed_features.csv").exists()}             |
+| correlation_dropped_features.csv | {(training_dir / "processing" / "correlation_dropped_features.csv").exists()} |
+
+## Output Logs
+
+### STDOUT
+{read_text(find_one(training_dir, "*.out"))[:100]}
+
+### STDERR
+{read_text(find_one(training_dir, "*.err"))[:100]}
+"""
+    
+out_file = training_dir / "modelling_report.md"
+out_file.write_text(md)
+
+print(f"[OK] Wrote report: {out_file}")
+
+# ENTRY POINT
+if __name__ == "__main__":
+    root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".")
+
+    if root.name.startswith("01-training_"):
+        make_report(root)
+
+    else:
+        training_dirs = sorted(root.glob("01-training_*"))
+
+        if not training_dirs:
+            print("No training folders found.")
+            sys.exit(1)
+
+        for td in training_dirs:
+            make_report(td)
