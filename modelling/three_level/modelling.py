@@ -24,6 +24,7 @@ from sklearn.preprocessing import LabelEncoder, MinMaxScaler, label_binarize
 
 from .utils import (
     DELETE_COLUMNS,
+    METADATA_COLUMNS,
     N_CPUS,
     JOB_ID,
     TODAY,
@@ -71,7 +72,11 @@ def run_training(args: argparse.Namespace) -> None:
     working_df = working_df.dropna(subset=[args.sepsis_target, args.weight_column])
     working_df = working_df[working_df[args.weight_column] > 0]
 
-    exclude_cols = all_targets.copy()
+    available_metadata_cols = [c for c in METADATA_COLUMNS if c in working_df.columns]
+    metadata_df = working_df[available_metadata_cols].copy()
+    metadata_df["original_row_index"] = metadata_df.index
+    
+    exclude_cols = all_targets.union(available_metadata_cols)
     feature_cols = [c for c in working_df.columns if c not in exclude_cols]
     if not feature_cols:
         raise ValueError("No feature columns remain after excluding targets.")
@@ -369,11 +374,15 @@ def run_training(args: argparse.Namespace) -> None:
             "features": l1_features,
         }, indent=2))
         l1_study.trials_dataframe().to_csv(l1_dir / "optuna_trials.csv", index=False)
-        pd.DataFrame({
+        l1_pred_df = pd.DataFrame({
             "true": y_sep_test_enc.values,
             "pred": l1_test_pred,
             "proba": l1_test_proba,
-        }, index=X_l1_test.index).to_csv(l1_dir / "predictions.csv", index_label="row_index")
+        }, index=X_l1_test.index)
+
+        l1_pred_df = metadata_df.reindex(l1_pred_df.index).join(l1_pred_df)
+
+        l1_pred_df.to_csv(l1_dir / "predictions.csv", index_label="row_index")
 
         all_summaries["level1_sepsis"] = {
             "target": args.sepsis_target,
@@ -609,6 +618,7 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_dir / "optuna_trials_direct_etiology.csv",
                 index=False,
             )
+            stage_pred_df = metadata_df.reindex(stage_pred_df.index).join(stage_pred_df)
 
             stage_pred_df.to_csv(
                 l2_dir / "predictions_direct_etiology.csv",
@@ -990,14 +1000,20 @@ def run_training(args: argparse.Namespace) -> None:
                 index=False,
             )
 
-            pd.DataFrame({
+            l2_gate_pred_df = pd.DataFrame({
                 "true": y2_gate_test.values,
                 "pred": l2_gate_test_pred.values,
                 "proba": l2_gate_test_proba.values,
-            }, index=X2_gate_test_scaled.index).to_csv(
+            }, index=X2_gate_test_scaled.index)
+
+            l2_gate_pred_df = metadata_df.reindex(l2_gate_pred_df.index).join(l2_gate_pred_df)
+
+            l2_gate_pred_df.to_csv(
                 l2_dir / "predictions_stage1_gate.csv",
                 index_label="row_index",
             )
+
+            stage2_pred_df = metadata_df.reindex(stage2_pred_df.index).join(stage2_pred_df)
 
             stage2_pred_df.to_csv(
                 l2_dir / "predictions_stage2_subtype.csv",
@@ -1203,11 +1219,19 @@ def run_training(args: argparse.Namespace) -> None:
             "actual_counts": gnb_true_counts,
         }, indent=2))
         gnb_study.trials_dataframe().to_csv(l3_dir / "gnb_gate_optuna_trials.csv", index=False)
-        pd.DataFrame({
+        
+        gnb_gate_pred_df = pd.DataFrame({
             "true_gnb": yg_test,
             "pred_gnb": gnb_test_pred,
             "proba_gnb_positive": gnb_test_proba,
-        }, index=Xg_test_scaled.index).to_csv(l3_dir / "gnb_gate_predictions.csv", index_label="row_index")
+        }, index=Xg_test_scaled.index)
+
+        gnb_gate_pred_df = metadata_df.reindex(gnb_gate_pred_df.index).join(gnb_gate_pred_df)
+
+        gnb_gate_pred_df.to_csv(
+            l3_dir / "gnb_gate_predictions.csv",
+            index_label="row_index",
+        )
         all_summaries["l3_gnb_gate_rfecv_scores"] = gnb_rfecv_history
 
     if not cef_valid_train_mask.any():
@@ -1352,6 +1376,9 @@ def run_training(args: argparse.Namespace) -> None:
     else:
         for idx, class_name in enumerate(l3_target_names):
             l3_pred_df[f"proba_{class_name}"] = l3_test_proba[:, idx]
+
+    l3_pred_df = metadata_df.reindex(l3_pred_df.index).join(l3_pred_df)
+
     l3_pred_df.to_csv(l3_dir / "predictions.csv", index_label="row_index")
 
     l3_confusion = confusion_matrix(

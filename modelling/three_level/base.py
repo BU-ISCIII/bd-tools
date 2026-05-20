@@ -76,6 +76,9 @@ TODAY = datetime.today().strftime("%Y%m%d%H%M%S")
 _DATA_CFG = data_processing_config()
 FOCUS_MAP = _DATA_CFG["focus_map"]
 
+# Metadata columns to include in the output predictions file for analysis
+METADATA_COLUMNS = _DATA_CFG["metadata_columns"]
+
 # All potential target columns – none of these should appear as features
 TARGET_REMOVE = _DATA_CFG["target_remove"]
 

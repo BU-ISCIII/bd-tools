@@ -33,11 +33,19 @@
     "resultado_hemo_gnb_all",
     "dominant_all_cult_org",
     "infected_yes_no",
+    "infected_yes_no_wother_cultures",
+    "resultado_inf_gnbselected",
+    "resultado_inf_gnball",
+    "resultado_inf_mo",
     "bmr_etiologia",
     "fenotipo_resistencia",
     "fenotipo_resistencia_individual",
     "resistente_cefalosporina",
     "resistente_cefalosporina_multi"
+  ],
+  "metadata_columns": [
+    "person_id",
+    "fecha_ingreso_urgencias"
   ],
   "delete_columns": [],
   "missing_indicator_threshold": 0.1,
