@@ -193,10 +193,12 @@ def shap_rfecv(
     while len(remaining_features) > min_features:
         # Score the CURRENT feature set — label and score are in sync
         metrics = _cv_metrics(remaining_features)
-        history[str(len(remaining_features))] = {
+        entry = history.get(str(len(remaining_features)), {})
+        entry.update({
             "metrics": metrics,
             "features": remaining_features.copy(),
-        }
+        })
+        history[str(len(remaining_features))] = entry
         primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
         print(
             f"Features: {len(remaining_features)} | "
@@ -210,18 +212,19 @@ def shap_rfecv(
         remaining_features.remove(removed)
         # Track the removed feature in history for CSV export
         n_after_removal = len(remaining_features)
-        if str(n_after_removal) not in history:
-            history[str(n_after_removal)] = {"removed_feature": removed}
-        else:
-            history[str(n_after_removal)]["removed_feature"] = removed
+        entry = history.get(str(n_after_removal), {})
+        entry["removed_feature"] = removed
+        history[str(n_after_removal)] = entry
         print(f"Removed feature: {removed}")
 
     # Score and record the final minimal feature set
     final_metrics = _cv_metrics(remaining_features)
-    history[str(len(remaining_features))] = {
+    entry = history.get(str(len(remaining_features)), {})
+    entry.update({
         "metrics": final_metrics,
         "features": remaining_features.copy(),
-    }
+    })
+    history[str(len(remaining_features))] = entry
     primary_metric = "pr_auc" if scoring == "pr_auc" else "roc_auc"
     print(
         f"Features: {len(remaining_features)} | "
@@ -253,9 +256,11 @@ def shap_rfecv(
             if "metrics" in entry:
                 metrics = entry["metrics"]
                 removed = entry.get("removed_feature", None)
+                features = entry.get("features")
                 rfecv_records.append({
                     "n_features": n_feat_str,
                     "removed_feature": removed,
+                    "features": ",".join(features) if features is not None else None,
                     "roc_auc": metrics["roc_auc"],
                     "pr_auc": metrics["pr_auc"],
                     "f1_macro": metrics["f1_macro"],

@@ -86,6 +86,8 @@ DELETE_COLUMNS = _DATA_CFG["delete_columns"]
 
 FOCUS_TO_EXCLUDE = set(_DATA_CFG["focus_to_exclude"])
 
+GATE_RECALL = float(_DATA_CFG["gate_recall"])
+
 # ---------------------------------------------------------------------------
 # Data preparation helpers
 # ---------------------------------------------------------------------------

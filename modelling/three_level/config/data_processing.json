@@ -53,5 +53,6 @@
     "n_neighbors": 10,
     "weights": "distance"
   },
-  "drop_helper_columns": []
+  "drop_helper_columns": [],
+  "gate_recall": 0.90
 }

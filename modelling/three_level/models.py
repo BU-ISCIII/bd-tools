@@ -5,6 +5,7 @@ import io
 
 from .base import *
 from .config import algorithm_params
+from sklearn.metrics import precision_recall_curve, roc_curve
 
 _ALGO_PARAMS = algorithm_params()
 
@@ -129,4 +130,15 @@ def _find_best_threshold(y_true: np.ndarray, y_proba: np.ndarray) -> float:
     fpr, tpr, thresholds = roc_curve(y_true, y_proba)
     j_scores = tpr - fpr
     best_idx = int(np.argmax(j_scores))
-    return float(np.clip(thresholds[best_idx], 0.05, 0.95))
+    return float(thresholds[best_idx])
+
+def _find_threshold_for_recall(y_true, proba, target_recall=0.85):
+    precision, recall, thresholds = precision_recall_curve(y_true, proba)
+
+    valid = np.where(recall[:-1] >= target_recall)[0]
+    if len(valid) == 0:
+        return 0.5
+
+    # Among thresholds achieving target recall, maximize precision
+    best_idx = valid[np.argmax(precision[valid])]
+    return float(thresholds[best_idx])

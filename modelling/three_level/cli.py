@@ -106,24 +106,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         skip_rfecv=bool(tcfg["skip_rfecv"]),
         optuna_load_if_exists=bool(tcfg["optuna_load_if_exists"]),
         l2_gate_proba_as_feature=bool(tcfg.get("l2_gate_proba_as_feature", False)),
-        l3_gnb_gate_proba_as_feature=bool(tcfg.get("l3_gnb_gate_proba_as_feature", False)),
     )
     parser.add_argument("--skip-rfecv", action="store_true", help="Skip RFECV and use all features.")
     parser.add_argument("--skip-optuna", action="store_true", help="Disable Optuna and fit with fixed model defaults.")
     parser.add_argument("--skip-level1", action="store_true", help="Skip Level 1 sepsis training/prediction.")
     parser.add_argument("--skip-level2", action="store_true", help="Skip Level 2 hemoculture etiology training/prediction.")
     parser.add_argument("--skip-level3", action="store_true", help="Skip Level 3 resistance training/prediction.")
-    parser.add_argument("--l3-use-gnb-gate", action="store_true", help="Enable optional Level-3 GNB binary gate before resistance model.")
-    parser.add_argument(
-        "--l3-gnb-gate-proba-as-feature",
-        action="store_true",
-        help=(
-            "When using the optional Level 3 GNB gate, add the gate probability "
-            "as an extra feature to the Level 3 resistance model instead of "
-            "hard subsetting on GNB-positive rows."
-        ),
-    )
-    parser.add_argument("--l3-gnb-positive-label", type=str, default="GNBSelected", help="Positive label in --hemo-target used as GNB-positive when --l3-use-gnb-gate is enabled.")
     return parser
 
 
