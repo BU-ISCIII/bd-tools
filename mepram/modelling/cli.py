@@ -52,12 +52,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Label treated as gate-negative for the Level-2 binary gate.",
     )
     parser.add_argument(
-        "--hemo-negative-label",
-        type=str,
-        default=targets["hemo_negative_label"],
-        help="Label treated as hemoculture-negative for Level-2 direct etiology and Level-3 filter.",
-    )
-    parser.add_argument(
         "--skip-l2-gate",
         action="store_true",
         help=(
@@ -73,13 +67,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "extra feature to the Stage 2 subtype model."
         ),
     )
-    parser.add_argument("--hemo-coco-label", type=str, default=targets["hemo_coco_label"])
-    parser.add_argument("--hemo-bacilo-label", type=str, default=targets["hemo_bacilo_label"])
+    parser.add_argument(
+        "--set-gate-recall",
+        type=float,
+        default=tcfg.get("set_gate_recall", None),
+        help=(
+            "Optional recall target for Level 2 gate threshold selection. "
+            "If unset, the best Optuna threshold is used; otherwise the gate "
+            "threshold is chosen to achieve this recall."
+        ),
+    )
+    parser.add_argument(
+        "--hemo-stage2-mode",
+        type=str,
+        choices=["auto", "binary", "multiclass"],
+        default=tcfg.get("hemo_stage2_mode", "auto"),
+        help=(
+            "Level 2 Stage 2 subtype prediction mode when using the two-stage gate. "
+            "auto = binary if exactly 2 labels otherwise multiclass; binary = GNB vs non-GNB; "
+            "multiclass = predict all etiology classes including NEGATIVE and other_etiology."
+        ),
+    )
     parser.add_argument("--bmr-target", type=str, default=targets["bmr_target"])
-    parser.add_argument("--bmr-negative-label", type=str, default=targets["bmr_negative_label"])
     parser.add_argument("--cef-target", type=str, default=targets["cef_target"])
-    parser.add_argument("--skip-l3-hemo-filter", action="store_true")
-    parser.add_argument("--cef-multi-positive-label", type=str, default=targets["cef_multi_positive_label"])
     parser.add_argument("--weight-column", type=str, default=targets["weight_column"])
     parser.add_argument(
         "--model-type", type=str, choices=["xgb", "lgbm", "rf", "catb"], default=tcfg["model_type"]
@@ -93,7 +103,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--optuna-load-if-exists", action="store_true")
     parser.add_argument("--na-perc-limit", "-na", type=float, default=tcfg["na_perc_limit"])
     parser.add_argument("--max-features", type=int, default=tcfg["max_features"])
-    parser.add_argument("--l3-min-positive", type=int, default=tcfg["l3_min_positive"])
+    parser.add_argument("--l3-min-positive", type=int, default=tcfg.get("l3_min_positive", 30))
     parser.add_argument("--max-corr", type=float, default=tcfg["max_corr"])
     parser.add_argument(
         "--no-impute", dest="impute_missing", action="store_false",
@@ -102,7 +112,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.set_defaults(
         impute_missing=bool(tcfg["impute_missing"]),
         skip_l2_gate=bool(tcfg["skip_l2_gate"]),
-        skip_l3_hemo_filter=bool(tcfg["skip_l3_hemo_filter"]),
         skip_rfecv=bool(tcfg["skip_rfecv"]),
         optuna_load_if_exists=bool(tcfg["optuna_load_if_exists"]),
         l2_gate_proba_as_feature=bool(tcfg.get("l2_gate_proba_as_feature", False)),

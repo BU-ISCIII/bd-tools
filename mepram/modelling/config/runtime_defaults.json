@@ -8,13 +8,8 @@
     "hemo_target": "resultado_hemo_gnb_selected",
     "hemo_gate_target": "infected_yes_no",
     "hemo_gate_negative_label": "NEGATIVE",
-    "hemo_negative_label": "NEGATIVE",
-    "hemo_coco_label": "Coco gram+",
-    "hemo_bacilo_label": "Bacilo gram-",
     "bmr_target": "bmr_etiologia",
-    "bmr_negative_label": "NEGATIVE",
     "cef_target": "resistente_cefalosporina",
-    "cef_multi_positive_label": "cefalosporina",
     "weight_column": "sample_weight"
   },
   "training": {
@@ -25,8 +20,8 @@
     "random_state": 42,
     "na_perc_limit": 0.2,
     "max_features": 200,
-    "l3_min_positive": 30,
     "max_corr": 0.99,
+    "l3_min_positive": 30,
     "impute_missing": true,
     "optuna_storage": "",
     "optuna_study_prefix": "three_level_catb",
@@ -37,11 +32,9 @@
     "skip_level2": false,
     "skip_level3": false,
     "skip_l2_gate": false,
-    "skip_l3_hemo_filter": false,
     "l2_gate_proba_as_feature": false,
-    "l3_gnb_gate_proba_as_feature": false,
-    "l3_use_gnb_gate": false,
-    "l3_gnb_positive_label": "GNBSelected"
+    "set_gate_recall": null,
+    "hemo_stage2_mode": "auto"
   },
   "categorical_for_dummies": ["foco", "ultimo_antib"]
 }

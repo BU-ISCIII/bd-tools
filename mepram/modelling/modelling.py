@@ -41,6 +41,13 @@ from .oof import generate_oof_probas_binary, generate_oof_probas_multiclass
 from .feature_filters import shap_rfecv, remove_correlated_features, fit_iqr_bounds, apply_iqr_bounds_to_nan
 from .feature_selection import cap_features, _build_ranking_model
 
+def _map_hemo_subtype_to_gnb_binary(target_series: pd.Series) -> pd.Series:
+    return pd.Series(
+        np.where(target_series.str.contains("GNB", case=False, na=False), "GNB", "non_GNB"),
+        index=target_series.index,
+        name=target_series.name,
+    )
+
 def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print("SELECTED ARGS:", args)
@@ -767,12 +774,18 @@ def run_training(args: argparse.Namespace) -> None:
 
             l2_gate_optuna_threshold = l2_gate_threshold
 
-            l2_gate_threshold = _find_threshold_for_recall(
-                y2_gate_train,
-                l2_gate_train_proba,
-                target_recall=GATE_RECALL,
-            )
-            
+            if args.set_gate_recall is not None:
+                if not 0.0 <= args.set_gate_recall <= 1.0:
+                    raise ValueError("--set-gate-recall must be between 0 and 1.")
+                l2_gate_threshold = _find_threshold_for_recall(
+                    y2_gate_train,
+                    l2_gate_train_proba,
+                    target_recall=args.set_gate_recall,
+                )
+                threshold_strategy = f"target_recall_{args.set_gate_recall}"
+            else:
+                threshold_strategy = "best_threshold"
+
             l2_gate_test_proba = l2_gate_model.predict_proba(X2_gate_test_scaled)[:, 1]
             l2_gate_test_proba = pd.Series(
                 l2_gate_test_proba,
@@ -816,10 +829,25 @@ def run_training(args: argparse.Namespace) -> None:
             y2_sub_train_raw = y_hemo_train.loc[subtype_train_mask].astype(str)
             y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
 
+            stage2_mode = args.hemo_stage2_mode
+            if stage2_mode == "binary":
+                print("  Stage 2 mode: binary GNB vs non-GNB")
+                y2_sub_train_raw = _map_hemo_subtype_to_gnb_binary(y2_sub_train_raw)
+                y2_sub_test_raw = _map_hemo_subtype_to_gnb_binary(y2_sub_test_raw)
+            elif stage2_mode == "multiclass":
+                print("  Stage 2 mode: multiclass (all etiology classes)")
+            else:
+                print("  Stage 2 mode: auto (binary if 2 classes else multiclass)")
+
             if y2_sub_train_raw.empty:
                 raise ValueError(
                     "No train rows for Level 2 Stage-2 subtype after gating. "
                     "Check that the Level-2 gate target and Level-2 etiology target are present and aligned."
+                )
+
+            if stage2_mode == "binary" and y2_sub_train_raw.nunique() < 2:
+                raise ValueError(
+                    "Stage 2 binary mode requires both GNB and non-GNB labels in the training subset."
                 )
 
             le_l2 = LabelEncoder()
@@ -1011,8 +1039,14 @@ def run_training(args: argparse.Namespace) -> None:
 
             (l2_dir / f"report_staged_{args.hemo_target}.txt").write_text(stage2_report_text)
 
+            actual_stage2_mode = (
+                stage2_mode
+                if stage2_mode != "auto"
+                else ("binary" if is_binary_subtype else "multiclass")
+            )
             stage2_summary = {
                 "mode": "binary" if is_binary_subtype else "multiclass",
+                "stage2_mode": actual_stage2_mode,
                 "classes": l2_target_names,
                 "params": l2_params,
                 "threshold": l2_threshold,
@@ -1041,7 +1075,7 @@ def run_training(args: argparse.Namespace) -> None:
                     "params": l2_gate_params,
                     "optuna_threshold": l2_gate_optuna_threshold,
                     "threshold": l2_gate_threshold,
-                    "threshold_strategy": "target_recall_0.85",
+                    "threshold_strategy": threshold_strategy,
                     "macro_f1": l2_gate_f1,
                     "roc_auc": l2_gate_auc,
                     "pr_auc": l2_gate_pr_auc,
@@ -1172,8 +1206,14 @@ def run_training(args: argparse.Namespace) -> None:
                     .to_csv(l2_dir / "error_summary_stage2_subtype.csv", index=False)
                 )
 
+            actual_stage2_mode = (
+                stage2_mode
+                if stage2_mode != "auto"
+                else ("binary" if is_binary_subtype else "multiclass")
+            )
             all_summaries["level2_hemo"] = {
                 "mode": "two_stage_binary" if is_binary_subtype else "two_stage_multiclass_positive_gate",
+                "stage2_mode": actual_stage2_mode,
                 "stage1_gate": {
                     "macro_f1": l2_gate_f1,
                     "roc_auc": l2_gate_auc,
@@ -1191,11 +1231,8 @@ def run_training(args: argparse.Namespace) -> None:
                     "confusion_matrix": stage1_confusion,
                 },
                 "stage2_subtype": {
-                    "macro_f1": l2_f1,
-                    "roc_auc": l2_auc,
-                    "pr_auc": l2_pr_auc,
-                    "precision": l2_precision,
-                    "recall": l2_recall,
+                    "mode": "binary" if is_binary_subtype else "multiclass",
+                    "stage2_mode": actual_stage2_mode,
                     "classes": l2_target_names,
                     "threshold": l2_threshold,
                     "predicted_counts": stage2_pred_counts,

@@ -71,6 +71,7 @@ notebooks/
 outputs/
 playground/*
 !playground/.gitignore
+catboost_info/
 
 # Flask stuff:
 instance/

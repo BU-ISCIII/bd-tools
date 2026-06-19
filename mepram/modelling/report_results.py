@@ -229,8 +229,15 @@ def target_summary(params: dict[str, str]) -> list[str]:
         lines.append(f"- Level 1 target: `{params['SEPSIS_TARGET']}`")
     if params.get("HEMO_GATE_TARGET"):
         lines.append(f"- Level 2 gate target: `{params['HEMO_GATE_TARGET']}`")
+    if params.get("HEMO_SET_GATE_RECALL"):
+        lines.append(f"- Level 2 gate recall target: `{params['HEMO_SET_GATE_RECALL']}`")
     if params.get("HEMO_TARGET"):
-        lines.append(f"- Level 2 etiology target: `{params['HEMO_TARGET']}`")
+        hemo_line = f"- Level 2 etiology target: `{params['HEMO_TARGET']}`"
+        if params.get("HEMO_STAGE2_MODE"):
+            hemo_line += f" (Stage 2 mode: `{params['HEMO_STAGE2_MODE']}`)"
+        lines.append(hemo_line)
+    elif params.get("HEMO_STAGE2_MODE"):
+        lines.append(f"- Level 2 Stage 2 mode: `{params['HEMO_STAGE2_MODE']}`")
     if params.get("RESISTENCIA_TARGET"):
         lines.append(f"- Level 3 resistance target: `{params['RESISTENCIA_TARGET']}`")
     if params.get("BMR_TARGET"):
@@ -259,6 +266,8 @@ def parameter_summary(params: dict[str, str]) -> list[str]:
         "NA_PERC_LIMIT",
         "MAX_FEATURES",
         "MAX_CORR",
+        "HEMO_STAGE2_MODE",
+        "HEMO_SET_GATE_RECALL",
         "SKIP_RFECV",
         "SKIP_OPTUNA",
         "OPTUNA_STORAGE",
