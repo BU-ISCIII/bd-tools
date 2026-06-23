@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 import json
 import sys
@@ -57,6 +58,13 @@ class ReportContext:
     script_files: list[Path]
 
 
+@dataclass
+class ResultsContext:
+    folder: Path
+    output: Path
+    training_dirs: list[Path]
+
+
 def read_text(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -93,6 +101,10 @@ def find_files(folder: Path, pattern: str) -> list[Path]:
     return sorted(path for path in folder.glob(pattern) if path.is_file())
 
 
+def find_training_dirs(folder: Path) -> list[Path]:
+    return sorted(path for path in folder.iterdir() if path.is_dir() and path.name.startswith("01-training"))
+
+
 def collect_report_context(folder: Path) -> ReportContext:
     params_path = folder / "training.params"
     params = parse_params(params_path)
@@ -114,6 +126,14 @@ def collect_report_context(folder: Path) -> ReportContext:
         plot_files=plot_files,
         legacy_readme=legacy_readme,
         script_files=script_files,
+    )
+
+
+def collect_results_context(folder: Path) -> ResultsContext:
+    return ResultsContext(
+        folder=folder,
+        output=folder / "RESULTS.md",
+        training_dirs=find_training_dirs(folder),
     )
 
 
@@ -295,6 +315,249 @@ def command_list(params: dict[str, str]) -> list[str]:
     return commands
 
 
+def format_metric(value: Any) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, float):
+        return f"{value:.4f}"
+    if isinstance(value, int):
+        return str(value)
+    if value is None:
+        return "NA"
+    return str(value)
+
+
+def link_image(base: Path, image: Path, title: str | None = None) -> str:
+    rel = image.relative_to(base)
+    alt = title or image.stem.replace("_", " ")
+    return f"![{alt}]({rel.as_posix()})"
+
+
+def list_image_paths(folder: Path) -> list[Path]:
+    if not folder.exists():
+        return []
+    return sorted(
+        path
+        for path in folder.iterdir()
+        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg", ".pdf"}
+    )
+
+
+def render_image_gallery(base: Path, images: list[Path]) -> list[str]:
+    lines: list[str] = []
+    for image in images:
+        title = image.stem.replace("_", " ")
+        lines.extend([f"#### `{image.name}`", "", link_image(base, image, title), ""])
+    return lines
+
+
+def render_metrics_block(title: str, metrics: list[tuple[str, Any]]) -> list[str]:
+    lines = [f"#### {title}", ""]
+    for key, value in metrics:
+        lines.append(f"- {key}: `{format_metric(value)}`")
+    lines.append("")
+    return lines
+
+
+def render_level1_section(base: Path, run_dir: Path, level_dir: Path) -> list[str]:
+    summary_path = level_dir / "summary.json"
+    data = read_json(summary_path) or {}
+    images = list_image_paths(run_dir / "plots" / level_dir.name)
+
+    lines = [f"### Level 1: `{level_dir.name}`", ""]
+    if isinstance(data, dict):
+        lines.extend(render_metrics_block(
+            "Summary",
+            [
+                ("target", data.get("target")),
+                ("macro F1", data.get("macro_f1")),
+                ("ROC AUC", data.get("roc_auc")),
+                ("PR AUC", data.get("pr_auc")),
+                ("precision", data.get("precision")),
+                ("recall", data.get("recall")),
+                ("threshold", data.get("threshold")),
+                ("classes", data.get("classes")),
+                ("selected features", len(data.get("features", [])) if isinstance(data.get("features"), list) else data.get("features")),
+            ],
+        ))
+    lines.extend(render_image_gallery(base, images))
+    return lines
+
+
+def render_level2_section(base: Path, run_dir: Path, level_dir: Path) -> list[str]:
+    summary_path = level_dir / "summary.json"
+    data = read_json(summary_path) or {}
+    images = list_image_paths(run_dir / "plots" / level_dir.name)
+
+    lines = [f"### Level 2: `{level_dir.name}`", ""]
+    if isinstance(data, dict):
+        lines.extend(render_metrics_block(
+            "Run Summary",
+            [
+                ("mode", data.get("mode")),
+                ("stage2 mode", data.get("stage2_mode") or (data.get("stage2_subtype", {}) if isinstance(data.get("stage2_subtype"), dict) else {}).get("stage2_mode")),
+            ],
+        ))
+        stage1 = data.get("stage1_gate", {}) if isinstance(data.get("stage1_gate"), dict) else {}
+        lines.extend(render_metrics_block(
+            "Stage 1 Gate",
+            [
+                ("macro F1", stage1.get("macro_f1")),
+                ("ROC AUC", stage1.get("roc_auc")),
+                ("PR AUC", stage1.get("pr_auc")),
+                ("precision", stage1.get("precision")),
+                ("recall", stage1.get("recall")),
+                ("threshold", stage1.get("threshold")),
+                ("negative label", stage1.get("negative_label")),
+                ("positive label", stage1.get("positive_label")),
+            ],
+        ))
+        stage2 = data.get("stage2_subtype", {}) if isinstance(data.get("stage2_subtype"), dict) else {}
+        lines.extend(render_metrics_block(
+            "Stage 2 Subtype",
+            [
+                ("macro F1", stage2.get("macro_f1")),
+                ("ROC AUC", stage2.get("roc_auc")),
+                ("PR AUC", stage2.get("pr_auc")),
+                ("precision", stage2.get("precision")),
+                ("recall", stage2.get("recall")),
+                ("stage2 mode", stage2.get("stage2_mode")),
+                ("classes", stage2.get("classes")),
+            ],
+        ))
+    lines.extend(render_image_gallery(base, images))
+    return lines
+
+
+def render_level3_section(base: Path, run_dir: Path, level_dir: Path) -> list[str]:
+    summary_path = level_dir / "summary.json"
+    data = read_json(summary_path) or {}
+    images = list_image_paths(run_dir / "plots" / level_dir.name)
+
+    lines = [f"### Level 3: `{level_dir.name}`", ""]
+    if isinstance(data, dict):
+        lines.extend(render_metrics_block(
+            "Summary",
+            [
+                ("mode", data.get("mode")),
+                ("target", data.get("target")),
+                ("macro F1", data.get("macro_f1")),
+                ("ROC AUC", data.get("roc_auc")),
+                ("PR AUC", data.get("pr_auc")),
+                ("precision", data.get("precision")),
+                ("recall", data.get("recall")),
+                ("threshold", data.get("threshold")),
+                ("classes", data.get("classes")),
+                ("selected features", len(data.get("features", [])) if isinstance(data.get("features"), list) else data.get("features")),
+            ],
+        ))
+    lines.extend(render_image_gallery(base, images))
+    return lines
+
+
+def render_processing_section(base: Path, run_dir: Path) -> list[str]:
+    processing_dir = run_dir / "processing"
+    images = list_image_paths(run_dir / "plots" / "processing")
+    ordered_groups = [
+        ("QC", [
+            "processing_imputed_features.png",
+        ]),
+        ("Dropping", [
+            "processing_nan_dropped_features.png",
+            "processing_correlation_dropped_features.png",
+        ]),
+        ("RFECV", [
+            "processing_l1_rfecv_features_performance.png",
+            "processing_l2_gate_rfecv_features_performance.png",
+            "processing_l2_sub_rfecv_features_performance.png",
+            "processing_l3_rfecv_features_performance.png",
+        ]),
+        ("IQR outliers", [
+            "processing_iqr_outliers_train.png",
+            "processing_iqr_outliers_test.png",
+        ]),
+    ]
+
+    image_by_name = {image.name: image for image in images}
+    lines = ["## Processing", ""]
+    if not images:
+        lines.append("- No processing plots found.")
+        lines.append("")
+        return lines
+
+    if processing_dir.exists():
+        lines.append(f"- Processing artifacts: `{processing_dir.relative_to(base)}`")
+        lines.append("")
+
+    for group_name, filenames in ordered_groups:
+        group_images = [image_by_name[name] for name in filenames if name in image_by_name]
+        if not group_images:
+            continue
+        lines.extend([f"### {group_name}", ""])
+        lines.extend(render_image_gallery(base, group_images))
+
+    remaining_names = {name for _, group in ordered_groups for name in group}
+    remaining = [image for image in images if image.name not in remaining_names]
+    if remaining:
+        lines.extend(["### Other", ""])
+        lines.extend(render_image_gallery(base, remaining))
+    return lines
+
+
+def render_results_report(ctx: ResultsContext) -> str:
+    lines: list[str] = [
+        "# Results",
+        "",
+        f"- Folder: `{ctx.folder.name}`",
+        f"- Path: `{ctx.folder.resolve()}`",
+        f"- Generated: `{datetime.now().astimezone().isoformat(timespec='seconds')}`",
+        "",
+    ]
+
+    if not ctx.training_dirs:
+        lines.extend(["- No `01-training*` directories found.", ""])
+        return "\n".join(lines)
+
+    for run_dir in ctx.training_dirs:
+        lines.extend([
+            f"## Training Run: `{run_dir.name}`",
+            "",
+        ])
+        final_report = run_dir / "final_report.json"
+        aggregate_report = run_dir / "aggregate_summary.json"
+        report_data = read_json(final_report) or read_json(aggregate_report) or {}
+        if isinstance(report_data, dict) and "args" in report_data:
+            args = report_data.get("args", {}) if isinstance(report_data.get("args"), dict) else {}
+            lines.extend(render_metrics_block(
+                "Run Parameters",
+                [
+                    ("model type", args.get("model_type")),
+                    ("sepsis target", args.get("sepsis_target")),
+                    ("hemo gate target", args.get("hemo_gate_target")),
+                    ("hemo target", args.get("hemo_target")),
+                    ("stage 2 mode", args.get("hemo_stage2_mode")),
+                    ("BMR target", args.get("bmr_target")),
+                    ("cef target", args.get("cef_target")),
+                    ("max features", args.get("max_features")),
+                    ("skip RFECV", args.get("skip_rfecv")),
+                ],
+            ))
+
+        lines.extend(render_processing_section(ctx.folder, run_dir))
+
+        level1_dir = run_dir / "level1_sepsis"
+        level2_dir = run_dir / "level2_hemo"
+        level3_dir = run_dir / "level3_cefalosporina"
+        if level1_dir.exists():
+            lines.extend(render_level1_section(ctx.folder, run_dir, level1_dir))
+        if level2_dir.exists():
+            lines.extend(render_level2_section(ctx.folder, run_dir, level2_dir))
+        if level3_dir.exists():
+            lines.extend(render_level3_section(ctx.folder, run_dir, level3_dir))
+
+    return "\n".join(lines)
+
+
 def render_report(ctx: ReportContext) -> str:
     lines: list[str] = []
     folder_name = ctx.folder.name
@@ -384,13 +647,25 @@ def render_report(ctx: ReportContext) -> str:
     return "\n".join(lines)
 
 
-def make_report(folder: Path, output: Path | None = None) -> Path:
+def write_report_pair(folder: Path, output: Path | None = None) -> tuple[Path, Path | None]:
     folder = folder.resolve()
-    ctx = collect_report_context(folder)
-    report_text = render_report(ctx)
-    output_path = output.resolve() if output else ctx.output
-    output_path.write_text(report_text, encoding="utf-8")
-    return output_path
+    report_ctx = collect_report_context(folder)
+    results_ctx = collect_results_context(folder)
+
+    results_path = output.resolve() if output and output.name == results_ctx.output.name else results_ctx.output
+    report_path = output.resolve() if output and output.name != results_ctx.output.name else report_ctx.output
+
+    report_path.write_text(render_report(report_ctx), encoding="utf-8")
+    results_path.write_text(render_results_report(results_ctx), encoding="utf-8")
+
+    if report_path == results_path:
+        return report_path, None
+    return report_path, results_path
+
+
+def make_report(folder: Path, output: Path | None = None) -> Path:
+    report_path, _ = write_report_pair(folder, output)
+    return report_path
 
 
 def main(argv: list[str]) -> int:
@@ -405,8 +680,10 @@ def main(argv: list[str]) -> int:
         print(f"Folder path expected, got file: {folder}", file=sys.stderr)
         return 1
 
-    output_path = make_report(folder, output)
+    output_path, results_path = write_report_pair(folder, output)
     print(f"[OK] Wrote report: {output_path}")
+    if results_path is not None:
+        print(f"[OK] Wrote results report: {results_path}")
     return 0
 
 

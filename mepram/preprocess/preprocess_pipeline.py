@@ -7,12 +7,14 @@ import importlib.util
 import json
 import sqlite3
 import subprocess
+import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 import pandas as pd
+import yaml
 
 
 ROOT_DIR = Path(__file__).resolve().parent
@@ -20,7 +22,14 @@ PROJECT_ROOT = ROOT_DIR.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "db_mepram_sepsis_vf.sqlite3"
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "preprocess_test.csv"
 DEFAULT_CONFIG_PATH = ROOT_DIR / "config" / "preprocess_config.py"
-DEFAULT_DROP_COLUMNS_PATH = ROOT_DIR / "config" / "preprocess_columns_to_drop.txt"
+DEFAULT_FEATURE_APPROACH_CONFIG_PATH = ROOT_DIR / "config" / "preprocess_feature_views.yml"
+
+PACKAGE_ROOT = ROOT_DIR.parents[1]
+if str(PACKAGE_ROOT) not in sys.path:
+    sys.path.insert(0, str(PACKAGE_ROOT))
+
+from mepram.ml_benchmark.feature_views import resolve_feature_view
+from mepram.ml_benchmark.types import FeatureGroupSpec, FeatureViewSpec
 
 
 # Dataclasses define the structured objects passed through the pipeline.
@@ -76,6 +85,14 @@ class PipelineArtifacts:
     tables: dict[str, pd.DataFrame]
     maps: dict[str, dict[Any, Any]]
     logs: list[TableLog] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FeatureApproachConfig:
+    baseline_exclude_columns: list[str]
+    baseline_exclude_patterns: list[str]
+    feature_groups: dict[str, FeatureGroupSpec]
+    feature_views: dict[str, FeatureViewSpec]
 
 
 def describe_columns(columns: str | list[str], description: str) -> dict[str, str]:
@@ -226,38 +243,109 @@ def export_logs(
     return df
 
 
-def read_drop_columns(drop_columns_path: Path, columns: list[str]) -> list[str]:
-    if not drop_columns_path.exists():
-        raise FileNotFoundError(f"Drop-columns file not found: {drop_columns_path}")
-
-    selected_columns: list[str] = []
-    for raw_line in drop_columns_path.read_text(encoding="utf-8").splitlines():
-        entry = raw_line.strip()
-        if not entry or entry.startswith("#"):
-            continue
-        matches = (
-            sorted(fnmatch.filter(columns, entry))
-            if any(char in entry for char in "*?[")
-            else [entry]
-        )
-        selected_columns.extend(column for column in matches if column in columns)
-    return list(dict.fromkeys(selected_columns))
-
 
 def export_dataset_outputs(
     df: pd.DataFrame,
     output_file_path: Path,
     *,
-    drop_columns_path: Path,
-) -> tuple[pd.DataFrame, list[str], Path]:
+    filtered_df: pd.DataFrame,
+) -> Path:
     df.to_csv(output_file_path, index=False)
-    drop_columns = read_drop_columns(drop_columns_path, df.columns.tolist())
     filtered_output_path = output_file_path.with_name(
         f"{output_file_path.stem}_filtered.csv"
     )
-    filtered_df = df.drop(columns=drop_columns, errors="ignore")
     filtered_df.to_csv(filtered_output_path, index=False)
-    return filtered_df, drop_columns, filtered_output_path
+    return filtered_output_path
+
+
+def load_feature_approach_config(config_path: Path) -> FeatureApproachConfig:
+    if not config_path.exists():
+        return FeatureApproachConfig([], [], {}, {})
+
+    with config_path.open("r", encoding="utf-8") as handle:
+        raw = yaml.safe_load(handle) or {}
+
+    feature_groups: dict[str, FeatureGroupSpec] = {}
+    for name, item in (raw.get("feature_groups") or {}).items():
+        feature_groups[name] = FeatureGroupSpec(
+            name=name,
+            description=item.get("description"),
+            alternatives=dict(item.get("alternatives", {})),
+        )
+
+    feature_views: dict[str, FeatureViewSpec] = {}
+    for item in raw.get("feature_views", []):
+        view = FeatureViewSpec(
+            name=item["name"],
+            description=item.get("description"),
+            include_patterns=list(item.get("include_patterns", ["*"])),
+            exclude_columns=list(item.get("exclude_columns", [])),
+            exclude_patterns=list(item.get("exclude_patterns", [])),
+            groups=dict(item.get("groups", {})),
+        )
+        feature_views[view.name] = view
+
+    return FeatureApproachConfig(
+        baseline_exclude_columns=list(raw.get("baseline_exclude_columns", [])),
+        baseline_exclude_patterns=list(raw.get("baseline_exclude_patterns", [])),
+        feature_groups=feature_groups,
+        feature_views=feature_views,
+    )
+
+
+def match_feature_patterns(columns: list[str], patterns: list[str]) -> list[str]:
+    matched: list[str] = []
+    for pattern in patterns:
+        matched.extend(col for col in columns if fnmatch.fnmatch(col, pattern))
+    return list(dict.fromkeys(matched))
+
+
+def apply_baseline_feature_excludes(df: pd.DataFrame, approach_config: FeatureApproachConfig) -> tuple[pd.DataFrame, list[str]]:
+    columns = df.columns.tolist()
+    selected = list(
+        dict.fromkeys(
+            approach_config.baseline_exclude_columns
+            + match_feature_patterns(columns, approach_config.baseline_exclude_patterns)
+        )
+    )
+    selected = [col for col in selected if col in df.columns]
+    if not selected:
+        return df.copy(), []
+    return df.drop(columns=selected, errors="ignore"), selected
+
+
+def select_feature_approach(
+    df: pd.DataFrame,
+    approach: str,
+    approach_config: FeatureApproachConfig,
+) -> tuple[pd.DataFrame, list[str], list[str]]:
+    """Select a modelling feature view using only the YAML configuration.
+
+    ``none`` applies only the YAML baseline exclusions. Named approaches apply
+    the baseline exclusions first, then resolve the requested feature view.
+    """
+    base_df, baseline_dropped = apply_baseline_feature_excludes(df, approach_config)
+
+    if approach == "none":
+        return base_df, baseline_dropped, []
+
+    if approach not in approach_config.feature_views:
+        available = ", ".join(sorted(approach_config.feature_views)) or "none"
+        raise ValueError(
+            f"Unknown feature approach '{approach}'. Available approaches: {available}"
+        )
+
+    feature_view = approach_config.feature_views[approach]
+    resolution = resolve_feature_view(
+        base_df.columns.tolist(),
+        feature_view,
+        approach_config.feature_groups,
+    )
+    selected_df = base_df.loc[:, resolution.selected_columns].copy()
+    dropped_columns = list(
+        dict.fromkeys(baseline_dropped + resolution.excluded_columns)
+    )
+    return selected_df, dropped_columns, resolution.excluded_columns
 
 
 def load_config_module(config_file_path: Path) -> dict[str, Any]:
@@ -443,7 +531,7 @@ def preprocessing_git_metadata() -> dict[str, str]:
     tracked_inputs = [
         "mepram/preprocess_pipeline.py",
         "mepram/config/preprocess_config.py",
-        "mepram/config/preprocess_columns_to_drop.txt",
+        "mepram/config/preprocess_feature_views.yml",
     ]
     dirty_status = git_output(["status", "--porcelain", "--", *tracked_inputs])
     return {
@@ -3452,7 +3540,8 @@ def build_run_log(
     *,
     input_file_path: Path,
     output_file_path: Path,
-    drop_columns_path: Path,
+    feature_approach: str,
+    feature_approach_config_path: Path,
     config: dict[str, Any],
 ) -> TableLog:
     log = TableLog(
@@ -3468,7 +3557,8 @@ def build_run_log(
         [
             f"input_file_path={input_file_path}",
             f"output_file_path={output_file_path}",
-            f"drop_columns_path={drop_columns_path}",
+            f"feature_approach={feature_approach}",
+            f"feature_approach_config_path={feature_approach_config_path}",
             f"config_file_path={config['CONFIG_PATH']}",
             f"git_head_commit={config.get('GIT_HEAD_COMMIT', '')}",
             f"preprocess_script_commit={config.get('PREPROCESS_SCRIPT_COMMIT', '')}",
@@ -3488,7 +3578,8 @@ def build_filtered_dataset_log(
     dropped_columns: list[str],
     output_file_path: Path,
     filtered_output_path: Path,
-    drop_columns_path: Path,
+    feature_approach: str,
+    feature_approach_config_path: Path,
     config: dict[str, Any],
 ) -> TableLog:
     filtered_merge_keys = [
@@ -3501,18 +3592,27 @@ def build_filtered_dataset_log(
         merge_keys=filtered_merge_keys,
     )
     attach_run_metadata(log, config)
+    if feature_approach == "none":
+        how = "apply YAML baseline exclusions"
+    else:
+        how = f"apply feature approach '{feature_approach}' from {feature_approach_config_path}"
     add_change(
         log,
         "dropped_variables",
         source=dropped_columns,
         target=filtered_df.columns.tolist(),
-        how=f"drop columns matching explicit names or glob patterns from {drop_columns_path}",
+        how=how,
     )
+    if feature_approach == "none":
+        approach_note = "YAML baseline-exclusions-only output"
+    else:
+        approach_note = f"feature approach '{feature_approach}' from {feature_approach_config_path}"
     log.notes.extend(
         [
             f"full_output_path={output_file_path}",
             f"filtered_output_path={filtered_output_path}",
-            f"drop_columns_path={drop_columns_path}",
+            f"feature_approach={feature_approach}",
+            f"selection_note={approach_note}",
             f"input_columns={len(full_df.columns)}",
             f"output_columns={len(filtered_df.columns)}",
         ]
@@ -3533,7 +3633,8 @@ def run_pipeline(
     input_file_path: Path = DEFAULT_DB_PATH,
     output_file_path: Path = DEFAULT_OUTPUT_PATH,
     config_file_path: Path = DEFAULT_CONFIG_PATH,
-    drop_columns_path: Path = DEFAULT_DROP_COLUMNS_PATH,
+    feature_approach: str = "clinical",
+    feature_approach_config_path: Path = DEFAULT_FEATURE_APPROACH_CONFIG_PATH,
     run_label: str = "",
 ) -> PipelineArtifacts:
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3568,20 +3669,31 @@ def run_pipeline(
         build_run_log(
             input_file_path=input_file_path,
             output_file_path=output_file_path,
-            drop_columns_path=drop_columns_path,
+            feature_approach=feature_approach,
+            feature_approach_config_path=feature_approach_config_path,
             config=config,
         )
     ]
     logs.extend([result.log for result in results.values()])
     logs.extend([merged.log, cross_features.log, targets.log])
 
-    filtered_df, dropped_columns, filtered_output_path = export_dataset_outputs(
+    approach_config = load_feature_approach_config(feature_approach_config_path)
+    filtered_df, dropped_columns, _approach_dropped_columns = select_feature_approach(
+        targets.df,
+        feature_approach,
+        approach_config,
+    )
+    filtered_output_path = export_dataset_outputs(
         targets.df,
         output_file_path,
-        drop_columns_path=drop_columns_path,
+        filtered_df=filtered_df,
     )
+    if feature_approach == "none":
+        selection_note = "YAML baseline-exclusions-only output"
+    else:
+        selection_note = f"feature approach '{feature_approach}' from {feature_approach_config_path}"
     targets.log.notes.append(
-        f"Full dataset keeps all columns. Filtered dataset uses drop-columns file: {drop_columns_path}"
+        f"Full dataset keeps all columns. Filtered dataset uses {selection_note}"
     )
     filtered_log = build_filtered_dataset_log(
         full_df=targets.df,
@@ -3589,7 +3701,8 @@ def run_pipeline(
         dropped_columns=dropped_columns,
         output_file_path=output_file_path,
         filtered_output_path=filtered_output_path,
-        drop_columns_path=drop_columns_path,
+        feature_approach=feature_approach,
+        feature_approach_config_path=feature_approach_config_path,
         config=config,
     )
     logs.append(filtered_log)
@@ -3631,12 +3744,22 @@ def parse_args() -> argparse.Namespace:
         help=f"Full path to the preprocessing config file, including filename. Default: {DEFAULT_CONFIG_PATH}",
     )
     parser.add_argument(
-        "--drop-columns-path",
-        type=Path,
-        default=DEFAULT_DROP_COLUMNS_PATH,
+        "--feature-approach",
+        choices=["none", "raw", "clinical", "binary", "categorical", "catboost"],
+        default="clinical",
         help=(
-            "Full path to a text file listing columns or glob patterns to drop "
-            f"from the filtered output CSV. Default: {DEFAULT_DROP_COLUMNS_PATH}"
+            "Which feature approach to export as the filtered CSV. "
+            "Use none to apply only baseline exclusions from the YAML."
+        ),
+    )
+    parser.add_argument(
+        "--feature-approach-config-path",
+        type=Path,
+        default=DEFAULT_FEATURE_APPROACH_CONFIG_PATH,
+        help=(
+            "Full path to the feature-approach YAML file used when "
+            "--feature-approach is a named YAML feature view. "
+            f"Default: {DEFAULT_FEATURE_APPROACH_CONFIG_PATH}"
         ),
     )
     parser.add_argument(
@@ -3653,7 +3776,8 @@ def main() -> None:
         input_file_path=args.input_path,
         output_file_path=args.output_path,
         config_file_path=args.config_path,
-        drop_columns_path=args.drop_columns_path,
+        feature_approach=args.feature_approach,
+        feature_approach_config_path=args.feature_approach_config_path,
         run_label=args.run_label,
     )
 

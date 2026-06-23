@@ -61,6 +61,72 @@ def _create_optuna_study(
     return optuna.create_study(**kwargs)
 
 
+def _prepare_optuna_study(
+    *,
+    direction: str,
+    study_name: Optional[str],
+    storage: Optional[str],
+    load_if_exists: bool,
+    random_state: int,
+    n_trials: int,
+) -> Tuple[optuna.Study, int]:
+    study = _create_optuna_study(
+        direction=direction,
+        study_name=study_name,
+        storage=storage,
+        load_if_exists=load_if_exists,
+        random_state=random_state,
+    )
+    existing_trials = len(study.trials)
+    if load_if_exists and existing_trials >= n_trials:
+        print(
+            f"Loaded existing Optuna study '{study_name}' with {existing_trials} trials; "
+            f"skipping optimization because {n_trials} trials were requested."
+        )
+        return study, 0
+    if load_if_exists and existing_trials > 0:
+        remaining = n_trials - existing_trials
+        print(
+            f"Loaded existing Optuna study '{study_name}' with {existing_trials} trials; "
+            f"continuing optimization for {remaining} more trial(s)."
+        )
+        return study, remaining
+    return study, n_trials
+
+
+def _prepare_optuna_study(
+    *,
+    direction: str,
+    study_name: Optional[str],
+    storage: Optional[str],
+    load_if_exists: bool,
+    random_state: int,
+    n_trials: int,
+) -> Tuple[optuna.Study, int]:
+    study = _create_optuna_study(
+        direction=direction,
+        study_name=study_name,
+        storage=storage,
+        load_if_exists=load_if_exists,
+        random_state=random_state,
+    )
+    existing_trials = len(study.trials)
+    if load_if_exists and existing_trials >= n_trials:
+        print(
+            f"Loaded existing Optuna study '{study_name}' with {existing_trials} trials; "
+            f"skipping optimization because {n_trials} trials were requested."
+        )
+        return study, 0
+    if load_if_exists and existing_trials > 0:
+        remaining = n_trials - existing_trials
+        print(
+            f"Loaded existing Optuna study '{study_name}' with {existing_trials} trials; "
+            f"continuing optimization for {remaining} more trial(s)."
+        )
+        return study, remaining
+    return study, n_trials
+
+
 def _finalise_binary_params(
     best_trial_params: Dict,
     model_type: str,
@@ -163,15 +229,17 @@ def optimise_binary_model(
 
         return score
 
-    study = _create_optuna_study(
+    study, remaining_trials = _prepare_optuna_study(
         direction="maximize",
         study_name=study_name,
         storage=optuna_storage,
         load_if_exists=optuna_load_if_exists,
         random_state=random_state,
+        n_trials=n_trials,
     )
 
-    study.optimize(objective, n_trials=n_trials, n_jobs=1, gc_after_trial=True)
+    if remaining_trials > 0:
+        study.optimize(objective, n_trials=remaining_trials, n_jobs=1, gc_after_trial=True)
 
     best = _finalise_binary_params(
         study.best_trial.params.copy(),
@@ -312,15 +380,17 @@ def optimise_multiclass_model(
 
         return score
 
-    study = _create_optuna_study(
+    study, remaining_trials = _prepare_optuna_study(
         direction="maximize",
         study_name=study_name,
         storage=optuna_storage,
         load_if_exists=optuna_load_if_exists,
         random_state=random_state,
+        n_trials=n_trials,
     )
 
-    study.optimize(objective, n_trials=n_trials, n_jobs=1, gc_after_trial=True)
+    if remaining_trials > 0:
+        study.optimize(objective, n_trials=remaining_trials, n_jobs=1, gc_after_trial=True)
 
     best = _finalise_multiclass_params(
         study.best_trial.params.copy(),

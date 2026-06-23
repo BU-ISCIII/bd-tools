@@ -9,11 +9,12 @@ infrastructure should live in `ml_benchmark/` instead.
 
 ## Main Files
 
-- `preprocess_pipeline.py`: builds the full and filtered MEPRAM analytical CSVs.
+- `preprocess_pipeline.py`: builds the full MEPRAM CSV and one filtered/view CSV selected by `--feature-approach`.
 - `compare_preprocessed_csvs.py`: local comparison helper for preprocessing QA.
 - `config/preprocess_config.py`: clinical/domain preprocessing configuration.
 - `config/preprocess_report.yml`: preprocessing report configuration for MEPRAM-specific domains and target sections.
-- `config/preprocess_columns_to_drop.txt`: final filtered-output drop list.
+- `config/preprocess_columns_to_drop.txt`: legacy compatibility drop list mirrored in `config/preprocess_feature_approach.yml`.
+- `config/preprocess_feature_approach.yml`: feature-approach selection configuration used by preprocessing.
 - `config/model_filters.yml`: MEPRAM cohort/model row filters.
 - `config/benchmark_mepram.yml`: MEPRAM benchmark matrix configuration.
 - `preprocessing_report/`: checked-in preprocessing report artifacts.
@@ -31,6 +32,8 @@ From the repository root:
   --output-path preprocess_test.csv \
   --config-path mepram/config/preprocess_config.py \
   --drop-columns-path mepram/config/preprocess_columns_to_drop.txt \
+  --feature-approach clinical \
+  --feature-approach-config-path mepram/config/preprocess_feature_approach.yml \
   --run-label current_run
 ```
 
@@ -43,3 +46,20 @@ From the repository root:
   --report-config-path mepram/config/preprocess_report.yml \
   --output-dir mepram/preprocessing_report
 ```
+
+
+## Pipeline Outputs
+
+A single preprocessing run writes these artifacts next to the configured
+`--output-path`:
+
+- `<name>.csv`: full preprocessed table.
+- `<name>_filtered.csv`: one filtered/view CSV selected by `--feature-approach`.
+
+The output depends on `--feature-approach`:
+
+- `clinical`: the default cleaned filtered output using the YAML feature view.
+- `none`: the legacy drop-list output from `preprocess_columns_to_drop.txt` plus the YAML legacy-drop section.
+- `raw`, `binary`, `categorical`: the other feature views defined in `config/preprocess_feature_approach.yml`.
+
+

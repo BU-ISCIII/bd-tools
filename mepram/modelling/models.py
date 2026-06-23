@@ -2,6 +2,7 @@
 
 import contextlib
 import io
+import tempfile
 
 from .base import *
 from .config import algorithm_params
@@ -39,6 +40,7 @@ def build_binary_model(model_type: str, params: Dict) -> object:
         params.setdefault("logging_level", "Silent")
         params.setdefault("thread_count", N_CPUS)
         params.setdefault("random_state", 42)
+        params.setdefault("allow_writing_files", False)
 
         return CatBoostClassifier(**params)
 
@@ -70,6 +72,7 @@ def build_multiclass_model(model_type: str, params: Dict, num_classes: int) -> o
         params.setdefault("thread_count", N_CPUS)
         params.setdefault("random_state", 42)
         params.setdefault("logging_level", "Silent")
+        params.setdefault("allow_writing_files", False)
 
         params.pop("custom_metric", None)
 
@@ -82,17 +85,26 @@ def _fit_model(model, model_type: str, X_tr, y_tr, X_va=None, y_va=None, sample_
     """Fit a model; CatBoost uses early-stopping with the validation fold."""
     sw = sample_weight
 
-    if model_type == "catb" and X_va is not None:
-        n_iter = getattr(model, "iterations", 500)
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            model.fit(
-                X_tr,
-                y_tr,
-                eval_set=(X_va, y_va),
-                early_stopping_rounds=max(20, int(0.05 * n_iter)),
-                verbose=False,
-                sample_weight=sw,
-            )
+    if model_type == "catb":
+        model.set_params(thread_count=N_CPUS, allow_writing_files=False)
+        with tempfile.TemporaryDirectory(prefix="catboost_train_") as train_dir:
+            model.set_params(train_dir=train_dir)
+            if X_va is not None:
+                n_iter = getattr(model, "iterations", 500)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    model.fit(
+                        X_tr,
+                        y_tr,
+                        eval_set=(X_va, y_va),
+                        early_stopping_rounds=max(20, int(0.05 * n_iter)),
+                        verbose=False,
+                        sample_weight=sw,
+                    )
+            else:
+                if sw is not None:
+                    model.fit(X_tr, y_tr, sample_weight=sw)
+                else:
+                    model.fit(X_tr, y_tr)
     else:
         if sw is not None:
             model.fit(X_tr, y_tr, sample_weight=sw)

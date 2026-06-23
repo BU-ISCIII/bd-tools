@@ -1,0 +1,451 @@
+# Feature-view selection configuration for MEPRAM preprocessing.
+#
+# Goal:
+#   Generate cleaner filtered CSVs for modelling by selecting one representation
+#   for duplicated clinical information.
+#
+# Main principles:
+#   - For CatBoost, prefer raw continuous variables over threshold-derived binaries.
+#   - Prefer native categorical variables / categorical symptom groups when possible.
+#   - Prefer antibiotic counts over antibiotic binary flags.
+#   - Prefer species-level previous infection / colonization history over duplicated
+#     gram-level or aggregate summaries.
+#   - Remove clear leakage, identifiers, internal codes, and downstream severity labels.
+
+# ---------------------------------------------------------------------
+# Baseline exclusions applied to all feature views
+# ---------------------------------------------------------------------
+baseline_exclude_columns:
+  # Identifiers / dates / administrative variables
+  - fecha_nacimiento
+  - codigo_postal
+  - dag
+  - center
+  - ultima_fecha
+
+  # Internal code without direct modelling value
+  - causa_inmunosupresion
+
+  # Derived severity / downstream clinical state variables
+  # qSOFA is derived from respiratory rate, blood pressure and mental status.
+  - qsofa
+
+  # Hypotension is a thresholded duplicate of blood pressure.
+  - hipotension
+
+  # Septic shock is downstream of infection/sepsis severity and may introduce leakage.
+  - shock_septico
+
+  # Usually very sparse; keep out unless you specifically study pregnancy.
+  - mujer_gestante
+
+  # Hepatopatia, already included in 'hepatopatia_si_no'
+  - hepatopatia
+
+  # vasopresores, not known at the time of hemoculture (data leakage)
+  - vasopresores
+
+baseline_exclude_patterns:
+  # Culture-derived organism/result variables: likely outcome leakage.
+  - 'all_cult_*_count'
+  - 'all_cult_*_binary'
+  - 'all_cult_bmr_*_binary'
+  - 'all_cult_fenotipo_*_tuple'
+  - 'hemo_*_binary'
+  - 'hemo_bmr_*_binary'
+  - 'hemo_fenotipo_*_tuple'
+  - 'otros_cult_*'
+  - 'otros_cult_bmr_*_binary'
+  - 'otros_cult_fenotipo_*_tuple'
+
+  # BMR/fenotype history summaries: avoid leakage or unstable derived features.
+  - 'infprev_bmr_*_binary'
+  - 'infprev_fenotipo_*_tuple'
+  - 'colo_bmr_*_binary'
+  - 'colo_fenotipo_*_tuple'
+
+  # Very expanded sparse clinical subtype variables.
+  - 'tipo_cancer_*'
+  - 'tipo_hepatopatia_*'
+
+# ---------------------------------------------------------------------
+# Feature groups
+# ---------------------------------------------------------------------
+feature_groups:
+
+  temperature:
+    description: >
+      Temperature alternatives. For CatBoost, raw temperature is usually preferred
+      because the model can learn non-linear thresholds. Binary flags are useful
+      for a purely clinical-threshold representation. Categorical uses recoded
+      quartiles/bins.
+    alternatives:
+      raw:
+        include:
+          - temperatura
+        exclude:
+          - temperatura_recoded
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+          - sintoma_fiebre_categorico
+
+      binary_flags:
+        include:
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+        exclude:
+          - temperatura
+          - temperatura_recoded
+          - sintoma_fiebre_categorico
+
+      categorical:
+        include:
+          - temperatura_recoded
+        exclude:
+          - temperatura
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+          - sintoma_fiebre_categorico
+
+  heart_rate:
+    description: >
+      Heart-rate alternatives. Raw heart rate is preferred for CatBoost;
+      tachycardia is a thresholded duplicate.
+    alternatives:
+      raw:
+        include:
+          - frec_cardiaca
+        exclude:
+          - frec_cardiaca_recoded
+          - taquicardia
+
+      binary_flags:
+        include:
+          - taquicardia
+        exclude:
+          - frec_cardiaca
+          - frec_cardiaca_recoded
+
+      categorical:
+        include:
+          - frec_cardiaca_recoded
+        exclude:
+          - frec_cardiaca
+          - taquicardia
+
+  respiratory_rate:
+    description: >
+      Respiratory-rate alternatives. Raw respiratory rate is preferred for CatBoost;
+      taquipnea is a thresholded duplicate.
+    alternatives:
+      raw:
+        include:
+          - frec_respiratoria
+        exclude:
+          - frec_respiratoria_recoded
+          - taquipnea
+
+      binary_flags:
+        include:
+          - taquipnea
+        exclude:
+          - frec_respiratoria
+          - frec_respiratoria_recoded
+
+      categorical:
+        include:
+          - frec_respiratoria_recoded
+        exclude:
+          - frec_respiratoria
+          - taquipnea
+
+  oxygen_saturation:
+    description: >
+      Oxygen saturation alternatives. Raw SpO2 is preferred for CatBoost;
+      hypoxemia is a thresholded duplicate.
+    alternatives:
+      raw:
+        include:
+          - saturacion_o2
+        exclude:
+          - saturacion_o2_recoded
+          - hipoxemia
+
+      binary_flags:
+        include:
+          - hipoxemia
+        exclude:
+          - saturacion_o2
+          - saturacion_o2_recoded
+
+      categorical:
+        include:
+          - saturacion_o2_recoded
+        exclude:
+          - saturacion_o2
+          - hipoxemia
+
+  blood_pressure:
+    description: >
+      Blood-pressure alternatives. Raw blood pressure is preferred for CatBoost.
+      Hypotension is excluded globally because it duplicates blood pressure.
+    alternatives:
+      raw:
+        include:
+          - tension_arterial
+        exclude:
+          - tension_arterial_recoded
+          - hipotension
+
+      binary_flags:
+        include:
+          - hipotension
+        exclude:
+          - tension_arterial
+          - tension_arterial_recoded
+
+      categorical:
+        include:
+          - tension_arterial_recoded
+        exclude:
+          - tension_arterial
+          - hipotension
+
+  crp:
+    description: >
+      C-reactive protein alternatives. Raw CRP is preferred for CatBoost.
+      Categorical recoding can be used for sensitivity analyses.
+    alternatives:
+      raw:
+        include:
+          - proteina_c_reactiva
+        exclude:
+          - proteina_c_reactiva_recoded
+
+      categorical:
+        include:
+          - proteina_c_reactiva_recoded
+        exclude:
+          - proteina_c_reactiva
+
+  symptoms:
+    description: >
+      Symptom representations. The categorical symptom columns are preferred for
+      the raw/catboost view because they preserve grouped clinical information.
+      Binary flags are kept for the binary view.
+    alternatives:
+      binary_flags:
+        include_patterns:
+          - 'sintoma_*'
+        exclude_patterns:
+          - 'sintoma_*_categorico'
+
+      category:
+        include_patterns:
+          - 'sintoma_*_categorico'
+        exclude_patterns:
+          - 'sintoma_*_missing'
+
+  previous_antibiotic_families:
+    description: >
+      Previous-antibiotic family representations. For CatBoost, counts are preferred
+      because they contain more information than binary flags. The model can learn
+      count > 0 internally. Binary flags are only used in the binary view.
+    alternatives:
+      counts:
+        include_patterns:
+          - 'antib_previo_*_counts'
+        exclude_patterns:
+          - 'antib_previo_*_binary'
+
+      binary_flags:
+        include_patterns:
+          - 'antib_previo_*_binary'
+        exclude_patterns:
+          - 'antib_previo_*_counts'
+
+  organism_history:
+    description: >
+      Previous infection and colonization history. Species-level variables are
+      preferred because they are clinically interpretable and more specific than
+      gram-level aggregate variables. Gram-level summaries such as Inf_Bacilo_gram_
+      and Colo_Bacilo_gram_ are excluded to reduce duplicated information.
+
+    alternatives:
+
+      species:
+        include:
+          - num_inf_previas
+          - tiempo_ultima
+
+        include_patterns:
+          - 'infprev_*_binary'
+          - 'colo_*_binary'
+
+        exclude:
+          - colonizacion_total_grouped
+          - Enterococcus_total
+          - Escherichia_coli_total
+          - Klebsiella_pneumoniae_total
+          - Pseudomonas_aeruginosa_total
+          - Staphylococcus_aureus_total
+          - Streptococcus_pneumoniae_total
+          - _Enterobacteria_total
+          - _Fungi_total
+          - _Other_bacteria_total
+          - _Virus_total
+          - Inf_Bacilo_gram_
+          - Inf_Coco_gram_
+          - Colo_Bacilo_gram_
+          - Colo_Coco_gram_
+
+        exclude_patterns:
+          - 'Inf_*'
+          - 'Colo_*'
+
+      totals:
+        include:
+          - num_inf_previas
+          - tiempo_ultima
+          - colonizacion_total_grouped
+          - Enterococcus_total
+          - Escherichia_coli_total
+          - Klebsiella_pneumoniae_total
+          - Pseudomonas_aeruginosa_total
+          - Staphylococcus_aureus_total
+          - Streptococcus_pneumoniae_total
+          - _Enterobacteria_total
+          - _Fungi_total
+          - _Other_bacteria_total
+          - _Virus_total
+
+        exclude:
+          - Inf_Bacilo_gram_
+          - Inf_Coco_gram_
+          - Colo_Bacilo_gram_
+          - Colo_Coco_gram_
+
+        exclude_patterns:
+          - 'infprev_*_binary'
+          - 'colo_*_binary'
+          - 'Inf_*'
+          - 'Colo_*'
+
+      binary_flags:
+        include_patterns:
+          - 'infprev_*_binary'
+          - 'colo_*_binary'
+
+        exclude:
+          - num_inf_previas
+          - tiempo_ultima
+          - colonizacion_total_grouped
+          - Enterococcus_total
+          - Escherichia_coli_total
+          - Klebsiella_pneumoniae_total
+          - Pseudomonas_aeruginosa_total
+          - Staphylococcus_aureus_total
+          - Streptococcus_pneumoniae_total
+          - _Enterobacteria_total
+          - _Fungi_total
+          - _Other_bacteria_total
+          - _Virus_total
+          - Inf_Bacilo_gram_
+          - Inf_Coco_gram_
+          - Colo_Bacilo_gram_
+          - Colo_Coco_gram_
+
+        exclude_patterns:
+          - 'Inf_*'
+          - 'Colo_*'
+
+# ---------------------------------------------------------------------
+# Feature views
+# ---------------------------------------------------------------------
+feature_views:
+
+  - name: raw
+    description: >
+      Raw numeric clinical variables, symptom categories, antibiotic counts,
+      and species-level organism history. Recommended default for CatBoost.
+    include_patterns:
+      - '*'
+    groups:
+      temperature: raw
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      blood_pressure: raw
+      crp: raw
+      symptoms: category
+      previous_antibiotic_families: counts
+      organism_history: species
+
+  - name: clinical
+    description: >
+      Clinically oriented view with raw vitals/labs, binary symptom flags,
+      antibiotic counts, and species-level organism history.
+    include_patterns:
+      - '*'
+    groups:
+      temperature: raw
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      blood_pressure: raw
+      crp: raw
+      symptoms: binary_flags
+      previous_antibiotic_families: counts
+      organism_history: species
+
+  - name: binary
+    description: >
+      Binary clinical flags where available. Useful as a sensitivity analysis,
+      but usually less informative than raw/count features for CatBoost.
+    include_patterns:
+      - '*'
+    groups:
+      temperature: binary_flags
+      heart_rate: binary_flags
+      respiratory_rate: binary_flags
+      oxygen_saturation: binary_flags
+      blood_pressure: binary_flags
+      crp: raw
+      symptoms: binary_flags
+      previous_antibiotic_families: binary_flags
+      organism_history: binary_flags
+
+  - name: categorical
+    description: >
+      Quartile or categorical representations where available. Useful for
+      sensitivity analyses and simpler clinical interpretation.
+    include_patterns:
+      - '*'
+    groups:
+      temperature: categorical
+      heart_rate: categorical
+      respiratory_rate: categorical
+      oxygen_saturation: categorical
+      blood_pressure: categorical
+      crp: categorical
+      symptoms: category
+      previous_antibiotic_families: counts
+      organism_history: species
+
+  - name: catboost
+    description: >
+      Explicit CatBoost-oriented view. This is equivalent to the recommended
+      raw modelling view: raw continuous variables, categorical symptom groups,
+      antibiotic counts, and species-level previous infection/colonization history.
+    include_patterns:
+      - '*'
+    groups:
+      temperature: raw
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      blood_pressure: raw
+      crp: raw
+      symptoms: category
+      previous_antibiotic_families: counts
+      organism_history: species

@@ -700,7 +700,7 @@ def run_training(args: argparse.Namespace) -> None:
                 "confusion_matrix": l2_confusion,
             }
 
-            all_summaries["l2_gate_rfecv_scores"] = l2_rfecv_history
+            all_summaries["l2_rfecv_scores"] = l2_rfecv_history
 
         else:
             # Stage 1: binary gate using separate gate target (e.g. infected_yes_no)
@@ -861,7 +861,7 @@ def run_training(args: argparse.Namespace) -> None:
 
             X2_sub_test_base = X2_sub_test_base.loc[subtype_test_mask].copy()
 
-            y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
+            y2_sub_test_raw = y2_sub_test_raw.loc[subtype_test_mask].astype(str)
             y2_sub_test = pd.Series(
                 le_l2.transform(y2_sub_test_raw),
                 index=y2_sub_test_raw.index,
@@ -1241,6 +1241,7 @@ def run_training(args: argparse.Namespace) -> None:
             }
 
             all_summaries["l2_gate_rfecv_scores"] = l2_gate_rfecv_history
+            all_summaries["l2_stage2_rfecv_scores"] = l2_rfecv_history
 
     # ==================================================================
     # LEVEL 3 – resistente_cefalosporina

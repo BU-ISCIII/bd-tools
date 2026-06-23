@@ -21,6 +21,9 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
+from matplotlib import cm
+from matplotlib.colors import Normalize
+import matplotlib as mpl
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -69,14 +72,22 @@ def plot_binary_curves(
     fpr, tpr, _ = roc_curve(y_true_binary, y_score)
     precision, recall, _ = precision_recall_curve(y_true_binary, y_score)
 
+    baseline = float(np.mean(y_true_binary))
+
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(fpr, tpr, label=f"ROC (AUC={auc(fpr, tpr):.3f})")
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1)
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curve")
-    ax.legend(loc="lower right")
-    save_figure(fig, output_prefix.with_name(output_prefix.name + "_roc_curve.png"))
+    ax.plot(recall, precision, label=f"PR (AUC={auc(recall, precision):.3f})")
+    ax.axhline(
+        baseline,
+        linestyle="--",
+        color="gray",
+        linewidth=1,
+        label=f"Baseline prevalence={baseline:.3f}",
+    )
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision-Recall Curve")
+    ax.legend(loc="lower left")
+    save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
 
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.plot(recall, precision, label=f"PR (AUC={auc(recall, precision):.3f})")
@@ -85,6 +96,52 @@ def plot_binary_curves(
     ax.set_title("Precision-Recall Curve")
     ax.legend(loc="lower left")
     save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+
+    ax.plot(
+        fpr,
+        tpr,
+        label=f"ROC curve (AUC={auc(fpr, tpr):.3f})",
+        linewidth=2,
+    )
+
+    ax.plot(
+        recall,
+        precision,
+        label=f"PR curve (AUC={auc(recall, precision):.3f})",
+        linewidth=2,
+    )
+
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        linestyle="--",
+        color="gray",
+        linewidth=1,
+        label="ROC no-skill line",
+    )
+
+    ax.axhline(
+        baseline,
+        linestyle=":",
+        color="gray",
+        linewidth=1,
+        label=f"PR baseline prevalence={baseline:.3f}",
+    )
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("False positive rate / Recall")
+    ax.set_ylabel("True positive rate / Precision")
+    ax.set_title("ROC and Precision-Recall Curves")
+    ax.legend(loc="lower left", fontsize="small")
+    ax.grid(alpha=0.25)
+
+    save_figure(
+        fig,
+        output_prefix.with_name(output_prefix.name + "_roc_pr_overlay.png"),
+    )
 
 
 def plot_confusion(cm: np.ndarray, labels: list[str], output_path: Path) -> None:
@@ -203,7 +260,11 @@ def summarize_processing(run_dir: Path, out_dir: Path) -> None:
         "iqr_outliers_train.csv": plot_iqr_outliers,
         "iqr_outliers_test.csv": plot_iqr_outliers,
         "l1_rfecv_features.csv": plot_rfecv_feature_list,
+        "l2_gate_rfecv_features.csv": plot_rfecv_feature_list,
+        "l2_sub_rfecv_features.csv": plot_rfecv_feature_list,
+        "l3_rfecv_features.csv": plot_rfecv_feature_list,
     }
+
     for filename, plot_func in files.items():
         path = processing_dir / filename
         if path.exists():
@@ -234,14 +295,39 @@ def plot_nan_dropped_features(path: Path, out_dir: Path) -> None:
 
 def plot_correlation_dropped_features(path: Path, out_dir: Path) -> None:
     df = pd.read_csv(path)
-    if "abs_spearman" in df.columns:
-        top = df.sort_values("abs_spearman", ascending=False).head(50)
-        fig, ax = plt.subplots(figsize=(10, max(5, 0.15 * len(top))))
-        ax.barh(top["feature_dropped"], top["abs_spearman"], color="#edae49")
-        ax.invert_yaxis()
-        ax.set_xlabel("Absolute Spearman correlation")
-        ax.set_title("Dropped correlated features")
-        save_figure(fig, out_dir / "processing_correlation_dropped_features.png")
+
+    if "abs_spearman" not in df.columns:
+        return
+
+    top = df.sort_values("abs_spearman", ascending=False).head(50)
+
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.15 * len(top))))
+
+    norm = Normalize(vmin=0.98, vmax=1.00)
+    cmap = mpl.colormaps["Reds"]
+
+    colors = cmap(norm(top["abs_spearman"]))
+
+    ax.barh(
+        top["feature_dropped"],
+        top["abs_spearman"],
+        color=colors,
+    )
+
+    ax.invert_yaxis()
+
+    ax.set_xlim(0.98, 1.00)
+
+    ax.set_xlabel("Absolute Spearman correlation")
+    ax.set_title("Dropped correlated features")
+
+    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax)
+    cbar.set_label("|Spearman|")
+    
+    plt.tight_layout()
+    save_figure(fig, out_dir / "processing_correlation_dropped_features.png")
 
 
 def plot_iqr_outliers(path: Path, out_dir: Path) -> None:
@@ -252,40 +338,163 @@ def plot_iqr_outliers(path: Path, out_dir: Path) -> None:
     ax.invert_yaxis()
     ax.set_xlabel("Outlier count")
     ax.set_title(f"IQR outliers: {path.name}")
+    plt.tight_layout()
     save_figure(fig, out_dir / f"processing_{path.stem}.png")
 
 
+def get_run_max_features(path: Path, default: int = 170) -> int:
+    run_dir = path.parents[1]  # processing/file.csv -> run_dir
+    summary_path = run_dir / "aggregate_summary.json"
+
+    if not summary_path.exists():
+        return default
+
+    try:
+        data = load_json(summary_path)
+        value = data.get("args", {}).get("max_features", default)
+        return int(value)
+    except Exception:
+        return default
+
+
 def plot_rfecv_feature_list(path: Path, out_dir: Path) -> None:
-    df = pd.read_csv(path, header=None, names=["feature"])
-    fig, ax = plt.subplots(figsize=(10, max(4, 0.15 * len(df))))
-    ax.barh(df["feature"], [1] * len(df), color="#4a4e69")
-    ax.invert_yaxis()
-    ax.set_xlabel("Selected feature")
-    ax.set_title("RFECV selected features")
-    ax.set_xticks([])
-    save_figure(fig, out_dir / "processing_l1_rfecv_features.png")
+    df = pd.read_csv(path)
+
+    required = {"n_features", "roc_auc", "pr_auc"}
+    if not required.issubset(df.columns):
+        print(f"Skipping RFECV performance plot for {path}: missing {required - set(df.columns)}")
+        return
+
+    df = df.sort_values("n_features")
+    max_features = get_run_max_features(path, default=170)
+
+    fig, ax = plt.subplots(figsize=(9, 5))
+
+    ax.plot(df["n_features"], df["roc_auc"], marker="o", linewidth=2, markersize=3, label="ROC-AUC")
+    ax.plot(df["n_features"], df["pr_auc"], marker="o", linewidth=2, markersize=3, label="PR-AUC")
+
+    # Best PR-AUC across all tested feature counts
+    best_pr_idx = df["pr_auc"].idxmax()
+    best_pr_n = int(df.loc[best_pr_idx, "n_features"])
+    best_pr = float(df.loc[best_pr_idx, "pr_auc"])
+
+    # Best PR-AUC within the feature cap
+    capped_df = df[df["n_features"] <= max_features]
+    if capped_df.empty:
+        capped_df = df.copy()
+
+    best_cap_idx = capped_df["pr_auc"].idxmax()
+    best_cap_n = int(capped_df.loc[best_cap_idx, "n_features"])
+    best_cap_pr = float(capped_df.loc[best_cap_idx, "pr_auc"])
+
+    ax.axvline(
+        max_features,
+        linestyle="--",
+        color="black",
+        linewidth=1.5,
+        alpha=0.8,
+        label=f"Feature cap ({max_features})",
+    )
+
+    ax.scatter(
+        best_pr_n,
+        best_pr,
+        marker="*",
+        s=260,
+        color="gold",
+        edgecolor="black",
+        linewidth=0.6,
+        zorder=20,
+        label=f"Best PR-AUC = {best_pr:.3f}",
+    )
+
+    same_best = best_pr_n == best_cap_n
+
+    if not same_best:
+        ax.scatter(
+            best_cap_n,
+            best_cap_pr,
+            marker="o",
+            color="red",
+            edgecolor="black",
+            linewidth=0.5,
+            s=90,
+            zorder=18,
+            label=f"Best capped PR-AUC = {best_cap_pr:.3f}",
+        )
+
+    if same_best:
+        ax.annotate(
+            f"{best_pr_n} features",
+            xy=(best_pr_n, best_pr),
+            xytext=(8, 12),
+            textcoords="offset points",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.85),
+            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.8),
+        )
+    else:
+        ax.annotate(
+            f"{best_pr_n} features",
+            xy=(best_pr_n, best_pr),
+            xytext=(8, 12),
+            textcoords="offset points",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.85),
+            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.8),
+        )
+
+        ax.annotate(
+            f"{best_cap_n} features",
+            xy=(best_cap_n, best_cap_pr),
+            xytext=(8, -36),
+            textcoords="offset points",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.85),
+            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.8),
+        )
+
+    ax.set_xlim(1, 170)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Number of features")
+    ax.set_ylabel("Score")
+    ax.set_title(f"RFECV performance: {path.stem}")
+    ax.legend(loc="lower right")
+    ax.grid(alpha=0.25)
+
+    plt.tight_layout()
+
+    save_figure(fig, out_dir / f"processing_{path.stem}_performance.png")
 
 
-def infer_binary_labels(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
+def infer_labels(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     if "true_label" in df.columns and "pred_label" in df.columns:
         y_true = df["true_label"].astype(str).to_numpy()
         y_pred = df["pred_label"].astype(str).to_numpy()
-        labels = sorted(np.unique(np.concatenate([y_true, y_pred]).astype(str)).tolist())
+        labels = sorted(np.unique(np.concatenate([y_true, y_pred])).tolist())
     else:
         y_true = df["true"].to_numpy().astype(int)
         y_pred = df["pred"].to_numpy().astype(int)
-        labels = ["0", "1"]
+        labels = sorted(np.unique(np.concatenate([y_true, y_pred])).tolist())
     return y_true, y_pred, labels
 
 
-def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.ndarray | None]:
+def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.ndarray]:
     if "proba" in df.columns:
         return df["proba"].to_numpy().astype(float), np.array(labels)
-    prob_cols = [c for c in df.columns if c.startswith("proba_")]
+
+    if "proba_positive" in df.columns:
+        return df["proba_positive"].to_numpy().astype(float), np.array(labels)
+
+    prob_cols = [
+        c for c in df.columns
+        if c.startswith("proba_") and c != "proba_positive"
+    ]
+
     if prob_cols:
-        proba_df = df[prob_cols].astype(float)
-        classes = [c.replace("proba_", "") for c in prob_cols]
-        return proba_df.to_numpy(), np.array(classes)
+        class_names = [c.replace("proba_", "", 1) for c in prob_cols]
+        return df[prob_cols].to_numpy().astype(float), np.array(class_names)
+
     return np.array([]), np.array(labels)
 
 
@@ -305,7 +514,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> None:
     base_name = prediction_path.stem
     summary_path = out_dir / f"{safe_str(base_name)}_dataset_summary.txt"
 
-    y_true, y_pred, labels = infer_binary_labels(df)
+    y_true, y_pred, labels = infer_labels(df)
     y_score, class_names = infer_scores(df, labels)
     write_classification_report(out_dir / f"{safe_str(base_name)}_classification_report.txt", y_true, y_pred, labels)
 
@@ -313,9 +522,28 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> None:
     plot_confusion(cm, labels, out_dir / f"{safe_str(base_name)}_confusion_matrix.png")
 
     if y_score.size and y_score.ndim == 1:
-        plot_binary_curves(y_true, y_score, out_dir / Path(f"{safe_str(base_name)}"), positive_label=labels[-1])
+        plot_binary_curves(
+            y_true=y_true,
+            y_score=y_score,
+            output_prefix=out_dir / Path(f"{safe_str(base_name)}"),
+            positive_label=labels[-1],
+        )
+
     elif y_score.size and y_score.ndim == 2:
-        plot_multiclass_curves(y_true, pd.DataFrame(y_score, columns=class_names), class_names, out_dir / Path(f"{safe_str(base_name)}"))
+        if y_score.shape[1] == 1:
+            plot_binary_curves(
+                y_true=y_true,
+                y_score=y_score[:, 0],
+                output_prefix=out_dir / Path(f"{safe_str(base_name)}"),
+                positive_label=labels[-1],
+            )
+        else:
+            plot_multiclass_curves(
+                y_true=y_true,
+                proba_df=pd.DataFrame(y_score, columns=class_names),
+                class_labels=class_names.tolist(),
+                output_prefix=out_dir / Path(f"{safe_str(base_name)}"),
+            )
 
     summary = {
         "file": str(prediction_path),
@@ -351,7 +579,7 @@ def run_plotting(run_dir: Path, plots_dir: Path) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot model evaluation results and processing reports.")
-    parser.add_argument("run_dir", nargs="?", default="01-training_5756602", help="Path to the run directory containing level*/ and processing/ subfolders.")
+    parser.add_argument("--run-dir", nargs="?", default=None, help="Path to the run directory containing level*/ and processing/ subfolders.")
     parser.add_argument("--plots-dir", default=None, help="Output directory for plots. Default is <run_dir>/plots.")
     return parser.parse_args()
 
