@@ -16,6 +16,11 @@ from __future__ import annotations
 
 import argparse
 import json
+
+try:
+    import yaml
+except ImportError as exc:
+    raise ImportError("PyYAML is required: pip install pyyaml") from exc
 import math
 from pathlib import Path
 from typing import Any
@@ -83,14 +88,6 @@ def plot_binary_curves(
         linewidth=1,
         label=f"Baseline prevalence={baseline:.3f}",
     )
-    ax.set_xlabel("Recall")
-    ax.set_ylabel("Precision")
-    ax.set_title("Precision-Recall Curve")
-    ax.legend(loc="lower left")
-    save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(recall, precision, label=f"PR (AUC={auc(recall, precision):.3f})")
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.set_title("Precision-Recall Curve")
@@ -248,7 +245,12 @@ def plot_level_metrics_from_summary(summary_path: Path, out_dir: Path) -> None:
             plot_confusion(cm, labels, out_dir / f"{safe_str(name)}_summary_confusion_matrix.png")
 
 
-def summarize_processing(run_dir: Path, out_dir: Path) -> None:
+def summarize_processing(
+    run_dir: Path,
+    out_dir: Path,
+    plots_dir: Path,
+    manifest: list[dict[str, Any]],
+) -> None:
     processing_dir = run_dir / "processing"
     if not processing_dir.exists():
         return
@@ -267,9 +269,35 @@ def summarize_processing(run_dir: Path, out_dir: Path) -> None:
 
     for filename, plot_func in files.items():
         path = processing_dir / filename
-        if path.exists():
-            plot_func(path, out_dir)
-
+        if not path.exists():
+            continue
+        before = _png_snapshot(out_dir)
+        plot_func(path, out_dir)
+        df = pd.read_csv(path)
+        metrics: dict[str, Any] = {
+            "rows": int(len(df)),
+            "columns": [str(c) for c in df.columns],
+        }
+        if {"n_features", "roc_auc", "pr_auc"}.issubset(df.columns):
+            best_pr_idx = df["pr_auc"].idxmax()
+            best_roc_idx = df["roc_auc"].idxmax()
+            metrics.update({
+                "best_pr_auc": float(df.loc[best_pr_idx, "pr_auc"]),
+                "best_pr_auc_n_features": int(df.loc[best_pr_idx, "n_features"]),
+                "best_roc_auc": float(df.loc[best_roc_idx, "roc_auc"]),
+                "best_roc_auc_n_features": int(df.loc[best_roc_idx, "n_features"]),
+            })
+        for col in ("number_of_imputation", "nan_percentage", "abs_spearman", "n_outliers"):
+            if col in df.columns and not df.empty:
+                metrics[f"max_{col}"] = float(df[col].max())
+        _register_new_plots(
+            manifest,
+            before,
+            out_dir,
+            plots_dir,
+            path.resolve(),
+            metrics,
+        )
 
 def plot_imputed_features(path: Path, out_dir: Path) -> None:
     df = pd.read_csv(path)
@@ -498,43 +526,158 @@ def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.nd
     return np.array([]), np.array(labels)
 
 
-def write_classification_report(path: Path, y_true: np.ndarray, y_pred: np.ndarray, labels: list[str]) -> None:
-    report = classification_report(y_true, y_pred, labels=labels, zero_division=0)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(report, encoding="utf-8")
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.integer,)):
+        return int(value)
+    if isinstance(value, (np.floating,)):
+        return float(value)
+    if pd.isna(value):
+        return None
+    return value
 
 
-def plot_predictions(prediction_path: Path, out_dir: Path) -> None:
+def _png_snapshot(directory: Path) -> set[Path]:
+    if not directory.exists():
+        return set()
+    return {p.resolve() for p in directory.rglob("*.png")}
+
+
+def _plot_type_from_name(path: Path) -> str:
+    name = path.stem
+    if name.endswith("_confusion_matrix"):
+        return "confusion_matrix"
+    if name.endswith("_roc_pr_overlay"):
+        return "roc_pr_overlay"
+    if name.endswith("_roc_curve"):
+        return "roc_curve"
+    if name.endswith("_pr_curve"):
+        return "precision_recall_curve"
+    if name.endswith("_summary_metrics"):
+        return "summary_metrics"
+    if "rfecv" in name and name.endswith("_performance"):
+        return "rfecv_performance"
+    if "imputed_features" in name:
+        return "imputed_features"
+    if "nan_dropped_features" in name:
+        return "missingness_dropped_features"
+    if "correlation_dropped_features" in name:
+        return "correlation_dropped_features"
+    if "iqr_outliers" in name:
+        return "iqr_outliers"
+    return "plot"
+
+
+def _register_new_plots(
+    manifest: list[dict[str, Any]],
+    before: set[Path],
+    output_dir: Path,
+    plots_dir: Path,
+    source_file: Path,
+    metrics: dict[str, Any],
+) -> None:
+    after = _png_snapshot(output_dir)
+    for plot_path in sorted(after - before):
+        manifest.append({
+            "plot_file": str(plot_path.relative_to(plots_dir)),
+            "plot_type": _plot_type_from_name(plot_path),
+            "input_file": str(source_file),
+            "metrics": _json_safe(metrics),
+        })
+
+
+def compute_prediction_metrics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    labels: list[str],
+    y_score: np.ndarray,
+    class_names: np.ndarray,
+) -> dict[str, Any]:
+    cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
+    report = classification_report(
+        y_true,
+        y_pred,
+        labels=labels,
+        zero_division=0,
+        output_dict=True,
+    )
+    metrics: dict[str, Any] = {
+        "rows": int(len(y_true)),
+        "labels": [str(x) for x in labels],
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "confusion_matrix": cmatrix.tolist(),
+        "classification_report": report,
+    }
+
+    if y_score.size and y_score.ndim == 1 and len(labels) == 2:
+        positive_label = labels[-1]
+        y_binary = np.array([1 if y == positive_label else 0 for y in y_true])
+        if np.unique(y_binary).size == 2:
+            fpr, tpr, _ = roc_curve(y_binary, y_score)
+            precision, recall, _ = precision_recall_curve(y_binary, y_score)
+            metrics.update({
+                "positive_label": str(positive_label),
+                "roc_auc": float(auc(fpr, tpr)),
+                "pr_auc": float(auc(recall, precision)),
+                "positive_prevalence": float(np.mean(y_binary)),
+            })
+    elif y_score.size and y_score.ndim == 2 and y_score.shape[1] > 1:
+        label_to_index = {str(label): i for i, label in enumerate(class_names)}
+        per_class: dict[str, Any] = {}
+        for class_name in class_names:
+            class_name_str = str(class_name)
+            idx = label_to_index[class_name_str]
+            y_binary = (np.asarray(y_true).astype(str) == class_name_str).astype(int)
+            if np.unique(y_binary).size < 2:
+                continue
+            fpr, tpr, _ = roc_curve(y_binary, y_score[:, idx])
+            precision, recall, _ = precision_recall_curve(y_binary, y_score[:, idx])
+            per_class[class_name_str] = {
+                "roc_auc": float(auc(fpr, tpr)),
+                "pr_auc": float(auc(recall, precision)),
+                "prevalence": float(np.mean(y_binary)),
+            }
+        metrics["one_vs_rest"] = per_class
+
+    return metrics
+
+
+def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
     df = pd.read_csv(prediction_path)
     if df.empty:
-        return
+        return {"rows": 0, "skipped": "empty input file"}
 
-    level_name = prediction_path.parent.name
     out_dir.mkdir(parents=True, exist_ok=True)
     base_name = prediction_path.stem
-    summary_path = out_dir / f"{safe_str(base_name)}_dataset_summary.txt"
 
     y_true, y_pred, labels = infer_labels(df)
     y_score, class_names = infer_scores(df, labels)
-    write_classification_report(out_dir / f"{safe_str(base_name)}_classification_report.txt", y_true, y_pred, labels)
 
-    cm = confusion_matrix(y_true, y_pred, labels=labels)
-    plot_confusion(cm, labels, out_dir / f"{safe_str(base_name)}_confusion_matrix.png")
+    cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
+    plot_confusion(
+        cmatrix,
+        labels,
+        out_dir / f"{safe_str(base_name)}_confusion_matrix.png",
+    )
 
     if y_score.size and y_score.ndim == 1:
         plot_binary_curves(
             y_true=y_true,
             y_score=y_score,
-            output_prefix=out_dir / Path(f"{safe_str(base_name)}"),
+            output_prefix=out_dir / Path(safe_str(base_name)),
             positive_label=labels[-1],
         )
-
     elif y_score.size and y_score.ndim == 2:
         if y_score.shape[1] == 1:
             plot_binary_curves(
                 y_true=y_true,
                 y_score=y_score[:, 0],
-                output_prefix=out_dir / Path(f"{safe_str(base_name)}"),
+                output_prefix=out_dir / Path(safe_str(base_name)),
                 positive_label=labels[-1],
             )
         else:
@@ -542,40 +685,86 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> None:
                 y_true=y_true,
                 proba_df=pd.DataFrame(y_score, columns=class_names),
                 class_labels=class_names.tolist(),
-                output_prefix=out_dir / Path(f"{safe_str(base_name)}"),
+                output_prefix=out_dir / Path(safe_str(base_name)),
             )
 
-    summary = {
-        "file": str(prediction_path),
-        "rows": len(df),
-        "label_distribution": df["true_label"].value_counts(dropna=False).to_dict() if "true_label" in df.columns else df["true"].value_counts(dropna=False).to_dict(),
+    metrics = compute_prediction_metrics(
+        y_true=y_true,
+        y_pred=y_pred,
+        labels=labels,
+        y_score=y_score,
+        class_names=class_names,
+    )
+    true_col = "true_label" if "true_label" in df.columns else "true"
+    metrics["label_distribution"] = {
+        str(k): int(v)
+        for k, v in df[true_col].value_counts(dropna=False).items()
     }
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
-
+    return metrics
 
 def collect_prediction_files(run_dir: Path) -> list[Path]:
     return sorted(run_dir.rglob("predictions*.csv"))
 
 
-def run_plotting(run_dir: Path, plots_dir: Path) -> None:
+def run_plotting(run_dir: Path, plots_dir: Path) -> Path:
     run_dir = run_dir.resolve()
     plots_dir = plots_dir.resolve()
     plots_dir.mkdir(parents=True, exist_ok=True)
+    manifest: list[dict[str, Any]] = []
 
     for prediction_path in collect_prediction_files(run_dir):
         level_plot_dir = plots_dir / prediction_path.parent.name
         print(f"Plotting {prediction_path} -> {level_plot_dir}")
-        plot_predictions(prediction_path, level_plot_dir)
+        before = _png_snapshot(level_plot_dir)
+        metrics = plot_predictions(prediction_path, level_plot_dir)
+        _register_new_plots(
+            manifest,
+            before,
+            level_plot_dir,
+            plots_dir,
+            prediction_path.resolve(),
+            metrics,
+        )
 
     summary_files = sorted(run_dir.rglob("summary.json"))
     for summary_path in summary_files:
         level_plot_dir = plots_dir / summary_path.parent.name
         print(f"Plotting summary {summary_path} -> {level_plot_dir}")
+        before = _png_snapshot(level_plot_dir)
         plot_level_metrics_from_summary(summary_path, level_plot_dir)
+        summary_data = load_json(summary_path)
+        _register_new_plots(
+            manifest,
+            before,
+            level_plot_dir,
+            plots_dir,
+            summary_path.resolve(),
+            {"summary_metrics": summary_data},
+        )
 
     print(f"Plotting processing tables from {run_dir / 'processing'}")
-    summarize_processing(run_dir, plots_dir / "processing")
+    summarize_processing(
+        run_dir,
+        plots_dir / "processing",
+        plots_dir,
+        manifest,
+    )
 
+    manifest_path = plots_dir / "plot_manifest.yaml"
+    payload = {
+        "run_directory": str(run_dir),
+        "plots_directory": str(plots_dir),
+        "n_plots": len(manifest),
+        "plots": manifest,
+    }
+    with manifest_path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            _json_safe(payload),
+            handle,
+            sort_keys=False,
+            allow_unicode=True,
+        )
+    return manifest_path
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Plot model evaluation results and processing reports.")
@@ -590,8 +779,9 @@ def main() -> None:
     if not run_dir.exists():
         raise FileNotFoundError(f"Run directory not found: {run_dir}")
     plots_dir = Path(args.plots_dir).expanduser().resolve() if args.plots_dir else run_dir / "plots"
-    run_plotting(run_dir, plots_dir)
+    manifest_path = run_plotting(run_dir, plots_dir)
     print(f"Saved plots to {plots_dir}")
+    print(f"Saved plot manifest to {manifest_path}")
 
 
 if __name__ == "__main__":

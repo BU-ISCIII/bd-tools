@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+from fnmatch import fnmatch
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence, Any
 
 import numpy as np
 import optuna
@@ -19,6 +20,8 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.base import clone
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler, label_binarize
 
@@ -34,12 +37,289 @@ from .utils import (
     load_processed_dataframe,
     preprocess_train_test_features,
 )
-from .config import runtime_defaults
-from .models import _find_threshold_for_recall, _fit_calibrated_or_base, build_binary_model, build_multiclass_model
+from .config import (
+    feature_view_definitions,
+    modelling_feature_views,
+    runtime_defaults,
+)
+from .models import _find_threshold_for_recall, build_binary_model, build_multiclass_model
 from .optuna_utils import optimise_binary_model, optimise_multiclass_model
-from .oof import generate_oof_probas_binary, generate_oof_probas_multiclass
 from .feature_filters import shap_rfecv, remove_correlated_features, fit_iqr_bounds, apply_iqr_bounds_to_nan
 from .feature_selection import cap_features, _build_ranking_model
+
+def _matching_columns(columns: Sequence[str], patterns: Sequence[str]) -> set[str]:
+    return {
+        column
+        for column in columns
+        if any(fnmatch(column, pattern) for pattern in patterns)
+    }
+
+
+def _alternative_columns(
+    columns: Sequence[str], alternative: dict[str, Any]
+) -> set[str]:
+    selected = {
+        column for column in alternative.get("include", []) if column in columns
+    }
+    selected |= _matching_columns(columns, alternative.get("include_patterns", []))
+    return selected
+
+
+def resolve_feature_view_columns(
+    columns: Sequence[str],
+    *,
+    view_name: str,
+    view_config: dict[str, Any],
+) -> list[str]:
+    """Resolve a named view against the columns available after preprocessing.
+
+    The input CSV can be the baseline/full view. For each configured feature
+    group, all representations are first removed and only the representation
+    selected by the named view is added back. This prevents raw, binary and
+    categorical duplicates from leaking into a supposedly restricted view.
+    """
+    available = list(columns)
+    view_by_name = {
+        str(view["name"]): view
+        for view in view_config["feature_views"]
+        if isinstance(view, dict) and "name" in view
+    }
+
+    if view_name == "all":
+        return available
+    if view_name not in view_by_name:
+        raise ValueError(
+            f"Unknown feature view '{view_name}'. Available views: "
+            f"{sorted(view_by_name)} plus 'all'."
+        )
+
+    view = view_by_name[view_name]
+    included = _matching_columns(available, view.get("include_patterns", ["*"]))
+    included |= {c for c in view.get("include", []) if c in available}
+
+    excluded = {
+        c for c in view_config.get("baseline_exclude_columns", []) if c in available
+    }
+    excluded |= _matching_columns(
+        available, view_config.get("baseline_exclude_patterns", [])
+    )
+    excluded |= {c for c in view.get("exclude", []) if c in available}
+    excluded |= _matching_columns(available, view.get("exclude_patterns", []))
+
+    groups = view_config["feature_groups"]
+    for group_name, selected_alternative_name in view.get("groups", {}).items():
+        if group_name not in groups:
+            raise ValueError(
+                f"View '{view_name}' references unknown feature group '{group_name}'."
+            )
+        alternatives = groups[group_name].get("alternatives", {})
+        if selected_alternative_name not in alternatives:
+            raise ValueError(
+                f"View '{view_name}' selects unknown alternative "
+                f"'{selected_alternative_name}' for group '{group_name}'."
+            )
+
+        # Remove every representation belonging to this group.
+        for alternative in alternatives.values():
+            excluded |= _alternative_columns(available, alternative)
+            excluded |= {
+                c for c in alternative.get("exclude", []) if c in available
+            }
+            excluded |= _matching_columns(
+                available, alternative.get("exclude_patterns", [])
+            )
+
+        # Re-add only the representation selected by this view.
+        selected_alternative = alternatives[selected_alternative_name]
+        selected_columns = _alternative_columns(available, selected_alternative)
+        included |= selected_columns
+        excluded -= selected_columns
+
+        # Explicit excludes belonging to the selected alternative still win.
+        excluded |= {
+            c for c in selected_alternative.get("exclude", []) if c in available
+        }
+        excluded |= _matching_columns(
+            available, selected_alternative.get("exclude_patterns", [])
+        )
+
+    selected = [
+        column for column in available
+        if column in included and column not in excluded
+    ]
+    if not selected:
+        raise ValueError(f"Feature view '{view_name}' selected no available columns.")
+    return selected
+
+
+def apply_feature_view(
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    *,
+    view_name: str,
+    view_config: dict[str, Any],
+    stage_name: str,
+    output_dir: Optional[Path] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    columns = resolve_feature_view_columns(
+        X_train.columns,
+        view_name=view_name,
+        view_config=view_config,
+    )
+    missing_in_test = [column for column in columns if column not in X_test.columns]
+    if missing_in_test:
+        raise ValueError(
+            f"Feature view '{view_name}' for {stage_name} has columns missing "
+            f"from test data: {missing_in_test[:20]}"
+        )
+    print(
+        f"  Feature view for {stage_name}: '{view_name}' "
+        f"({len(columns)} columns before RFECV)."
+    )
+    if output_dir is not None:
+        pd.DataFrame({"feature": columns}).to_csv(
+            output_dir / f"{stage_name}_feature_view_columns.csv", index=False
+        )
+    return X_train.loc[:, columns].copy(), X_test.loc[:, columns].copy()
+
+
+def apply_stage_correlation_filter(
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame,
+    *,
+    max_corr: float,
+    stage_name: str,
+    output_dir: Path,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Apply correlation filtering independently within a stage's feature view."""
+    if max_corr >= 1.0:
+        return X_train, X_test
+    kept_cols = remove_correlated_features(
+        X_train,
+        threshold=max_corr,
+        output_csv_path=output_dir / f"{stage_name}_correlation_dropped_features.csv",
+    )
+    removed = len(X_train.columns) - len(kept_cols)
+    print(
+        f"  {stage_name}: correlation filter removed {removed} columns; "
+        f"{len(kept_cols)} remain."
+    )
+    return X_train.loc[:, kept_cols].copy(), X_test.loc[:, kept_cols].copy()
+
+
+class CalibratedEnsemble:
+    """Average an ensemble of models calibrated on stratified folds."""
+
+    def __init__(self, estimators: Sequence[Any]):
+        if not estimators:
+            raise ValueError("At least one calibrated estimator is required.")
+        self.estimators = list(estimators)
+        self.classes_ = self.estimators[0].classes_
+
+    def predict_proba(self, X):
+        probabilities = [estimator.predict_proba(X) for estimator in self.estimators]
+        return np.mean(probabilities, axis=0)
+
+    def predict(self, X):
+        return self.classes_[np.argmax(self.predict_proba(X), axis=1)]
+
+
+def _make_stratified_cv(y: pd.Series, n_splits: int, random_state: int):
+    class_counts = pd.Series(y).value_counts()
+    if class_counts.empty or len(class_counts) < 2:
+        raise ValueError("At least two classes are required for stratified CV.")
+    effective_splits = min(n_splits, int(class_counts.min()))
+    if effective_splits < 2:
+        raise ValueError(
+            "At least two observations in every class are required for stratified CV."
+        )
+    return StratifiedKFold(
+        n_splits=effective_splits,
+        shuffle=True,
+        random_state=random_state,
+    )
+
+
+def _fit_stratified_calibrated_ensemble(
+    base_estimator,
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    n_splits: int,
+    random_state: int,
+    method: str = "isotonic",
+    sample_weight: Optional[pd.Series] = None,
+):
+    """Fit fold-specific base models and calibrate each on a disjoint stratified fold."""
+    cv = _make_stratified_cv(y, n_splits, random_state)
+    calibrated_estimators = []
+    for fit_idx, calibration_idx in cv.split(X, y):
+        estimator = clone(base_estimator)
+        fit_kwargs = {}
+        if sample_weight is not None:
+            fit_kwargs["sample_weight"] = np.asarray(sample_weight.iloc[fit_idx])
+        estimator.fit(X.iloc[fit_idx], y.iloc[fit_idx], **fit_kwargs)
+        try:
+            calibrator = CalibratedClassifierCV(estimator=estimator, cv="prefit", method=method)
+        except TypeError:  # sklearn < 1.2
+            calibrator = CalibratedClassifierCV(base_estimator=estimator, cv="prefit", method=method)
+        calibration_kwargs = {}
+        if sample_weight is not None:
+            calibration_kwargs["sample_weight"] = np.asarray(sample_weight.iloc[calibration_idx])
+        calibrator.fit(X.iloc[calibration_idx], y.iloc[calibration_idx], **calibration_kwargs)
+        calibrated_estimators.append(calibrator)
+    return CalibratedEnsemble(calibrated_estimators)
+
+
+def _generate_stratified_calibrated_oof_binary(
+    X: pd.DataFrame,
+    y: pd.Series,
+    *,
+    best_params: dict,
+    model_type: str,
+    n_splits: int,
+    random_state: int,
+    sample_weight: Optional[pd.Series] = None,
+    method: str = "isotonic",
+) -> np.ndarray:
+    """Calibrated stratified OOF probabilities for threshold selection/stacking."""
+    outer_cv = _make_stratified_cv(y, n_splits, random_state)
+    oof = np.full(len(X), np.nan, dtype=float)
+    for fold, (train_idx, valid_idx) in enumerate(outer_cv.split(X, y)):
+        X_tr, X_va = X.iloc[train_idx], X.iloc[valid_idx]
+        y_tr = y.iloc[train_idx]
+        sw_tr = sample_weight.iloc[train_idx] if sample_weight is not None else None
+        model = _fit_stratified_calibrated_ensemble(
+            build_binary_model(model_type, best_params.copy()),
+            X_tr, y_tr,
+            n_splits=max(2, min(n_splits - 1, int(y_tr.value_counts().min()))),
+            random_state=random_state + fold + 1,
+            method=method,
+            sample_weight=sw_tr,
+        )
+        oof[valid_idx] = model.predict_proba(X_va)[:, 1]
+    if np.isnan(oof).any():
+        raise RuntimeError("Stratified calibrated OOF generation left missing predictions.")
+    return oof
+
+
+
+def _find_best_macro_f1_threshold(y_true: pd.Series, probabilities: np.ndarray) -> float:
+    """Choose a binary threshold from OOF probabilities by maximum macro F1."""
+    y_array = np.asarray(y_true, dtype=int)
+    proba_array = np.asarray(probabilities, dtype=float)
+    candidate_thresholds = np.unique(
+        np.concatenate(([0.0], proba_array, [1.0]))
+    )
+    best_threshold = 0.5
+    best_score = -np.inf
+    for threshold in candidate_thresholds:
+        predictions = (proba_array >= threshold).astype(int)
+        score = f1_score(y_array, predictions, average="macro", zero_division=0)
+        if score > best_score:
+            best_score = score
+            best_threshold = float(threshold)
+    return best_threshold
 
 def _map_hemo_subtype_to_gnb_binary(target_series: pd.Series) -> pd.Series:
     return pd.Series(
@@ -51,6 +331,33 @@ def _map_hemo_subtype_to_gnb_binary(target_series: pd.Series) -> pd.Series:
 def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print("SELECTED ARGS:", args)
+
+    feature_view_config = feature_view_definitions()
+    stage_feature_views = modelling_feature_views()
+
+    print("Feature views selected for modelling:")
+    for stage, view_name in stage_feature_views.items():
+        print(f"  {stage}: {view_name}")
+
+    defined_views = {
+        str(view["name"])
+        for view in feature_view_config["feature_views"]
+        if isinstance(view, dict) and "name" in view
+    }
+
+    unknown_assignments = {
+        stage: view_name
+        for stage, view_name in stage_feature_views.items()
+        if view_name != "all" and view_name not in defined_views
+    }
+
+    if unknown_assignments:
+        raise ValueError(
+            "The modelling configuration references undefined feature views: "
+            f"{unknown_assignments}. Available views: "
+            f"{sorted(defined_views | {'all'})}"
+        )
+    print("STAGE FEATURE VIEWS:", stage_feature_views)
 
     # ------------------------------------------------------------------
     # 1. Load & preprocess
@@ -91,8 +398,25 @@ def run_training(args: argparse.Namespace) -> None:
     feature_df_raw = working_df[feature_cols]
 
     # ------------------------------------------------------------------
-    # 2. Train / test split – stratified on sepsis
+    # 2. One-row-per-patient validation and stratified train/test split
     # ------------------------------------------------------------------
+    if "person_id" not in working_df.columns:
+        raise ValueError("person_id is required to verify one row per patient.")
+
+    duplicated_mask = working_df["person_id"].duplicated(keep=False)
+    if duplicated_mask.any():
+        duplicated_patients = working_df.loc[duplicated_mask, "person_id"].nunique()
+        duplicated_rows = int(duplicated_mask.sum())
+        raise ValueError(
+            "Expected exactly one row per patient, but found "
+            f"{duplicated_patients} duplicated person_id values across "
+            f"{duplicated_rows} rows."
+        )
+    print(
+        f"Confirmed one row per patient: {working_df['person_id'].nunique()} "
+        f"unique patients across {len(working_df)} rows."
+    )
+
     y_sepsis = working_df.loc[feature_df_raw.index, args.sepsis_target]
     y_hemo = working_df.loc[feature_df_raw.index, args.hemo_target]
     y_hemo_gate = working_df.loc[feature_df_raw.index, args.hemo_gate_target]
@@ -109,7 +433,13 @@ def run_training(args: argparse.Namespace) -> None:
         y_bmr_train, y_bmr_test,
         w_train, w_test,
     ) = train_test_split(
-        feature_df_raw, y_sepsis, y_hemo, y_hemo_gate, y_cef, y_bmr, w,
+        feature_df_raw,
+        y_sepsis,
+        y_hemo,
+        y_hemo_gate,
+        y_cef,
+        y_bmr,
+        w,
         test_size=args.test_size,
         random_state=args.random_state,
         stratify=y_sepsis,
@@ -170,27 +500,20 @@ def run_training(args: argparse.Namespace) -> None:
     print(f"Train: {len(X_train)} rows  |  Test: {len(X_test)} rows")
 
     # ------------------------------------------------------------------
-    # 2b. Remove highly correlated features (training data only → no leakage)
+    # 2b. Correlation filtering is stage-specific
     # ------------------------------------------------------------------
-    if args.max_corr < 1.0:
-        print(f"\nRemoving features with |Spearman corr| > {args.max_corr} …")
-        kept_cols = remove_correlated_features(
-            X_train, 
-            threshold=args.max_corr,
-            output_csv_path=output_dir / "processing" / "correlation_dropped_features.csv",
-        )
-        n_removed = len(X_train.columns) - len(kept_cols)
-        if n_removed:
-            print(f"  Dropped {n_removed} redundant features → {len(kept_cols)} remain.")
-        X_train = X_train[kept_cols]
-        X_test = X_test[kept_cols]
+    # Each stage may use a different feature view. Correlation filtering is
+    # therefore applied after selecting that stage's view, not globally here.
 
 
     # ------------------------------------------------------------------
     # 3. Output directory
     # ------------------------------------------------------------------
 
-    all_summaries: Dict = {"args": {str(k): str(v) for k,v in args.__dict__.items()}}
+    all_summaries: Dict = {
+        "args": {str(k): str(v) for k, v in args.__dict__.items()},
+        "feature_views": stage_feature_views,
+    }
     optuna_storage = args.optuna_storage or None
     study_prefix = args.optuna_study_prefix.strip() if args.optuna_study_prefix else "three_level"
     if optuna_storage:
@@ -273,6 +596,20 @@ def run_training(args: argparse.Namespace) -> None:
         l1_dir = output_dir / "level1_sepsis"
         l1_dir.mkdir(exist_ok=True)
 
+        X1_train_base, X1_test_base = apply_feature_view(
+            X_train, X_test,
+            view_name=stage_feature_views["level1_sepsis"],
+            view_config=feature_view_config,
+            stage_name="level1_sepsis",
+            output_dir=processing_dir,
+        )
+        X1_train_base, X1_test_base = apply_stage_correlation_filter(
+            X1_train_base, X1_test_base,
+            max_corr=args.max_corr,
+            stage_name="level1_sepsis",
+            output_dir=processing_dir,
+        )
+
         le_sep = LabelEncoder()
         y_sep_train_enc = pd.Series(
             le_sep.fit_transform(y_sep_train.astype(str)),
@@ -290,27 +627,27 @@ def run_training(args: argparse.Namespace) -> None:
         rank_model_l1 = _build_ranking_model(args.model_type, y_sep_train_enc, args.random_state)
         if args.skip_rfecv:
             print("  Skipping RFECV for Level 1 – using all features.")
-            selected_features = X_train.columns.tolist()
+            selected_features = X1_train_base.columns.tolist()
             l1_rfecv_history = {}
         else:
             print("  Selecting Level 1 features by SHAP importance …")
             selected_features, l1_rfecv_history = shap_rfecv(
-                rank_model_l1, X_train, y_sep_train_enc, min_features=1, max_features=args.max_features, scoring="pr_auc",
+                rank_model_l1, X1_train_base, y_sep_train_enc, min_features=1, max_features=args.max_features, scoring="pr_auc",
                 output_csv_path=output_dir / "processing" / "l1_rfecv_features.csv",
             )
         l1_features = cap_features(
-            selected_features, X_train, y_sep_train_enc,
+            selected_features, X1_train_base, y_sep_train_enc,
             args.max_features, args.random_state, args.model_type, rank_model=rank_model_l1
         )
         print(f"  SHAP selection kept {len(l1_features)} features.")
 
         scaler_l1 = MinMaxScaler()
         X_l1_train = pd.DataFrame(
-            scaler_l1.fit_transform(X_train[l1_features]),
+            scaler_l1.fit_transform(X1_train_base[l1_features]),
             columns=l1_features, index=X_train.index,
         )
         X_l1_test = pd.DataFrame(
-            scaler_l1.transform(X_test[l1_features]),
+            scaler_l1.transform(X1_test_base[l1_features]),
             columns=l1_features, index=X_test.index,
         )
 
@@ -324,11 +661,32 @@ def run_training(args: argparse.Namespace) -> None:
             model_type=args.model_type,
             study_name=_study_name("l1")
         )
-        print(f"  Best threshold: {l1_threshold:.3f}")
+        l1_optuna_threshold = l1_threshold
+        l1_calibrated_oof = _generate_stratified_calibrated_oof_binary(
+            X=X_l1_train,
+            y=y_sep_train_enc,
+            best_params=l1_params,
+            model_type=args.model_type,
+            n_splits=args.cv_splits,
+            random_state=args.random_state,
+            sample_weight=sw_l1,
+            method="isotonic",
+        )
+        l1_threshold = _find_best_macro_f1_threshold(
+            y_sep_train_enc, l1_calibrated_oof
+        )
+        print(
+            f"  Optuna threshold: {l1_optuna_threshold:.3f}  |  "
+            f"calibrated OOF threshold: {l1_threshold:.3f}"
+        )
 
         # Final Level 1 model trained on all training data, then calibrated
         l1_base = build_binary_model(args.model_type, l1_params.copy())
-        l1_model = _fit_calibrated_or_base(l1_base, X_l1_train, y_sep_train_enc, max_cv=5, method="isotonic")
+        l1_model = _fit_stratified_calibrated_ensemble(
+            l1_base, X_l1_train, y_sep_train_enc,
+            n_splits=min(5, args.cv_splits), random_state=args.random_state,
+            method="isotonic", sample_weight=sw_l1,
+        )
 
         l1_test_proba = l1_model.predict_proba(X_l1_test)[:, 1]
         l1_test_pred = (l1_test_proba >= l1_threshold).astype(int)
@@ -454,8 +812,21 @@ def run_training(args: argparse.Namespace) -> None:
 
         if args.skip_l2_gate:
             # Direct etiology prediction including NEGATIVE as a class.
-            X2_train_base = X_train.loc[hemo_valid_train].copy()
-            X2_test_base = X_test.loc[hemo_valid_test].copy()
+            X2_direct_train_view, X2_direct_test_view = apply_feature_view(
+                X_train, X_test,
+                view_name=stage_feature_views["level2_etiology"],
+                view_config=feature_view_config,
+                stage_name="level2_direct_etiology",
+                output_dir=processing_dir,
+            )
+            X2_train_base = X2_direct_train_view.loc[hemo_valid_train].copy()
+            X2_test_base = X2_direct_test_view.loc[hemo_valid_test].copy()
+            X2_train_base, X2_test_base = apply_stage_correlation_filter(
+                X2_train_base, X2_test_base,
+                max_corr=args.max_corr,
+                stage_name="level2_direct_etiology",
+                output_dir=processing_dir,
+            )
             y2_train_raw = y_hemo_train.loc[hemo_valid_train].astype(str)
             y2_test_raw = y_hemo_test.loc[hemo_valid_test].astype(str)
 
@@ -525,6 +896,20 @@ def run_training(args: argparse.Namespace) -> None:
                     model_type=args.model_type,
                     study_name=_study_name("l2_direct_bin")
                 )
+                l2_optuna_threshold = l2_threshold
+                l2_calibrated_oof = _generate_stratified_calibrated_oof_binary(
+                    X=X2_train_scaled,
+                    y=y2_train,
+                    best_params=l2_params,
+                    model_type=args.model_type,
+                    n_splits=args.cv_splits,
+                    random_state=args.random_state,
+                    sample_weight=sw_l2,
+                    method="isotonic",
+                )
+                l2_threshold = _find_best_macro_f1_threshold(
+                    y2_train, l2_calibrated_oof
+                )
                 l2_base = build_binary_model(args.model_type, l2_params.copy())
             else:
                 l2_params, l2_study = _optimise_multiclass(
@@ -540,7 +925,11 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_threshold = None
                 l2_base = build_multiclass_model(args.model_type, l2_params.copy(), len(le_l2.classes_))
 
-            l2_model = _fit_calibrated_or_base(l2_base, X2_train_scaled, y2_train, max_cv=5, method="isotonic")
+            l2_model = _fit_stratified_calibrated_ensemble(
+                l2_base, X2_train_scaled, y2_train,
+                n_splits=min(5, args.cv_splits), random_state=args.random_state,
+                method="isotonic", sample_weight=sw_l2,
+            )
             l2_test_proba = l2_model.predict_proba(X2_test_scaled)
             if is_binary_subtype:
                 l2_test_pred = (l2_test_proba[:, 1] >= l2_threshold).astype(int)
@@ -661,23 +1050,6 @@ def run_training(args: argparse.Namespace) -> None:
                 stage_pred_df["abs_margin_from_threshold"] = stage_pred_df["margin_from_threshold"].abs()
                 stage_pred_df = metadata_df.reindex(stage_pred_df.index).join(stage_pred_df)
                 stage_pred_df.to_csv(l2_dir / "predictions_direct_etiology.csv", index_label="row_index")
-                stage_pred_df.query("error_type in ['FP','FN']").to_csv(
-                    l2_dir / "errors_direct_etiology.csv", index_label="row_index"
-                )
-                (
-                    stage_pred_df
-                    .groupby("error_type")
-                    .agg(
-                        n=("error_type", "size"),
-                        mean_proba=("proba_positive", "mean"),
-                        median_proba=("proba_positive", "median"),
-                        min_proba=("proba_positive", "min"),
-                        max_proba=("proba_positive", "max"),
-                        mean_abs_margin=("abs_margin_from_threshold", "mean"),
-                    )
-                    .reset_index()
-                    .to_csv(l2_dir / "error_summary_direct_etiology.csv", index=False)
-                )
             else:
                 stage_pred_df = metadata_df.reindex(stage_pred_df.index).join(stage_pred_df)
                 stage_pred_df.to_csv(
@@ -714,8 +1086,21 @@ def run_training(args: argparse.Namespace) -> None:
                 y_hemo_gate_test.loc[gate_test_mask].astype(str) != args.hemo_gate_negative_label
             ).astype(int)
 
-            X2_gate_train_base = X_train.loc[hemo_gate_valid_train].copy()
-            X2_gate_test_base = X_test.loc[gate_test_mask].copy()
+            X2_gate_train_view, X2_gate_test_view = apply_feature_view(
+                X_train, X_test,
+                view_name=stage_feature_views["level2_gate"],
+                view_config=feature_view_config,
+                stage_name="level2_gate",
+                output_dir=processing_dir,
+            )
+            X2_gate_train_base = X2_gate_train_view.loc[hemo_gate_valid_train].copy()
+            X2_gate_test_base = X2_gate_test_view.loc[gate_test_mask].copy()
+            X2_gate_train_base, X2_gate_test_base = apply_stage_correlation_filter(
+                X2_gate_train_base, X2_gate_test_base,
+                max_corr=args.max_corr,
+                stage_name="level2_gate",
+                output_dir=processing_dir,
+            )
 
             rank_model_l2_gate = _build_ranking_model(args.model_type, y2_gate_train, args.random_state)
             if args.skip_rfecv:
@@ -756,17 +1141,21 @@ def run_training(args: argparse.Namespace) -> None:
             )
             
             l2_gate_base = build_binary_model(args.model_type, l2_gate_params.copy())
-            l2_gate_model = _fit_calibrated_or_base(
-                l2_gate_base, X2_gate_train_scaled, y2_gate_train, max_cv=5, method="isotonic"
+            l2_gate_model = _fit_stratified_calibrated_ensemble(
+                l2_gate_base, X2_gate_train_scaled, y2_gate_train,
+                n_splits=min(5, args.cv_splits), random_state=args.random_state,
+                method="isotonic", sample_weight=sw_l2_gate,
             )
             l2_gate_train_proba = pd.Series(
-                generate_oof_probas_binary(
+                _generate_stratified_calibrated_oof_binary(
                     X=X2_gate_train_scaled,
                     y=y2_gate_train,
                     best_params=l2_gate_params,
                     model_type=args.model_type,
                     n_splits=args.cv_splits,
                     random_state=args.random_state,
+                    sample_weight=sw_l2_gate,
+                    method="isotonic",
                 ),
                 index=X2_gate_train_scaled.index,
                 name="l2_gate_proba",
@@ -816,8 +1205,15 @@ def run_training(args: argparse.Namespace) -> None:
                 & (l2_gate_test_pred == 1)
             )
 
-            X2_sub_train_base = X_train.loc[subtype_train_mask].copy()
-            X2_sub_test_base = X_test.loc[subtype_test_mask].copy()
+            X2_sub_train_view, X2_sub_test_view = apply_feature_view(
+                X_train, X_test,
+                view_name=stage_feature_views["level2_etiology"],
+                view_config=feature_view_config,
+                stage_name="level2_etiology",
+                output_dir=processing_dir,
+            )
+            X2_sub_train_base = X2_sub_train_view.loc[subtype_train_mask].copy()
+            X2_sub_test_base = X2_sub_test_view.loc[subtype_test_mask].copy()
             if args.l2_gate_proba_as_feature:
                 print("  Adding Level 2 gate probability as a feature to Stage 2 subtype modelling.")
                 X2_sub_train_base = X2_sub_train_base.join(
@@ -826,6 +1222,12 @@ def run_training(args: argparse.Namespace) -> None:
                 X2_sub_test_base = X2_sub_test_base.join(
                     l2_gate_test_proba.loc[subtype_test_mask], how="left"
                 )
+            X2_sub_train_base, X2_sub_test_base = apply_stage_correlation_filter(
+                X2_sub_train_base, X2_sub_test_base,
+                max_corr=args.max_corr,
+                stage_name="level2_etiology",
+                output_dir=processing_dir,
+            )
             y2_sub_train_raw = y_hemo_train.loc[subtype_train_mask].astype(str)
             y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
 
@@ -919,6 +1321,20 @@ def run_training(args: argparse.Namespace) -> None:
                     model_type=args.model_type,
                     study_name=_study_name("l2_sub_bin")
                 )
+                l2_optuna_threshold = l2_threshold
+                l2_calibrated_oof = _generate_stratified_calibrated_oof_binary(
+                    X=X2_train_scaled,
+                    y=y2_sub_train,
+                    best_params=l2_params,
+                    model_type=args.model_type,
+                    n_splits=args.cv_splits,
+                    random_state=args.random_state,
+                    sample_weight=sw_l2,
+                    method="isotonic",
+                )
+                l2_threshold = _find_best_macro_f1_threshold(
+                    y2_sub_train, l2_calibrated_oof
+                )
                 l2_base = build_binary_model(args.model_type, l2_params.copy())
             else:
                 l2_params, l2_study = _optimise_multiclass(
@@ -934,7 +1350,11 @@ def run_training(args: argparse.Namespace) -> None:
                 l2_threshold = None
                 l2_base = build_multiclass_model(args.model_type, l2_params.copy(), len(le_l2.classes_))
 
-            l2_model = _fit_calibrated_or_base(l2_base, X2_train_scaled, y2_sub_train, max_cv=5, method="isotonic")
+            l2_model = _fit_stratified_calibrated_ensemble(
+                l2_base, X2_train_scaled, y2_sub_train,
+                n_splits=min(5, args.cv_splits), random_state=args.random_state,
+                method="isotonic", sample_weight=sw_l2,
+            )
             l2_test_proba = l2_model.predict_proba(X2_test_scaled)
             if is_binary_subtype:
                 l2_test_pred = (l2_test_proba[:, 1] >= l2_threshold).astype(int)
@@ -1145,26 +1565,6 @@ def run_training(args: argparse.Namespace) -> None:
                 index_label="row_index",
             )
 
-            l2_gate_pred_df.query("error_type in ['FP', 'FN']").to_csv(
-                l2_dir / "errors_stage1_gate.csv",
-                index_label="row_index",
-            )
-
-            (
-                l2_gate_pred_df
-                .groupby("error_type")
-                .agg(
-                    n=("error_type", "size"),
-                    mean_proba=("proba", "mean"),
-                    median_proba=("proba", "median"),
-                    min_proba=("proba", "min"),
-                    max_proba=("proba", "max"),
-                    mean_abs_margin=("abs_margin_from_threshold", "mean"),
-                )
-                .reset_index()
-                .to_csv(l2_dir / "error_summary_stage1_gate.csv", index=False)
-            )
-
             stage2_pred_df = metadata_df.reindex(stage2_pred_df.index).join(stage2_pred_df)
 
             stage2_pred_df.to_csv(
@@ -1188,23 +1588,6 @@ def run_training(args: argparse.Namespace) -> None:
                 stage2_pred_df["abs_margin_from_threshold"] = stage2_pred_df["margin_from_threshold"].abs()
 
                 stage2_pred_df.to_csv(l2_dir / "predictions_stage2_subtype.csv", index_label="row_index")
-                stage2_pred_df.query("error_type in ['FP','FN']").to_csv(
-                    l2_dir / "errors_stage2_subtype.csv", index_label="row_index"
-                )
-                (
-                    stage2_pred_df
-                    .groupby("error_type")
-                    .agg(
-                        n=("error_type", "size"),
-                        mean_proba=("proba_positive", "mean"),
-                        median_proba=("proba_positive", "median"),
-                        min_proba=("proba_positive", "min"),
-                        max_proba=("proba_positive", "max"),
-                        mean_abs_margin=("abs_margin_from_threshold", "mean"),
-                    )
-                    .reset_index()
-                    .to_csv(l2_dir / "error_summary_stage2_subtype.csv", index=False)
-                )
 
             actual_stage2_mode = (
                 stage2_mode
@@ -1324,8 +1707,21 @@ def run_training(args: argparse.Namespace) -> None:
 
     # Direct Level-3 resistance model (no L3 binary gate):
     # train/predict resistance target only on positive hemoculture rows.
-    X3_train_base = X_train.loc[cef_valid_train_mask].copy()
-    X3_test_base = X_test.loc[cef_valid_test_mask].copy()
+    X3_train_view, X3_test_view = apply_feature_view(
+        X_train, X_test,
+        view_name=stage_feature_views["level3_resistance"],
+        view_config=feature_view_config,
+        stage_name="level3_resistance",
+        output_dir=processing_dir,
+    )
+    X3_train_base = X3_train_view.loc[cef_valid_train_mask].copy()
+    X3_test_base = X3_test_view.loc[cef_valid_test_mask].copy()
+    X3_train_base, X3_test_base = apply_stage_correlation_filter(
+        X3_train_base, X3_test_base,
+        max_corr=args.max_corr,
+        stage_name="level3_resistance",
+        output_dir=processing_dir,
+    )
     y3_train_raw = y_cef_train.loc[cef_valid_train_mask].astype(str)
     y3_test_raw = y_cef_test.loc[cef_valid_test_mask].astype(str)
 
@@ -1385,6 +1781,20 @@ def run_training(args: argparse.Namespace) -> None:
             model_type=args.model_type,
             study_name=_study_name("l3_direct_bin")
         )
+        l3_optuna_threshold = l3_threshold
+        l3_calibrated_oof = _generate_stratified_calibrated_oof_binary(
+            X=X3_train_scaled,
+            y=y3_train_enc,
+            best_params=l3_params,
+            model_type=args.model_type,
+            n_splits=args.cv_splits,
+            random_state=args.random_state,
+            sample_weight=sw_l3,
+            method="isotonic",
+        )
+        l3_threshold = _find_best_macro_f1_threshold(
+            y3_train_enc, l3_calibrated_oof
+        )
         l3_base = build_binary_model(args.model_type, l3_params.copy())
     else:
         l3_params, l3_study = _optimise_multiclass(
@@ -1400,7 +1810,11 @@ def run_training(args: argparse.Namespace) -> None:
         l3_threshold = None
         l3_base = build_multiclass_model(args.model_type, l3_params.copy(), len(le_cef.classes_))
 
-    l3_model = _fit_calibrated_or_base(l3_base, X3_train_scaled, y3_train_enc, max_cv=5, method="isotonic")
+    l3_model = _fit_stratified_calibrated_ensemble(
+        l3_base, X3_train_scaled, y3_train_enc,
+        n_splits=min(5, args.cv_splits), random_state=args.random_state,
+        method="isotonic", sample_weight=sw_l3,
+    )
     l3_test_proba = l3_model.predict_proba(X3_test_scaled)
     if is_l3_binary:
         l3_test_pred = (l3_test_proba[:, 1] >= l3_threshold).astype(int)
@@ -1512,6 +1926,38 @@ def run_training(args: argparse.Namespace) -> None:
     all_summaries["l2_rfecv_scores"] = l2_rfecv_history
     all_summaries["l3_rfecv_scores"] = l3_rfecv_history
 
+    # End-to-end cascade accounting from all Level-2 gate-evaluable test admissions.
+    gate_eval_index = y2_gate_test.index
+    true_gate_positive = y2_gate_test.reindex(gate_eval_index).eq(1)
+    predicted_gate_positive = l2_gate_test_pred.reindex(gate_eval_index).eq(1)
+    cef_available = y_cef_test.reindex(gate_eval_index).notna()
+    resistant_label = None
+    resistant_detected_overall = None
+    resistant_total_overall = None
+    if is_l3_binary and len(l3_target_names) == 2:
+        resistant_label = l3_target_names[1]
+        true_resistant = y_cef_test.reindex(gate_eval_index).astype(str).eq(resistant_label) & cef_available
+        predicted_resistant = pd.Series(False, index=gate_eval_index)
+        predicted_resistant.loc[l3_pred_df.index] = l3_pred_df["pred"].eq(1).values
+        resistant_detected_overall = int((true_resistant & predicted_resistant).sum())
+        resistant_total_overall = int(true_resistant.sum())
+
+    all_summaries["end_to_end_cascade"] = {
+        "gate_evaluable_admissions": int(len(gate_eval_index)),
+        "true_gate_positive": int(true_gate_positive.sum()),
+        "predicted_gate_positive": int(predicted_gate_positive.sum()),
+        "true_gate_positive_lost": int((true_gate_positive & ~predicted_gate_positive).sum()),
+        "gate_false_positives": int((~true_gate_positive & predicted_gate_positive).sum()),
+        "resistance_reference_available_after_gate": int((predicted_gate_positive & cef_available).sum()),
+        "resistant_label": resistant_label,
+        "resistant_cases_detected_end_to_end": resistant_detected_overall,
+        "resistant_cases_total_with_reference": resistant_total_overall,
+        "end_to_end_resistant_recall": (
+            resistant_detected_overall / resistant_total_overall
+            if resistant_total_overall not in (None, 0) else None
+        ),
+    }
+
     # ------------------------------------------------------------------
     # Aggregate summary
     # ------------------------------------------------------------------
@@ -1532,4 +1978,4 @@ def run_training(args: argparse.Namespace) -> None:
 
 # ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------   

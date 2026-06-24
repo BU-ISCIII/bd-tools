@@ -1453,7 +1453,7 @@ def preprocess_tbl_infecciones_previas(
 
     infection_broad_group_columns: list[str] = []
     for broad_group in sorted(set(config["MICROORGANISM_BROAD_GROUP_MAP"].values())):
-        target_column = f"Inf_{feature_name(broad_group)}"
+        target_column = f"infprev_{feature_name(broad_group)}"
         source_columns = [
             f"infprev_{feature_name(organism)}_binary"
             for organism, group in config["MICROORGANISM_BROAD_GROUP_MAP"].items()

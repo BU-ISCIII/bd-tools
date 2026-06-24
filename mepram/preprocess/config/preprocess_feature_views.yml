@@ -431,21 +431,3 @@ feature_views:
       symptoms: category
       previous_antibiotic_families: counts
       organism_history: species
-
-  - name: catboost
-    description: >
-      Explicit CatBoost-oriented view. This is equivalent to the recommended
-      raw modelling view: raw continuous variables, categorical symptom groups,
-      antibiotic counts, and species-level previous infection/colonization history.
-    include_patterns:
-      - '*'
-    groups:
-      temperature: raw
-      heart_rate: raw
-      respiratory_rate: raw
-      oxygen_saturation: raw
-      blood_pressure: raw
-      crp: raw
-      symptoms: category
-      previous_antibiotic_families: counts
-      organism_history: species

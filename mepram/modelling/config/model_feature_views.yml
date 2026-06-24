@@ -1,0 +1,7 @@
+# Assign one named feature view to each modelling stage.
+# View definitions themselves remain in the preprocessing feature-view YAML.
+feature_views:
+  level1_sepsis: all
+  level2_gate: binary
+  level2_etiology: all
+  level3_resistance: all
