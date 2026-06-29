@@ -3,6 +3,7 @@
 # direct IDs and free-text lists from the model-compatible filtered CSV by default.
 admission_id
 record_id
+episode_id
 fecha_ingreso
 fecha_alta
 fecha_mortalidad
@@ -27,3 +28,13 @@ control_foco
 dominant_microorganismo
 microorganismo_recoded
 fecha_hemocultivo
+dias_hemocultivo_mortalidad
+duracion_UCI
+dias_hemocultivo_ingreso
+dias_hemocultivo_alta
+days_hemoculture_from_admission
+episodio_uci_n_rows
+microorganismo_group
+dominant_microorganism
+blood_culture_episode_count
+resistance_mechanism_target

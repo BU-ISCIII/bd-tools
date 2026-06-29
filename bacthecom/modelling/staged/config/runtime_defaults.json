@@ -1,0 +1,17 @@
+{
+  "paths": {
+    "default_results_rel": "ANALYSIS/02-MODELLING/results_staged"
+  },
+  "targets": {
+    "target1": "mortalidad"
+  },
+  "training": {
+    "n_trials": 100,
+    "early_stopping_rounds": 50,
+    "algorithm": "catb",
+    "testing_split_size": 0.2,
+    "training_n_splits": 5,
+    "seed": 42,
+    "n_cpus": 1
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "catb": {
+    "loss_function": "Logloss",
+    "eval_metric": "PRAUC",
+    "logging_level": "Silent",
+    "allow_writing_files": false,
+    "iterations": 750,
+    "learning_rate": 0.03,
+    "depth": 6,
+    "l2_leaf_reg": 3.0,
+    "bootstrap_type": "Bayesian"
+  },
+  "lgbm": {
+    "objective": "binary",
+    "metric": "auc",
+    "n_estimators": 750,
+    "learning_rate": 0.03,
+    "num_leaves": 63,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_lambda": 1.0,
+    "verbose": -1
+  },
+  "xgb": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "n_estimators": 750,
+    "learning_rate": 0.03,
+    "max_depth": 6,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_lambda": 1.0,
+    "tree_method": "hist"
+  }
+}
