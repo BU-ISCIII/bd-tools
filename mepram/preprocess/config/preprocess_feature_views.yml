@@ -22,6 +22,7 @@ baseline_exclude_columns:
   - dag
   - center
   - ultima_fecha
+  - foco
 
   # Internal code without direct modelling value
   - causa_inmunosupresion

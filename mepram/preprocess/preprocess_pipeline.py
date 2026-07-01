@@ -2524,12 +2524,14 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
 ) -> PreprocessResult:
     source = tables["tbl_otros_cultivos_en_urgencias"].copy()
     df = source.copy()
+
     log = finalize_log(
         table_name="tbl_otros_cultivos_en_urgencias",
         input_df=source,
         output_df=source,
         merge_keys=["person_id", "fecha_ingreso_urgencias"],
     )
+
     merge_keys = ["person_id", "fecha_ingreso_urgencias"]
 
     organism_codes = (
@@ -2538,40 +2540,86 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         .astype(str)
         .replace("<NA>", "0")
     )
+
     df["otro_cult_microorganismo"] = (
-        organism_codes.map(maps["organism_codes_map"]).fillna("NEGATIVE")
+        organism_codes
+        .map(maps["organism_codes_map"])
+        .fillna("NEGATIVE")
     )
+
     add_change(
         log,
         "recoded_variables",
         source="microorganismo_otros_cult",
         target="otro_cult_microorganismo",
-        how="map other-emergency-culture microorganism SNOMED codes to grouped organism labels; missing and unmapped codes become NEGATIVE",
+        how=(
+            "map other-emergency-culture microorganism SNOMED codes "
+            "to grouped organism labels; missing and unmapped codes become NEGATIVE"
+        ),
     )
 
-    df["tipo_cultivo"] = df["tipo_cultivo"].fillna(0)
+    df["otros_cult_tipo_cultivo"] = (
+        pd.to_numeric(df["tipo_cultivo"], errors="coerce")
+        .map(config["OTHER_CULTURE_TYPES_MAP"])
+    )
+
     add_change(
         log,
-        "transformed_variables",
+        "recoded_variables",
         source="tipo_cultivo",
-        target="tipo_cultivo",
-        how="fill missing culture type with 0 before duplicate removal",
+        target="otros_cult_tipo_cultivo",
+        how=(
+            "decode tipo_cultivo from tbl_codes2names: "
+            "1 to urine, 2 to specimen"
+        ),
+        descriptions=describe_columns(
+            "otros_cult_tipo_cultivo",
+            "Other emergency culture type decoded as urine or specimen.",
+        ),
     )
 
-    columns_before_dropna = len(df)
-    df = df.dropna(subset=merge_keys + ["otro_cult_microorganismo"]).drop_duplicates().copy()
-    rows_removed = columns_before_dropna - len(df)
-    log.validation_checks.append(f"rows_removed_missing_key_or_organism_after_mapping:{rows_removed}")
+    rows_before_dropna = len(df)
+
+    df = (
+        df
+        .dropna(subset=merge_keys + ["otro_cult_microorganismo"])
+        .drop_duplicates()
+        .copy()
+    )
+
+    rows_removed = rows_before_dropna - len(df)
+
+    log.validation_checks.append(
+        f"rows_removed_missing_key_or_organism_after_mapping:{rows_removed}"
+    )
+
     if rows_removed:
         log.notes.append(
-            f"Removed {rows_removed} rows with missing merge keys or mapped other-culture organism after mapping."
+            f"Removed {rows_removed} rows with missing merge keys or mapped "
+            "other-culture organism after mapping."
         )
 
-    count_source = df[merge_keys + ["tipo_cultivo", "otro_cult_microorganismo"]].drop_duplicates()
-    pivot_source = count_source[merge_keys + ["otro_cult_microorganismo"]].copy()
+
+    count_source = (
+        df[
+            merge_keys
+            + [
+                "otros_cult_tipo_cultivo",
+                "otro_cult_microorganismo",
+            ]
+        ]
+        .drop_duplicates()
+    )
+
+    pivot_source = count_source[
+        merge_keys + ["otro_cult_microorganismo"]
+    ].copy()
+
     pivot_source["dummy"] = 1
+
     pivoted = (
-        pivot_source.pivot_table(
+        pivot_source
+        .pivot_table(
             index=merge_keys,
             columns="otro_cult_microorganismo",
             values="dummy",
@@ -2580,125 +2628,94 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
         )
         .reset_index()
     )
+
     organism_columns = [
-        column for column in pivoted.columns if column not in merge_keys
+        column
+        for column in pivoted.columns
+        if column not in merge_keys
     ]
+
     rename_columns = {
         column: f"otros_cult_{feature_name(column)}_count"
         for column in organism_columns
     }
+
     result_df = pivoted.rename(columns=rename_columns)
     other_culture_columns = list(rename_columns.values())
+
     add_change(
         log,
         "transformed_variables",
-        source=["tipo_cultivo", "otro_cult_microorganismo"],
+        source=[
+            "otros_cult_tipo_cultivo",
+            "otro_cult_microorganismo",
+        ],
         target=other_culture_columns,
         how=(
-            "drop duplicate patient/admission/culture-type/organism "
-            "rows before pivoting organism counts"
+            "drop duplicate patient/admission/culture-type/organism rows "
+            "before pivoting organism counts"
         ),
     )
+
     add_change(
         log,
         "created_variables",
         source="otro_cult_microorganismo",
         target=other_culture_columns,
-        how="pivot grouped other emergency culture organisms to count columns per patient/admission",
+        how=(
+            "pivot grouped other emergency culture organisms to count columns "
+            "per patient/admission"
+        ),
         descriptions=describe_columns(
             other_culture_columns,
-            "Organism count derived from culture records after microorganism grouping.",
+            "Count of other emergency culture records for this grouped organism.",
         ),
     )
 
-    df["bmr_etiologia_otros_numeric"] = pd.to_numeric(
-        df["bmr_etiologia_otros"], errors="coerce"
-    ).fillna(0)
-    other_culture_bmr_columns: list[str] = []
-    other_culture_phenotype_columns: list[str] = []
-    bmr_pivot = (
-        df.pivot_table(
-            index=merge_keys,
-            columns="otro_cult_microorganismo",
-            values="bmr_etiologia_otros_numeric",
-            aggfunc="max",
-            fill_value=0,
-        )
-        .reset_index()
-    )
-    bmr_organism_columns = [
-        column for column in bmr_pivot.columns if column not in merge_keys
-    ]
-    for organism in bmr_organism_columns:
-        target_column = f"otros_cult_bmr_{feature_name(organism)}_binary"
-        bmr_pivot[target_column] = np.where(bmr_pivot[organism] > 0, 1, 0)
-        other_culture_bmr_columns.append(target_column)
-        bmr_pivot = bmr_pivot.drop(columns=organism)
-    result_df = result_df.merge(bmr_pivot, on=merge_keys, how="left")
-    add_change(
-        log,
-        "created_variables",
-        source=["otro_cult_microorganismo", "bmr_etiologia_otros"],
-        target=other_culture_bmr_columns,
-        how="create organism-specific other-culture BMR binary flags using max bmr_etiologia_otros per patient/admission/organism",
-        descriptions=describe_columns(
-            other_culture_bmr_columns,
-            "Organism or resistance binary indicator derived from culture/infection records after microorganism grouping.",
-        ),
-    )
-
-    phenotype_by_organism = (
-        df.groupby(merge_keys + ["otro_cult_microorganismo"], dropna=False)[
-            "fenotipo_resistencia_otros"
-        ]
-        .apply(phenotype_values_tuple)
-        .reset_index(name="phenotype_tuple")
-    )
-    phenotype_pivot = (
-        phenotype_by_organism.pivot(
-            index=merge_keys,
-            columns="otro_cult_microorganismo",
-            values="phenotype_tuple",
-        )
-        .reset_index()
-    )
-    phenotype_organism_columns = [
-        column for column in phenotype_pivot.columns if column not in merge_keys
-    ]
-    phenotype_rename = {
-        organism: f"otros_cult_fenotipo_{feature_name(organism)}_tuple"
-        for organism in phenotype_organism_columns
+    culture_priority = {
+        "urine": 0,
+        "specimen": 1,
     }
-    phenotype_pivot = phenotype_pivot.rename(columns=phenotype_rename)
-    other_culture_phenotype_columns = list(phenotype_rename.values())
-    for column in other_culture_phenotype_columns:
-        phenotype_pivot[column] = phenotype_pivot[column].apply(
-            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
+
+    tipo_cultivo_summary = (
+        df.dropna(subset=["otros_cult_tipo_cultivo"])
+        .assign(
+            _culture_priority=lambda x: (
+                x["otros_cult_tipo_cultivo"].map(culture_priority)
+            )
         )
-    result_df = result_df.merge(phenotype_pivot, on=merge_keys, how="left")
+        .sort_values(merge_keys + ["_culture_priority"])
+        .groupby(merge_keys, dropna=False)
+        .first()
+        .reset_index()
+        [merge_keys + ["otros_cult_tipo_cultivo"]]
+    )
+
+    result_df = result_df.merge(
+        tipo_cultivo_summary,
+        on=merge_keys,
+        how="left",
+    )
+
     add_change(
         log,
         "created_variables",
-        source=["otro_cult_microorganismo", "fenotipo_resistencia_otros"],
-        target=other_culture_phenotype_columns,
-        how="create organism-specific other-culture phenotype tuples using non-zero deduplicated fenotipo_resistencia_otros codes",
+        source="tipo_cultivo",
+        target="otros_cult_tipo_cultivo",
+        how=(
+            "preserve decoded other-culture type at patient/admission level; "
+            "if multiple culture types exist, priority is urine before specimen"
+        ),
         descriptions=describe_columns(
-            other_culture_phenotype_columns,
-            "Tuple of resistance phenotype labels derived from culture/infection records.",
+            "otros_cult_tipo_cultivo",
+            "Other emergency culture type kept for inspection in the unfiltered CSV.",
         ),
     )
-    for column in other_culture_bmr_columns:
-        result_df[column] = result_df[column].fillna(0).astype(int)
-    for column in other_culture_phenotype_columns:
-        result_df[column] = result_df[column].apply(
-            lambda value: value if isinstance(value, tuple) else ("NEGATIVE",)
-        )
 
     add_change(
         log,
         "dropped_variables",
         source=[
-            "tipo_cultivo",
             "id_otros_cultivos",
             "fecha_otros_cultivos",
             "microorganismo_otros_cult",
@@ -2706,14 +2723,73 @@ def preprocess_tbl_otros_cultivos_en_urgencias(
             "fenotipo_resistencia_otros",
         ],
         target=other_culture_columns,
-        how="replace raw other-culture rows with grouped organism count columns",
+        how=(
+            "replace raw other-culture rows with grouped organism count columns"
+        ),
+    )
+
+    add_change(
+        log,
+        "dropped_variables",
+        source="tipo_cultivo",
+        target="otros_cult_tipo_cultivo",
+        how=(
+            "raw numeric tipo_cultivo replaced by decoded patient/admission-level "
+            "culture type"
+        ),
+    )
+
+
+    master_admissions = (
+        tables["tbl_paciente"][merge_keys]
+        .drop_duplicates()
+    )
+
+    result_df = master_admissions.merge(
+        result_df,
+        on=merge_keys,
+        how="left",
+    )
+
+    zero_columns = [
+        column
+        for column in result_df.columns
+        if column not in merge_keys + ["otros_cult_tipo_cultivo"]
+    ]
+
+    for column in zero_columns:
+        result_df[column] = result_df[column].fillna(0)
+
+    result_df["otros_cult_tipo_cultivo"] = (
+        result_df["otros_cult_tipo_cultivo"]
+        .fillna("NEGATIVE")
+    )
+
+    add_change(
+        log,
+        "transformed_variables",
+        source="missing patient/admission rows after other-culture aggregation",
+        target=zero_columns + ["otros_cult_tipo_cultivo"],
+        how=(
+            "complete output to all master patient/admissions; fill absent "
+            "other-culture count columns with 0 and missing culture type with NEGATIVE"
+        ),
     )
 
     log.output_rows = len(result_df)
     log.output_columns = result_df.columns.tolist()
-    result = PreprocessResult(df=result_df, log=log)
+
+    result = PreprocessResult(
+        df=result_df,
+        log=log,
+    )
+
     attach_run_metadata(result.log, config)
-    return validate_result(result, required_columns=["person_id", "fecha_ingreso_urgencias"])
+
+    return validate_result(
+        result,
+        required_columns=["person_id", "fecha_ingreso_urgencias"],
+    )
 
 
 def merge_with_validation(
