@@ -29,6 +29,7 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import Normalize
 import matplotlib as mpl
+import shap
 import numpy as np
 import pandas as pd
 from sklearn.metrics import (
@@ -53,6 +54,18 @@ def save_figure(fig: plt.Figure, path: Path) -> None:
 
 def safe_str(value: Any) -> str:
     return str(value).replace(" ", "_").replace("/", "_").replace("\\", "_")
+
+
+def display_labels_for_context(labels: list[str], context_name: str) -> list[str]:
+    """Return plot-facing class labels for special targets.
+
+    The level-2 gate/hemo plots are binary culture-status plots, so make the
+    axis labels clinically readable while leaving the underlying metrics intact.
+    """
+    context = context_name.lower()
+    if ("gate" in context or "level2_hemo" in context) and len(labels) == 2:
+        return ["cultivo -", "cultivo +"]
+    return labels
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -242,7 +255,23 @@ def plot_level_metrics_from_summary(summary_path: Path, out_dir: Path) -> None:
                 labels = ["0", "1"]
 
             cm = np.array(summary["confusion_matrix"], dtype=int)
-            plot_confusion(cm, labels, out_dir / f"{safe_str(name)}_summary_confusion_matrix.png")
+
+            # Avoid duplicated confusion matrices for level2_hemo: prediction
+            # files are plotted before summaries, so keep that version when it
+            # already exists and skip the summary duplicate.
+            summary_cm_path = out_dir / f"{safe_str(name)}_summary_confusion_matrix.png"
+            existing_prediction_cm = [
+                p for p in out_dir.glob("*_confusion_matrix.png")
+                if not p.name.endswith("_summary_confusion_matrix.png")
+            ]
+            if level_name == "level2_hemo" and existing_prediction_cm:
+                continue
+
+            plot_confusion(
+                cm,
+                display_labels_for_context(labels, name),
+                summary_cm_path,
+            )
 
 
 def summarize_processing(
@@ -360,9 +389,50 @@ def plot_correlation_dropped_features(path: Path, out_dir: Path) -> None:
 
 def plot_iqr_outliers(path: Path, out_dir: Path) -> None:
     df = pd.read_csv(path)
-    df = df.sort_values("n_outliers", ascending=False).head(30)
+
+    if df.empty:
+        print(f"Skipping IQR outlier plot for {path}: empty input file")
+        return
+
+    count_candidates = [
+        "n_outliers",
+        "n_outlier",
+        "outlier_count",
+        "outliers",
+        "n_iqr_outliers",
+        "iqr_outliers",
+        "count",
+    ]
+    count_col = next((col for col in count_candidates if col in df.columns), None)
+
+    if count_col is None:
+        numeric_cols = [
+            col for col in df.columns
+            if pd.api.types.is_numeric_dtype(df[col])
+        ]
+        count_col = numeric_cols[0] if numeric_cols else None
+
+    if count_col is None:
+        print(
+            f"Skipping IQR outlier plot for {path}: no outlier-count column found. "
+            f"Available columns: {list(df.columns)}"
+        )
+        return
+
+    feature_col = "feature" if "feature" in df.columns else None
+    if feature_col is None:
+        feature_candidates = [col for col in df.columns if col != count_col]
+        feature_col = feature_candidates[0] if feature_candidates else None
+
+    if feature_col is None:
+        df = df.copy()
+        df["feature"] = df.index.astype(str)
+        feature_col = "feature"
+
+    df = df.sort_values(count_col, ascending=False).head(30)
+
     fig, ax = plt.subplots(figsize=(10, max(5, 0.25 * len(df))))
-    ax.barh(df["feature"], df["n_outliers"], color="#76c893")
+    ax.barh(df[feature_col].astype(str), df[count_col], color="#76c893")
     ax.invert_yaxis()
     ax.set_xlabel("Outlier count")
     ax.set_title(f"IQR outliers: {path.name}")
@@ -570,6 +640,10 @@ def _plot_type_from_name(path: Path) -> str:
         return "correlation_dropped_features"
     if "iqr_outliers" in name:
         return "iqr_outliers"
+    if "shap" in name and name.endswith("_bar"):
+        return "shap_importance_bar"
+    if "shap" in name and name.endswith("_beeswarm"):
+        return "shap_beeswarm"
     return "plot"
 
 
@@ -661,7 +735,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
     cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
     plot_confusion(
         cmatrix,
-        labels,
+        display_labels_for_context(labels, f"{prediction_path.parent.name}_{base_name}"),
         out_dir / f"{safe_str(base_name)}_confusion_matrix.png",
     )
 
@@ -701,6 +775,405 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
         for k, v in df[true_col].value_counts(dropna=False).items()
     }
     return metrics
+
+
+
+def _first_npz_array(npz: np.lib.npyio.NpzFile, preferred_keys: tuple[str, ...] = ("shap_values", "values", "arr_0")) -> np.ndarray:
+    """Return the first useful ndarray from an NPZ SHAP artifact."""
+    for key in preferred_keys:
+        if key in npz.files:
+            return np.asarray(npz[key])
+    for key in npz.files:
+        array = np.asarray(npz[key])
+        if array.size:
+            return array
+    raise ValueError("NPZ file does not contain any non-empty arrays")
+
+
+
+def _infer_shap_feature_count(shap_values: np.ndarray, n_rows: int) -> int | None:
+    """Infer the feature dimension in a SHAP array for a known row count."""
+    values = np.asarray(shap_values)
+
+    if values.ndim == 2:
+        if values.shape[0] == n_rows:
+            return int(values.shape[1])
+        if values.shape[1] == n_rows:
+            return int(values.shape[0])
+        return None
+
+    if values.ndim == 3:
+        # Common layouts:
+        #   samples x features x classes
+        #   classes x samples x features
+        #   samples x classes x features
+        if values.shape[0] == n_rows:
+            return int(max(values.shape[1], values.shape[2])) if 1 in values.shape[1:] else int(values.shape[1])
+        if values.shape[1] == n_rows:
+            return int(values.shape[2])
+        return None
+
+    return None
+
+
+def _read_importance_feature_names(importance_path: Path) -> list[str]:
+    """Read feature names from a SHAP importance CSV when possible."""
+    if not importance_path.exists():
+        return []
+
+    try:
+        importance_df = pd.read_csv(importance_path)
+    except Exception as exc:
+        print(f"Could not read SHAP importance feature names from {importance_path}: {exc}")
+        return []
+
+    feature_col_candidates = [
+        "feature",
+        "Feature",
+        "feature_name",
+        "feature_names",
+        "variable",
+        "Variable",
+        "name",
+    ]
+    feature_col = next((col for col in feature_col_candidates if col in importance_df.columns), None)
+    if feature_col is None:
+        return []
+
+    return [str(x) for x in importance_df[feature_col].dropna().tolist()]
+
+
+def align_shap_X_to_values(
+    x_df: pd.DataFrame,
+    shap_values: np.ndarray,
+    importance_path: Path,
+    source_name: str,
+) -> pd.DataFrame:
+    """Align SHAP X columns to the SHAP value matrix.
+
+    Some training exports write an identifier, target, or prediction column into
+    *_shap_X.csv. In that case X has one or more extra columns compared with the
+    SHAP value matrix. This function keeps the feature columns that correspond
+    to the SHAP values so plotting can continue safely.
+    """
+    expected_n_features = _infer_shap_feature_count(shap_values, n_rows=x_df.shape[0])
+    if expected_n_features is None:
+        return x_df
+
+    if x_df.shape[1] == expected_n_features:
+        return x_df
+
+    original_columns = [str(c) for c in x_df.columns]
+
+    # Prefer the importance CSV because it is the most explicit feature list.
+    importance_features = _read_importance_feature_names(importance_path)
+    if importance_features:
+        unique_importance_features = []
+        seen = set()
+        for feature in importance_features:
+            if feature in original_columns and feature not in seen:
+                unique_importance_features.append(feature)
+                seen.add(feature)
+
+        if len(unique_importance_features) == expected_n_features:
+            print(
+                f"Aligned {source_name}: selected {expected_n_features} X columns "
+                "using the SHAP importance feature list"
+            )
+            return x_df.loc[:, unique_importance_features]
+
+    # Drop common non-feature columns if doing so gives the right shape.
+    non_feature_names = {
+        "id", "ID", "index", "Index", "sample", "sample_id", "row", "row_id",
+        "true", "true_label", "target", "y", "label", "pred", "pred_label",
+        "proba", "proba_positive", "prediction", "probability",
+    }
+    kept_columns = [col for col in x_df.columns if str(col) not in non_feature_names]
+    if len(kept_columns) == expected_n_features:
+        dropped = [str(col) for col in x_df.columns if col not in kept_columns]
+        print(
+            f"Aligned {source_name}: dropped non-feature column(s) {dropped} "
+            f"from SHAP X"
+        )
+        return x_df.loc[:, kept_columns]
+
+    # Very common case: first column is an exported CSV index or identifier.
+    if x_df.shape[1] == expected_n_features + 1:
+        dropped = str(x_df.columns[0])
+        print(
+            f"Aligned {source_name}: SHAP values have {expected_n_features} features "
+            f"but X has {x_df.shape[1]} columns; dropping first X column '{dropped}'"
+        )
+        return x_df.iloc[:, 1:].copy()
+
+    # Last-resort deterministic fallback: keep the first expected feature columns.
+    if x_df.shape[1] > expected_n_features:
+        print(
+            f"Aligned {source_name}: SHAP values have {expected_n_features} features "
+            f"but X has {x_df.shape[1]} columns; keeping the first {expected_n_features} columns. "
+            "Check *_shap_X.csv if these are not the model feature columns."
+        )
+        return x_df.iloc[:, :expected_n_features].copy()
+
+    return x_df
+
+
+def _normalise_shap_values(shap_values: np.ndarray, n_rows: int, n_features: int) -> dict[str, np.ndarray]:
+    """Convert SHAP arrays into one or more 2D sample x feature matrices.
+
+    Handles common layouts:
+      - binary/regression: (n_samples, n_features)
+      - multiclass: (n_samples, n_features, n_classes)
+      - multiclass: (n_classes, n_samples, n_features)
+    """
+    values = np.asarray(shap_values)
+
+    if values.ndim == 2:
+        if values.shape == (n_rows, n_features):
+            return {"overall": values}
+        if values.shape == (n_features, n_rows):
+            return {"overall": values.T}
+        raise ValueError(f"Unsupported 2D SHAP shape {values.shape}; expected ({n_rows}, {n_features})")
+
+    if values.ndim == 3:
+        matrices: dict[str, np.ndarray] = {}
+        if values.shape[0] == n_rows and values.shape[1] == n_features:
+            # sample x feature x class
+            for class_index in range(values.shape[2]):
+                matrices[f"class_{class_index}"] = values[:, :, class_index]
+            matrices["overall"] = np.mean(np.abs(values), axis=2)
+            return matrices
+
+        if values.shape[1] == n_rows and values.shape[2] == n_features:
+            # class x sample x feature
+            for class_index in range(values.shape[0]):
+                matrices[f"class_{class_index}"] = values[class_index, :, :]
+            matrices["overall"] = np.mean(np.abs(values), axis=0)
+            return matrices
+
+        if values.shape[0] == n_rows and values.shape[2] == n_features:
+            # sample x class x feature
+            for class_index in range(values.shape[1]):
+                matrices[f"class_{class_index}"] = values[:, class_index, :]
+            matrices["overall"] = np.mean(np.abs(values), axis=1)
+            return matrices
+
+    raise ValueError(f"Unsupported SHAP array shape {values.shape}")
+
+
+def _top_shap_features(shap_matrix: np.ndarray, feature_names: list[str], max_display: int = 20) -> list[str]:
+    mean_abs = np.nanmean(np.abs(shap_matrix), axis=0)
+    order = np.argsort(mean_abs)[::-1][:max_display]
+    return [feature_names[i] for i in order]
+
+
+def plot_shap_importance_bar(
+    shap_matrix: np.ndarray,
+    feature_names: list[str],
+    output_path: Path,
+    title: str,
+    max_display: int = 20,
+) -> dict[str, Any]:
+    mean_abs = np.nanmean(np.abs(shap_matrix), axis=0)
+    order = np.argsort(mean_abs)[::-1][:max_display]
+    ordered_features = [feature_names[i] for i in order][::-1]
+    ordered_values = mean_abs[order][::-1]
+
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.30 * len(ordered_features))))
+    ax.barh(ordered_features, ordered_values)
+    ax.set_xlabel("Mean |SHAP value|")
+    ax.set_title(title)
+    ax.grid(axis="x", alpha=0.25)
+    plt.tight_layout()
+    save_figure(fig, output_path)
+
+    return {
+        "rows": int(shap_matrix.shape[0]),
+        "features": int(shap_matrix.shape[1]),
+        "top_features": [str(feature_names[i]) for i in order[:10]],
+        "top_mean_abs_shap": [float(mean_abs[i]) for i in order[:10]],
+    }
+
+
+def plot_shap_beeswarm(
+    shap_matrix: np.ndarray,
+    x_df: pd.DataFrame,
+    output_path: Path,
+    title: str,
+    max_display: int = 20,
+    max_points_per_feature: int = 800,
+) -> dict[str, Any]:
+    feature_names = [str(c) for c in x_df.columns]
+    if shap_matrix.shape != x_df.shape:
+        raise ValueError(f"SHAP/X shape mismatch: SHAP {shap_matrix.shape}, X {x_df.shape}")
+
+    mean_abs = np.nanmean(np.abs(shap_matrix), axis=0)
+    order = np.argsort(mean_abs)[::-1][:max_display]
+    ordered_indices = list(order)[::-1]
+    ordered_features = [feature_names[i] for i in ordered_indices]
+
+    rng = np.random.default_rng(42)
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.34 * len(ordered_features))))
+
+    for y_pos, feature_index in enumerate(ordered_indices):
+        shap_vals = np.asarray(shap_matrix[:, feature_index], dtype=float)
+        feature_vals = pd.to_numeric(x_df.iloc[:, feature_index], errors="coerce").to_numpy(dtype=float)
+        valid = np.isfinite(shap_vals)
+        shap_vals = shap_vals[valid]
+        feature_vals = feature_vals[valid]
+
+        if shap_vals.size > max_points_per_feature:
+            sample_idx = rng.choice(shap_vals.size, size=max_points_per_feature, replace=False)
+            shap_vals = shap_vals[sample_idx]
+            feature_vals = feature_vals[sample_idx]
+
+        jitter = rng.normal(loc=0.0, scale=0.08, size=shap_vals.size)
+        colors = feature_vals.copy()
+        if not np.isfinite(colors).any():
+            colors = np.zeros_like(shap_vals)
+
+        ax.scatter(
+            shap_vals,
+            np.full(shap_vals.shape, y_pos) + jitter,
+            c=colors,
+            cmap=shap.plots.colors.red_blue,
+            s=10,
+            alpha=0.65,
+            linewidths=0,
+        )
+
+    ax.axvline(0, color="gray", linewidth=1)
+    ax.set_yticks(range(len(ordered_features)))
+    ax.set_yticklabels(ordered_features)
+    ax.set_xlabel("SHAP value")
+    ax.set_title(title)
+    ax.grid(axis="x", alpha=0.25)
+
+    sm = cm.ScalarMappable(cmap=shap.plots.colors.red_blue)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax)
+    cbar.set_label("Feature value")
+
+    plt.tight_layout()
+    save_figure(fig, output_path)
+
+    return {
+        "rows": int(shap_matrix.shape[0]),
+        "features": int(shap_matrix.shape[1]),
+        "top_features": [str(feature_names[i]) for i in order[:10]],
+        "top_mean_abs_shap": [float(mean_abs[i]) for i in order[:10]],
+    }
+
+
+def plot_shap_artifact(shap_values_path: Path, plots_dir: Path) -> dict[str, Any]:
+    """Create SHAP importance and beeswarm plots for one SHAP artifact prefix."""
+    prefix = shap_values_path.name.replace("_shap_values.npz", "")
+    shap_dir = shap_values_path.parent
+    x_path = shap_dir / f"{prefix}_shap_X.csv"
+    importance_path = shap_dir / f"{prefix}_shap_importance.csv"
+    metadata_path = shap_dir / f"{prefix}_shap_metadata.json"
+
+    if not x_path.exists():
+        print(f"Skipping SHAP plots for {shap_values_path}: missing {x_path.name}")
+        return {"skipped": "missing shap_X.csv"}
+
+    x_df = pd.read_csv(x_path)
+    if x_df.empty:
+        print(f"Skipping SHAP plots for {shap_values_path}: empty X matrix")
+        return {"skipped": "empty shap_X.csv"}
+
+    with np.load(shap_values_path, allow_pickle=False) as npz:
+        raw_values = _first_npz_array(npz)
+
+    x_df = align_shap_X_to_values(
+        x_df=x_df,
+        shap_values=raw_values,
+        importance_path=importance_path,
+        source_name=str(shap_values_path),
+    )
+
+    matrices = _normalise_shap_values(
+        raw_values,
+        n_rows=x_df.shape[0],
+        n_features=x_df.shape[1],
+    )
+
+    metadata: dict[str, Any] = {}
+    if metadata_path.exists():
+        try:
+            metadata = load_json(metadata_path)
+        except Exception as exc:
+            print(f"Could not read SHAP metadata {metadata_path}: {exc}")
+
+    output_dir = plots_dir / shap_values_path.parent.parent.name / "shap"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    feature_names = [str(c) for c in x_df.columns]
+    metrics: dict[str, Any] = {
+        "prefix": prefix,
+        "rows": int(x_df.shape[0]),
+        "features": int(x_df.shape[1]),
+        "npz_shape": list(raw_values.shape),
+        "metadata": metadata,
+    }
+
+    # Overall plots are the most useful and avoid too many outputs. For multiclass,
+    # "overall" is mean absolute SHAP across classes.
+    matrix = matrices.get("overall", next(iter(matrices.values())))
+    title_prefix = prefix.replace("_", " ")
+
+    bar_metrics = plot_shap_importance_bar(
+        matrix,
+        feature_names,
+        output_dir / f"{safe_str(prefix)}_shap_bar.png",
+        title=f"SHAP importance: {title_prefix}",
+    )
+    beeswarm_metrics = plot_shap_beeswarm(
+        matrix,
+        x_df,
+        output_dir / f"{safe_str(prefix)}_shap_beeswarm.png",
+        title=f"SHAP values: {title_prefix}",
+    )
+
+    metrics.update({
+        "bar": bar_metrics,
+        "beeswarm": beeswarm_metrics,
+    })
+
+    # Keep a compact CSV-derived reference in the manifest when available.
+    if importance_path.exists():
+        try:
+            importance_df = pd.read_csv(importance_path)
+            metrics["importance_file_rows"] = int(len(importance_df))
+            metrics["importance_file_columns"] = [str(c) for c in importance_df.columns]
+        except Exception as exc:
+            print(f"Could not read SHAP importance {importance_path}: {exc}")
+
+    return metrics
+
+
+def plot_shap_outputs(run_dir: Path, plots_dir: Path, manifest: list[dict[str, Any]]) -> None:
+    shap_value_files = sorted(run_dir.glob("level*/shap/*_shap_values.npz"))
+    if not shap_value_files:
+        return
+
+    print(f"Plotting SHAP artifacts from {run_dir}")
+    for shap_values_path in shap_value_files:
+        level_plot_dir = plots_dir / shap_values_path.parent.parent.name / "shap"
+        before = _png_snapshot(level_plot_dir)
+        try:
+            metrics = plot_shap_artifact(shap_values_path, plots_dir)
+        except Exception as exc:
+            print(f"Skipping SHAP plots for {shap_values_path}: {exc}")
+            metrics = {"skipped": str(exc)}
+        _register_new_plots(
+            manifest,
+            before,
+            level_plot_dir,
+            plots_dir,
+            shap_values_path.resolve(),
+            metrics,
+        )
 
 def collect_prediction_files(run_dir: Path) -> list[Path]:
     return sorted(run_dir.rglob("predictions*.csv"))
@@ -746,6 +1219,12 @@ def run_plotting(run_dir: Path, plots_dir: Path) -> Path:
     summarize_processing(
         run_dir,
         plots_dir / "processing",
+        plots_dir,
+        manifest,
+    )
+
+    plot_shap_outputs(
+        run_dir,
         plots_dir,
         manifest,
     )

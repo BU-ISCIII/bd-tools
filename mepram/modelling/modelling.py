@@ -46,6 +46,7 @@ from .models import _find_threshold_for_recall, build_binary_model, build_multic
 from .optuna_utils import optimise_binary_model, optimise_multiclass_model
 from .feature_filters import shap_rfecv, remove_correlated_features, fit_iqr_bounds, apply_iqr_bounds_to_nan
 from .feature_selection import cap_features, _build_ranking_model
+from .shap_utils import save_shap_artifacts
 
 def _matching_columns(columns: Sequence[str], patterns: Sequence[str]) -> set[str]:
     return {
@@ -197,7 +198,7 @@ def apply_stage_correlation_filter(
     kept_cols = remove_correlated_features(
         X_train,
         threshold=max_corr,
-        output_csv_path=output_dir / f"{stage_name}_correlation_dropped_features.csv",
+        output_csv_path=output_dir / f"{stage_name}_correlation_dropped_features.csv"
     )
     removed = len(X_train.columns) - len(kept_cols)
     print(
@@ -331,6 +332,7 @@ def _map_hemo_subtype_to_gnb_binary(target_series: pd.Series) -> pd.Series:
 def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print("SELECTED ARGS:", args)
+    skip_shap_values = getattr(args, "skip_shap_values", False)
 
     feature_view_config = feature_view_definitions()
     stage_feature_views = modelling_feature_views()
@@ -785,6 +787,19 @@ def run_training(args: argparse.Namespace) -> None:
             "confusion_matrix": l1_confusion,
         }
 
+        # save SHAP values for level 1 sepsis model if not skipped
+        if not skip_shap_values:
+            save_shap_artifacts(
+                model=l1_model,
+                X_train=X_l1_train,
+                X_test=X_l1_test,
+                feature_names=l1_features,
+                output_dir=l1_dir / "shap",
+                stage_name="level1_sepsis",
+                class_names=[str(c) for c in le_sep.classes_],
+                random_state=args.random_state,
+            )
+
     # ==================================================================
     # LEVEL 2 – two-stage binary hemo model
     # ==================================================================
@@ -1073,6 +1088,19 @@ def run_training(args: argparse.Namespace) -> None:
             }
 
             all_summaries["l2_rfecv_scores"] = l2_rfecv_history
+            
+            # Save SHAP values for direct Level 2 etiology model
+            if not skip_shap_values:
+                save_shap_artifacts(
+                    model=l2_model,
+                    X_train=X2_train_scaled,
+                    X_test=X2_test_scaled,
+                    feature_names=l2_features,
+                    output_dir=l2_dir / "shap",
+                    stage_name="level2_direct_etiology",
+                    class_names=l2_target_names,
+                    random_state=args.random_state,
+                )
 
         else:
             # Stage 1: binary gate using separate gate target (e.g. infected_yes_no)
@@ -1146,6 +1174,19 @@ def run_training(args: argparse.Namespace) -> None:
                 n_splits=min(5, args.cv_splits), random_state=args.random_state,
                 method="isotonic", sample_weight=sw_l2_gate,
             )
+
+            # Save SHAP values for Level 2 Stage-1 gate model
+            if not skip_shap_values:
+                save_shap_artifacts(
+                    model=l2_gate_model,
+                    X_train=X2_gate_train_scaled,
+                    X_test=X2_gate_test_scaled,
+                    feature_names=l2_gate_features,
+                    output_dir=l2_dir / "shap",
+                    stage_name="level2_gate",
+                    class_names=["gate_negative", "gate_positive"],
+                    random_state=args.random_state,
+                )
             l2_gate_train_proba = pd.Series(
                 _generate_stratified_calibrated_oof_binary(
                     X=X2_gate_train_scaled,
@@ -1355,6 +1396,19 @@ def run_training(args: argparse.Namespace) -> None:
                 n_splits=min(5, args.cv_splits), random_state=args.random_state,
                 method="isotonic", sample_weight=sw_l2,
             )
+
+            # Save SHAP values for Level 2 Stage-2 subtype model
+            if not skip_shap_values:
+                save_shap_artifacts(
+                    model=l2_model,
+                    X_train=X2_train_scaled,
+                    X_test=X2_test_scaled,
+                    feature_names=l2_features,
+                    output_dir=l2_dir / "shap",
+                    stage_name="level2_subtype",
+                    class_names=l2_target_names,
+                    random_state=args.random_state,
+                )
             l2_test_proba = l2_model.predict_proba(X2_test_scaled)
             if is_binary_subtype:
                 l2_test_pred = (l2_test_proba[:, 1] >= l2_threshold).astype(int)
@@ -1815,6 +1869,19 @@ def run_training(args: argparse.Namespace) -> None:
         n_splits=min(5, args.cv_splits), random_state=args.random_state,
         method="isotonic", sample_weight=sw_l3,
     )
+
+    # Save SHAP values for Level 3 cefalosporin model
+    if not skip_shap_values:
+        save_shap_artifacts(
+            model=l3_model,
+            X_train=X3_train_scaled,
+            X_test=X3_test_scaled,
+            feature_names=l3_features,
+            output_dir=l3_dir / "shap",
+            stage_name="level3_cefalosporina",
+            class_names=l3_target_names,
+            random_state=args.random_state,
+        )
     l3_test_proba = l3_model.predict_proba(X3_test_scaled)
     if is_l3_binary:
         l3_test_pred = (l3_test_proba[:, 1] >= l3_threshold).astype(int)

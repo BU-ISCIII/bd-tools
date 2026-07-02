@@ -3,11 +3,6 @@
 from .base import *
 from .models import build_binary_model, build_multiclass_model, _fit_model
 from .feature_selection import _build_ranking_model, _shap_importance
-from shared.feature_filters import (
-    apply_iqr_bounds_to_nan,
-    fit_iqr_bounds,
-    remove_correlated_features,
-)
 
 def shap_rfecv(
         model: BaseEstimator,
@@ -214,9 +209,281 @@ def shap_rfecv(
     
     return best_features, history
 
+def remove_correlated_features(
+    X: pd.DataFrame,
+    threshold: float = 0.99,
+    method: str = "spearman",
+    output_csv_path: Optional[Path] = None,
+) -> List[str]:
+    """
+    Remove highly correlated numeric features.
+
+    Strategy:
+    - Non-numeric columns are ignored for correlation but kept in the returned feature list.
+    - For each pair with abs(correlation) > threshold, drop the feature with lower variance.
+    - Save an audit CSV if output_csv_path is provided.
+    - Return list of kept columns.
+    """
+
+    if X.empty or X.shape[1] <= 1:
+        kept_cols = X.columns.tolist()
+
+        if output_csv_path is not None:
+            output_csv_path = Path(output_csv_path)
+            output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(columns=[
+                "kept_feature",
+                "dropped_feature",
+                "abs_correlation",
+                "variance_kept",
+                "variance_dropped",
+                "threshold",
+                "method",
+            ]).to_csv(output_csv_path, index=False)
+
+        return kept_cols
+
+    numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+
+    non_numeric_cols = [
+        col for col in X.columns
+        if col not in numeric_cols
+    ]
+
+    if non_numeric_cols:
+        print(
+            f"  Removing {len(non_numeric_cols)} non-numeric columns before correlation: "
+            f"{non_numeric_cols[:5]}..."
+        )
+
+    if len(numeric_cols) <= 1:
+        kept_cols = X.columns.tolist()
+
+        if output_csv_path is not None:
+            output_csv_path = Path(output_csv_path)
+            output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(columns=[
+                "kept_feature",
+                "dropped_feature",
+                "abs_correlation",
+                "variance_kept",
+                "variance_dropped",
+                "threshold",
+                "method",
+            ]).to_csv(output_csv_path, index=False)
+
+        return kept_cols
+
+    X_num = X[numeric_cols].copy()
+
+    corr = X_num.corr(method=method).abs()
+
+    upper = corr.where(
+        np.triu(np.ones(corr.shape), k=1).astype(bool)
+    )
+
+    variances = X_num.var(axis=0, skipna=True)
+
+    dropped = set()
+    audit_records = []
+
+    for col in upper.columns:
+        if col in dropped:
+            continue
+
+        high_corr_features = upper.index[
+            upper[col] > threshold
+        ].tolist()
+
+        for other_col in high_corr_features:
+            if other_col in dropped or col in dropped:
+                continue
+
+            corr_value = float(upper.loc[other_col, col])
+
+            var_col = float(variances[col])
+            var_other = float(variances[other_col])
+
+            if var_col >= var_other:
+                kept_feature = col
+                dropped_feature = other_col
+                variance_kept = var_col
+                variance_dropped = var_other
+            else:
+                kept_feature = other_col
+                dropped_feature = col
+                variance_kept = var_other
+                variance_dropped = var_col
+
+            dropped.add(dropped_feature)
+
+            audit_records.append({
+                "kept_feature": kept_feature,
+                "dropped_feature": dropped_feature,
+                "abs_correlation": corr_value,
+                "variance_kept": variance_kept,
+                "variance_dropped": variance_dropped,
+                "threshold": threshold,
+                "method": method,
+            })
+
+            print(
+                f"    {kept_feature} -> {dropped_feature} | "
+                f"abs_{method}={corr_value:.4f} | "
+                f"var_kept={variance_kept:.5g} | "
+                f"var_dropped={variance_dropped:.5g}"
+            )
+
+    kept_cols = [
+        col for col in X.columns
+        if col not in dropped
+    ]
+
+    if output_csv_path is not None:
+        output_csv_path = Path(output_csv_path)
+        output_csv_path.parent.mkdir(parents=True, exist_ok=True)
+
+        audit_df = pd.DataFrame(
+            audit_records,
+            columns=[
+                "kept_feature",
+                "dropped_feature",
+                "abs_correlation",
+                "variance_kept",
+                "variance_dropped",
+                "threshold",
+                "method",
+            ],
+        )
+
+        audit_df.to_csv(output_csv_path, index=False)
+
+        print(
+            f"  Saved correlation-drop audit to {output_csv_path}"
+        )
+
+    print(
+        f"  Dropped {len(dropped)} redundant features → {len(kept_cols)} remain."
+    )
+
+    return kept_cols
+
+def fit_iqr_bounds(
+    X: pd.DataFrame,
+    columns: Optional[List[str]] = None,
+    iqr_multiplier: float = 3.0,
+) -> Dict[str, Dict[str, float]]:
+    """
+    Fit IQR outlier bounds on training data.
+
+    Bounds are computed as:
+        lower = Q1 - iqr_multiplier * IQR
+        upper = Q3 + iqr_multiplier * IQR
+
+    Returns a dictionary that can be reused on validation/test data.
+    """
+
+    if columns is None:
+        columns = X.select_dtypes(include=[np.number]).columns.tolist()
+
+    bounds = {}
+
+    for column in columns:
+        if column not in X.columns:
+            continue
+
+        values = pd.to_numeric(
+            X[column],
+            errors="coerce",
+        ).dropna()
+
+        if values.empty:
+            continue
+
+        q1 = values.quantile(0.25)
+        q3 = values.quantile(0.75)
+        iqr = q3 - q1
+
+        lower = q1 - iqr_multiplier * iqr
+        upper = q3 + iqr_multiplier * iqr
+
+        bounds[column] = {
+            "q1": float(q1),
+            "q3": float(q3),
+            "iqr": float(iqr),
+            "lower": float(lower),
+            "upper": float(upper),
+        }
+
+    return bounds
+
+
+def apply_iqr_bounds_to_nan(
+    X: pd.DataFrame,
+    bounds: Dict[str, Dict[str, float]],
+    output_csv_path: Optional[Path] = None,
+) -> pd.DataFrame:
+    """
+    Apply precomputed IQR bounds to a dataframe.
+
+    Values below lower or above upper are replaced with NaN.
+
+    If output_csv_path is provided, save a CSV audit table with:
+    - row_index
+    - feature
+    - value
+    - lower
+    - upper
+    """
+
+    X_clean = X.copy()
+    outlier_records = []
+
+    for column, info in bounds.items():
+        if column not in X_clean.columns:
+            continue
+
+        lower = info["lower"]
+        upper = info["upper"]
+
+        values = pd.to_numeric(
+            X_clean[column],
+            errors="coerce",
+        )
+
+        outlier_mask = (
+            (values < lower)
+            | (values > upper)
+        )
+
+        if outlier_mask.any():
+            outlier_rows = X_clean.loc[outlier_mask, [column]].copy()
+
+            for row_index, value in outlier_rows[column].items():
+                outlier_records.append({
+                    "row_index": row_index,
+                    "feature": column,
+                    "value": value,
+                    "lower": lower,
+                    "upper": upper,
+                })
+
+            X_clean.loc[outlier_mask, column] = np.nan
+
+    if output_csv_path is not None:
+        output_csv_path = Path(output_csv_path)
+        output_csv_path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        pd.DataFrame(outlier_records).to_csv(
+            output_csv_path,
+            index=False,
+        )
+
+    return X_clean
+
 # ---------------------------------------------------------------------------
 # Main training orchestration
 # ---------------------------------------------------------------------------
-
-
-# `remove_correlated_features` is imported from `shared.feature_filters`.
