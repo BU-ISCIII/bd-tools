@@ -22,13 +22,13 @@ baseline_exclude_columns:
   - dag
   - center
   - ultima_fecha
-  - foco
 
   # Internal code without direct modelling value
   - causa_inmunosupresion
 
   # Derived severity / downstream clinical state variables
-  # qSOFA is derived from respiratory rate, blood pressure and mental status.
+  # sofa and qSOFA is derived from respiratory rate, blood pressure and mental status.
+  - sofa
   - qsofa
 
   # Hypotension is a thresholded duplicate of blood pressure.
@@ -68,6 +68,9 @@ baseline_exclude_patterns:
   # Very expanded sparse clinical subtype variables.
   - 'tipo_cancer_*'
   - 'tipo_hepatopatia_*'
+
+  # Missing indicator flags
+  - '*_missing'
 
 # ---------------------------------------------------------------------
 # Feature groups

@@ -56,15 +56,6 @@ def impute_missing_values(loaded_df: pd.DataFrame, exclude_cols: set) -> pd.Data
     # benefit from multivariate KNN — route all non-binary numeric to KNN.
     knn_cols = [c for c in numeric_cols if c not in binary_cols]
 
-    # Add missing-indicator flags for numerics with >10 % missingness.
-    # These flags remain even after imputation so the model can learn from them.
-    high_missing = [
-        c for c in numeric_cols
-        if df_copy[c].isna().mean() > _MISSING_INDICATOR_THRESHOLD
-    ]
-    for col in high_missing:
-        df_copy[f"{col}_missing"] = df_copy[col].isna().astype(int)
-
     if binary_cols:
         imp = SimpleImputer(strategy="most_frequent")
         df_copy[binary_cols] = imp.fit_transform(df_copy[binary_cols]).astype(int)
@@ -126,12 +117,6 @@ def preprocess_train_test_features(
     cat_cols = X_train.select_dtypes(include=["object", "category"]).columns.tolist()
     binary_cols = [c for c in numeric_cols if set(X_train[c].dropna().unique()) <= {0, 1}]
     knn_cols = [c for c in numeric_cols if c not in binary_cols]
-
-    # Missingness flags based on TRAIN only
-    high_missing = [c for c in numeric_cols if X_train[c].isna().mean() > _MISSING_INDICATOR_THRESHOLD]
-    for col in high_missing:
-        X_train[f"{col}_missing"] = X_train[col].isna().astype(int)
-        X_test[f"{col}_missing"] = X_test[col].isna().astype(int)
 
     if impute_missing:
         if binary_cols:
