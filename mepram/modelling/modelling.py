@@ -809,7 +809,7 @@ def run_training(args: argparse.Namespace) -> None:
         print("=" * 60)
         print("  Skipped Level 2 by flag.")
         l2_rfecv_history = {}
-        all_summaries["level2_hemo"] = {"skipped": True}
+        all_summaries["level2_etiology"] = {"skipped": True}
     else:
         print("\n" + "=" * 60)
         print(
@@ -817,7 +817,7 @@ def run_training(args: argparse.Namespace) -> None:
             + ("direct hemo etiology" if args.skip_l2_gate else "two-stage hemo (positive gate -> subtype)")
         )
         print("=" * 60)
-        l2_dir = output_dir / "level2_hemo"
+        l2_dir = output_dir / "level2_etiology"
         l2_dir.mkdir(exist_ok=True)
 
         hemo_valid_train = y_hemo_train.notna()
@@ -1072,7 +1072,7 @@ def run_training(args: argparse.Namespace) -> None:
                     index_label="row_index",
                 )
 
-            all_summaries["level2_hemo"] = {
+            all_summaries["level2_etiology"] = {
                 "mode": "direct_binary" if is_binary_subtype else "direct_multiclass",
                 "target": args.hemo_target,
                 "classes": l2_target_names,
@@ -1648,7 +1648,7 @@ def run_training(args: argparse.Namespace) -> None:
                 if stage2_mode != "auto"
                 else ("binary" if is_binary_subtype else "multiclass")
             )
-            all_summaries["level2_hemo"] = {
+            all_summaries["level2_etiology"] = {
                 "mode": "two_stage_binary" if is_binary_subtype else "two_stage_multiclass_positive_gate",
                 "stage2_mode": actual_stage2_mode,
                 "stage1_gate": {
@@ -2034,7 +2034,7 @@ def run_training(args: argparse.Namespace) -> None:
 
     final_report = {
         "level1_sepsis": all_summaries.get("level1_sepsis"),
-        "level2_hemo": all_summaries.get("level2_hemo"),
+        "level2_etiology": all_summaries.get("level2_etiology"),
         "level3_cefalosporina": all_summaries.get("level3_cefalosporina"),
     }
     (output_dir / "final_report.json").write_text(json.dumps(final_report, indent=2))

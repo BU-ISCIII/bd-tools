@@ -4,7 +4,7 @@
 This template is intended for analysis runs like:
   01-training_5756602/
     level1_sepsis/
-    level2_hemo/
+    level2_etiology/
     level3_cefalosporina/
     processing/
 
@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 
 try:
     import yaml
@@ -57,15 +58,26 @@ def safe_str(value: Any) -> str:
 
 
 def display_labels_for_context(labels: list[str], context_name: str) -> list[str]:
-    """Return plot-facing class labels for special targets.
+    """Return plot-facing class labels without changing metric labels.
 
-    The level-2 gate/hemo plots are binary culture-status plots, so make the
-    axis labels clinically readable while leaving the underlying metrics intact.
+    Binary level-1 sepsis plots use clinically readable labels instead of 0/1.
+    Binary level-2 gate/hemo/etiology plots use culture-status labels.
     """
     context = context_name.lower()
-    if ("gate" in context or "level2_hemo" in context) and len(labels) == 2:
+    labels_as_str = [str(label) for label in labels]
+
+    if len(labels) == 2 and ("level1" in context or "sepsis" in context):
+        if set(labels_as_str) == {"0", "1"}:
+            mapping = {"0": "no sepsis", "1": "sepsis"}
+            return [mapping[label] for label in labels_as_str]
+
+    if len(labels) == 2 and any(token in context for token in ("gate", "level2_etiology", "etiology", "etiologia")):
+        if set(labels_as_str) == {"0", "1"}:
+            mapping = {"0": "cultivo -", "1": "cultivo +"}
+            return [mapping[label] for label in labels_as_str]
         return ["cultivo -", "cultivo +"]
-    return labels
+
+    return labels_as_str
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -106,6 +118,18 @@ def plot_binary_curves(
     ax.set_title("Precision-Recall Curve")
     ax.legend(loc="lower left")
     save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.plot(fpr, tpr, label=f"ROC (AUC={auc(fpr, tpr):.3f})", linewidth=2)
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1, label="No-skill line")
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("False Positive Rate")
+    ax.set_ylabel("True Positive Rate")
+    ax.set_title("ROC Curve")
+    ax.legend(loc="lower right")
+    ax.grid(alpha=0.25)
+    save_figure(fig, output_prefix.with_name(output_prefix.name + "_roc_curve.png"))
 
     fig, ax = plt.subplots(figsize=(7, 6))
 
@@ -217,6 +241,31 @@ def plot_multiclass_curves(
     ax.legend(loc="lower left", fontsize="small")
     save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
 
+    # Combined one-vs-rest ROC + PR overlay for multiclass targets (e.g. level-2 etiology).
+    fig, ax = plt.subplots(figsize=(9, 7))
+    plotted = False
+    for index, class_name in enumerate(labels):
+        if np.unique(y_true_bin[:, index]).size < 2:
+            continue
+        fpr, tpr, _ = roc_curve(y_true_bin[:, index], proba_df.iloc[:, index])
+        precision, recall, _ = precision_recall_curve(y_true_bin[:, index], proba_df.iloc[:, index])
+        ax.plot(fpr, tpr, linewidth=2, label=f"ROC {class_name} (AUC={auc(fpr, tpr):.3f})")
+        ax.plot(recall, precision, linestyle="--", linewidth=2, label=f"PR {class_name} (AUC={auc(recall, precision):.3f})")
+        plotted = True
+
+    if plotted:
+        ax.plot([0, 1], [0, 1], linestyle=":", color="gray", linewidth=1, label="ROC no-skill line")
+        ax.set_xlim(0, 1)
+        ax.set_ylim(0, 1.02)
+        ax.set_xlabel("False Positive Rate / Recall")
+        ax.set_ylabel("True Positive Rate / Precision")
+        ax.set_title("Multiclass ROC and Precision-Recall Curves")
+        ax.legend(loc="best", fontsize="small", ncol=2)
+        ax.grid(alpha=0.25)
+        save_figure(fig, output_prefix.with_name(output_prefix.name + "_roc_pr_overlay.png"))
+    else:
+        plt.close(fig)
+
 
 def plot_level_metrics_from_summary(summary_path: Path, out_dir: Path) -> None:
     data = load_json(summary_path)
@@ -256,15 +305,15 @@ def plot_level_metrics_from_summary(summary_path: Path, out_dir: Path) -> None:
 
             cm = np.array(summary["confusion_matrix"], dtype=int)
 
-            # Avoid duplicated confusion matrices for level2_hemo: prediction
-            # files are plotted before summaries, so keep that version when it
-            # already exists and skip the summary duplicate.
+            # Prediction files are plotted before summaries. If a prediction-based
+            # confusion matrix already exists for this level, keep that one and
+            # skip the summary-derived duplicate. This applies to level 1, level 2, etc.
             summary_cm_path = out_dir / f"{safe_str(name)}_summary_confusion_matrix.png"
             existing_prediction_cm = [
                 p for p in out_dir.glob("*_confusion_matrix.png")
                 if not p.name.endswith("_summary_confusion_matrix.png")
             ]
-            if level_name == "level2_hemo" and existing_prediction_cm:
+            if existing_prediction_cm:
                 continue
 
             plot_confusion(
@@ -727,7 +776,27 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
         return {"rows": 0, "skipped": "empty input file"}
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    base_name = prediction_path.stem
+
+    # Prefix every prediction-derived plot with the prediction subfolder/level.
+    # Examples:
+    #   level1_sepsis_predictions_confusion_matrix.png
+    #   level2_etiology_predictions_stage1_gate_roc_curve.png
+    #   level3_cefalosporina_predictions_pr_curve.png
+    level_name = safe_str(prediction_path.parent.name)
+
+    # Remove the leading "predictions" token from plot filenames while
+    # preserving any informative suffix, e.g.:
+    #   predictions.csv -> level1_sepsis
+    #   predictions_stage1_gate.csv -> level2_etiology_stage1_gate
+    #   predictions_stage2_subtype.csv -> level2_etiology_stage2_subtype
+    prediction_stem = re.sub(
+        r"^predictions(?:[_-]+)?",
+        "",
+        prediction_path.stem,
+        flags=re.IGNORECASE,
+    )
+    base_name = safe_str(prediction_stem).strip("_")
+    plot_prefix = level_name if not base_name else f"{level_name}_{base_name}"
 
     y_true, y_pred, labels = infer_labels(df)
     y_score, class_names = infer_scores(df, labels)
@@ -736,14 +805,14 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
     plot_confusion(
         cmatrix,
         display_labels_for_context(labels, f"{prediction_path.parent.name}_{base_name}"),
-        out_dir / f"{safe_str(base_name)}_confusion_matrix.png",
+        out_dir / f"{plot_prefix}_confusion_matrix.png",
     )
 
     if y_score.size and y_score.ndim == 1:
         plot_binary_curves(
             y_true=y_true,
             y_score=y_score,
-            output_prefix=out_dir / Path(safe_str(base_name)),
+            output_prefix=out_dir / Path(plot_prefix),
             positive_label=labels[-1],
         )
     elif y_score.size and y_score.ndim == 2:
@@ -751,7 +820,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
             plot_binary_curves(
                 y_true=y_true,
                 y_score=y_score[:, 0],
-                output_prefix=out_dir / Path(safe_str(base_name)),
+                output_prefix=out_dir / Path(plot_prefix),
                 positive_label=labels[-1],
             )
         else:
@@ -759,7 +828,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
                 y_true=y_true,
                 proba_df=pd.DataFrame(y_score, columns=class_names),
                 class_labels=class_names.tolist(),
-                output_prefix=out_dir / Path(safe_str(base_name)),
+                output_prefix=out_dir / Path(plot_prefix),
             )
 
     metrics = compute_prediction_metrics(

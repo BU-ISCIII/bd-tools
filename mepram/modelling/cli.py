@@ -22,7 +22,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
             "Three-level modelling pipeline: "
-            "Level 1 sepsis → Level 2 hemoculture gate/subtype → Level 3 resistance"
+            "Level 1 sepsis → Level 2 etiology gate/subtype → Level 3 resistance"
         )
     )
 
@@ -60,7 +60,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     target_group.add_argument(
-        "--hemo-target",
+        "--etiology-target",
         type=str,
         default=targets["hemo_target"],
         help=(
@@ -70,27 +70,20 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     target_group.add_argument(
-        "--hemo-gate-target",
+        "--etiology-gate-target",
         type=str,
         default=targets["hemo_gate_target"],
         help=(
-            "Column name for the Level 2 binary gate target. "
+            "Column name for the Level 2 binary etiology gate target. "
             "This decides which rows move to Stage 2."
         ),
     )
 
     target_group.add_argument(
-        "--hemo-gate-negative-label",
+        "--etiology-gate-negative-label",
         type=str,
         default=targets["hemo_gate_negative_label"],
-        help="Label treated as gate-negative for the Level 2 binary gate.",
-    )
-
-    target_group.add_argument(
-        "--bmr-target",
-        type=str,
-        default=targets["bmr_target"],
-        help="Column name for the BMR target.",
+        help="Label treated as gate-negative for the Level 2 binary etiology gate.",
     )
 
     target_group.add_argument(
@@ -110,14 +103,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     # Level 2 configuration
     # ------------------------------------------------------------------
-    l2_group = parser.add_argument_group("Level 2 hemoculture configuration")
+    l2_group = parser.add_argument_group("Level 2 etiology gate configuration")
 
     l2_group.add_argument(
         "--skip-l2-gate",
         action="store_true",
         default=bool(tcfg.get("skip_l2_gate", False)),
         help=(
-            "Skip the Level 2 hemoculture positive/negative gate and directly "
+            "Skip the Level 2 etiology positive/negative gate and directly "
             "predict etiology classes, including NEGATIVE, in a single model."
         ),
     )
@@ -143,7 +136,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     l2_group.add_argument(
-        "--hemo-stage2-mode",
+        "--etiology-stage2-mode",
         type=str,
         choices=["auto", "binary", "multiclass"],
         default=tcfg.get("hemo_stage2_mode", "auto"),
@@ -296,7 +289,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--skip-level2",
         action="store_true",
         default=False,
-        help="Skip Level 2 hemoculture etiology training/prediction.",
+        help="Skip Level 2 etiology training/prediction.",
     )
 
     skip_group.add_argument(
