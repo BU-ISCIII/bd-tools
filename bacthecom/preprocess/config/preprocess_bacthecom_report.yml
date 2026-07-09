@@ -4,45 +4,85 @@ report_description: >
   Preprocessing report for the BACTHECOM mortality prediction workflow.
   The pipeline creates one row per admission and selected first hemoculture,
   identified by record_id, fecha_ingreso, and fecha_hemocultivo.
-  The modelling workflow is staged: first predicting mortality, then predicting
-  mortality timing, such as 14-day or 30-day mortality, depending on model
-  performance.
+  The modelling workflow is staged: first predicting any mortality over the
+  full selected cohort, then predicting early mortality using either 14-day
+  or 30-day mortality. For the staged BACTHECOM model, the preferred early
+  mortality targets are referenced to the selected hemoculture date.
+
+exclude_plot_stages:
+  - _pipeline_run
 
 domain_by_stage:
   _pipeline_run: Pipeline
   paciente: Patient
   episodio_ingreso: Admission
   comorbilidad: Comorbidity
-  factores_riesgo_infeccion_bmr: BMR Risk Factors
-  signos_sintomas: Symptoms And Severity
+  factores_riesgo_infeccion_bmr: BMR risk factors
+  signos_sintomas: Symptoms and severity
   laboratorio: Laboratory
   episodio_uci: ICU
-  episodio_infeccion: Infection Episodes
-  merged_dataset: Merged Dataset
-  filtered_dataset: Model Dataset
+  episodio_infeccion: Infection episodes
+  merged_dataset: Merged dataset
+  filtered_dataset: Model dataset
 
 predictive_targets:
-  - model: "Stage 1 - Mortality"
-    target_column: mortalidad
-    notes: "Binary mortality prediction over the full cohort."
+  - model: "Stage 1 - Any mortality"
+    target_column: mortalidad_any
+    notes: >
+      Binary mortality prediction over the full selected hemoculture cohort.
+      Derived from fecha_mortalidad and/or the raw SQLite mortalidad column.
     class_labels:
       0: "Alive"
       1: "Dead"
       "0": "Alive"
       "1": "Dead"
 
-  - model: "Candidate Stage 2 - Mortality 14 days"
+  - model: "Candidate Stage 2 - Early mortality, 14 days from hemoculture"
+    target_column: mortalidad_14_dias_desde_hemocultivo
+    notes: >
+      Preferred 14-day early mortality target when prediction time is the
+      selected hemoculture date. In staged modelling, evaluate this among
+      mortality-positive patients.
+    subset:
+      column: mortalidad_any
+      include_values: [1, "1"]
+    class_labels:
+      0: "Death after 14 days or not early"
+      1: "Death within 14 days"
+      "0": "Death after 14 days or not early"
+      "1": "Death within 14 days"
+
+  - model: "Candidate Stage 2 - Early mortality, 30 days from hemoculture"
+    target_column: mortalidad_30_dias_desde_hemocultivo
+    notes: >
+      Preferred 30-day early mortality target when prediction time is the
+      selected hemoculture date. In staged modelling, evaluate this among
+      mortality-positive patients.
+    subset:
+      column: mortalidad_any
+      include_values: [1, "1"]
+    class_labels:
+      0: "Death after 30 days or not early"
+      1: "Death within 30 days"
+      "0": "Death after 30 days or not early"
+      "1": "Death within 30 days"
+
+  - model: "Sensitivity target - 14 days from admission"
     target_column: mortalidad_14_dias
-    notes: "Candidate staged mortality timing target."
+    notes: >
+      Admission-referenced 14-day mortality. Use mainly for sensitivity
+      analyses or admission-time prediction comparisons.
     class_labels:
       0: "No 14-day mortality"
       1: "14-day mortality"
       "0": "No 14-day mortality"
       "1": "14-day mortality"
 
-  - model: "Candidate Stage 2 - Mortality 30 days"
+  - model: "Sensitivity target - 30 days from admission"
     target_column: mortalidad_30_dias
-    notes: "Candidate staged mortality timing target."
+    notes: >
+      Admission-referenced 30-day mortality. Use mainly for sensitivity
+      analyses or admission-time prediction comparisons.
     class_labels:
       0: "No 30-day mortality"
       1: "30-day mortality"
@@ -51,35 +91,77 @@ predictive_targets:
 
 target_evolution:
   - domain: "Mortality"
-    target_version: "Raw mortality"
+    target_version: "Raw SQLite mortality"
     target_columns: [mortalidad]
     count_mode: single
-    notes: "Raw binary mortality target."
+    notes: "Raw mortality flag from the SQLite source, when retained."
 
   - domain: "Mortality"
-    target_version: "14-day mortality"
+    target_version: "Stage 1 any mortality"
+    target_columns: [mortalidad_any]
+    count_mode: single
+    notes: "Main Stage-1 target for the full selected hemoculture cohort."
+
+  - domain: "Early mortality"
+    target_version: "14 days from hemoculture"
+    target_columns: [mortalidad_14_dias_desde_hemocultivo]
+    count_mode: single
+    notes: "Preferred 14-day Stage-2 target because the selected hemoculture is the modelling index date."
+
+  - domain: "Early mortality"
+    target_version: "30 days from hemoculture"
+    target_columns: [mortalidad_30_dias_desde_hemocultivo]
+    count_mode: single
+    notes: "Preferred 30-day Stage-2 target because the selected hemoculture is the modelling index date."
+
+  - domain: "Sensitivity"
+    target_version: "14 days from admission"
     target_columns: [mortalidad_14_dias]
     count_mode: single
-    notes: "Mortality within 14 days from admission or hemoculture depending on preprocessing definition."
+    notes: "Admission-referenced 14-day mortality target."
 
-  - domain: "Mortality"
-    target_version: "30-day mortality"
+  - domain: "Sensitivity"
+    target_version: "30 days from admission"
     target_columns: [mortalidad_30_dias]
     count_mode: single
-    notes: "Mortality within 30 days from admission or hemoculture depending on preprocessing definition."
+    notes: "Admission-referenced 30-day mortality target."
 
 prediction_detail_sections:
-  - section: "Stage 1 - Mortality"
-    description: "Binary mortality prediction target over the full cohort."
-    target_column: mortalidad
+  - section: "Stage 1 - Any mortality"
+    description: "Binary mortality prediction target over the full selected hemoculture cohort."
+    target_column: mortalidad_any
     class_labels:
       0: "Alive"
       1: "Dead"
       "0": "Alive"
       "1": "Dead"
 
-  - section: "Candidate Stage 2 - Mortality 14 days"
-    description: "Candidate staged target for early mortality."
+  - section: "Stage 2 - Early mortality 14 days from hemoculture"
+    description: >
+      Candidate staged target for early mortality among mortality-positive
+      patients. This is the preferred 14-day target when prediction time is
+      the selected hemoculture date.
+    target_column: mortalidad_14_dias_desde_hemocultivo
+    class_labels:
+      0: "Not within 14 days"
+      1: "Within 14 days"
+      "0": "Not within 14 days"
+      "1": "Within 14 days"
+
+  - section: "Stage 2 - Early mortality 30 days from hemoculture"
+    description: >
+      Candidate staged target for early mortality among mortality-positive
+      patients. This is the preferred 30-day target when prediction time is
+      the selected hemoculture date.
+    target_column: mortalidad_30_dias_desde_hemocultivo
+    class_labels:
+      0: "Not within 30 days"
+      1: "Within 30 days"
+      "0": "Not within 30 days"
+      "1": "Within 30 days"
+
+  - section: "Sensitivity - 14 days from admission"
+    description: "Admission-referenced 14-day mortality target for sensitivity analysis."
     target_column: mortalidad_14_dias
     class_labels:
       0: "No 14-day mortality"
@@ -87,8 +169,8 @@ prediction_detail_sections:
       "0": "No 14-day mortality"
       "1": "14-day mortality"
 
-  - section: "Candidate Stage 2 - Mortality 30 days"
-    description: "Candidate staged target for 30-day mortality."
+  - section: "Sensitivity - 30 days from admission"
+    description: "Admission-referenced 30-day mortality target for sensitivity analysis."
     target_column: mortalidad_30_dias
     class_labels:
       0: "No 30-day mortality"

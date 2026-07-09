@@ -6,6 +6,11 @@ import json
 import sqlite3
 import subprocess
 import unicodedata
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover
+    yaml = None
 from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -19,7 +24,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT_DIR.parent
 DEFAULT_DB_PATH = PROJECT_ROOT / "playground" / "db_bacthecom.db"
 DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "playground" / "preprocess_bacthecom_mortality.csv"
-DEFAULT_DROP_COLUMNS_PATH = ROOT_DIR / "config" / "preprocess_columns_to_drop.txt"
+DEFAULT_CONFIG_PATH = ROOT_DIR / "config" / "preprocess_bacthecom.yml"
 # Final ML row definition: one row per patient admission and the selected blood-culture date.
 # The selected blood culture is the earliest fecha_hemocultivo on/after admission,
 # allowing a 2-day pre-admission buffer.
@@ -288,7 +293,7 @@ def git_output(args: list[str]) -> str:
 def run_metadata(run_label: str) -> dict[str, str]:
     tracked = [
         "bacthecom/preprocess_pipeline.py",
-        "bacthecom/config/preprocess_columns_to_drop.txt",
+        "bacthecom/config/preprocess_bacthecom.yml",
         "bacthecom/config/preprocess_report.yml",
     ]
     dirty = git_output(["status", "--porcelain", "--", *tracked])
@@ -304,6 +309,309 @@ def run_metadata(run_label: str) -> dict[str, str]:
         "preprocess_code_dirty": "yes" if dirty else "no",
         "run_label": run_label,
     }
+
+
+
+def deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = deep_update(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+
+def default_config() -> dict[str, Any]:
+    return {
+        "metadata": {
+            "config_name": "bacthecom_mortality_episode_level",
+            "config_version": "0.2.0",
+        },
+        "episode_definition": {
+            "base_admission_keys": BASE_ADMISSION_KEYS,
+            "episode_keys": ADMISSION_KEYS,
+            "hemoculture_pre_admission_buffer_days": HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+            "prediction_time": "fecha_hemocultivo",
+            "date_granularity": "day",
+        },
+        "targets": {
+            "mortality_any": {
+                "column": "mortalidad_any",
+                "date_column": "fecha_mortalidad",
+            },
+            "early_mortality": {
+                "windows_days": [14, 30],
+                # Benchmark early mortality is computed from admission date.
+                # Hemoculture-based early mortality columns are intentionally not created.
+                "reference_dates": ["fecha_ingreso"],
+                "default_reference_date": "fecha_ingreso",
+                "columns": {
+                    "admission_14": "mortalidad_14_dias",
+                    "admission_30": "mortalidad_30_dias",
+                },
+            },
+            "required_final_targets": [
+                "mortalidad_any",
+                "mortalidad_14_dias",
+                "mortalidad_30_dias",
+            ],
+        },
+        "features": {
+            "laboratory": {
+                "transform": "log1p_selected",
+                "log1p_columns": [],
+                "skip_log1p_columns": [],
+                "negative_values_to_nan": True,
+                "default_for_unlisted": "raw",
+            },
+            "vital_signs": {
+                "oxygen_saturation_scale": "auto",
+                "oxygen_saturation_threshold_fraction": 0.90,
+                "oxygen_saturation_threshold_percent": 90,
+            },
+            "text_columns": {
+                "drop_list_like_text_features": True,
+            },
+        },
+        "filtering": {
+            "always_keep_columns": [
+                "record_id",
+                "fecha_ingreso",
+                "fecha_hemocultivo",
+                "mortalidad_any",
+                "mortalidad_14_dias",
+                "mortalidad_30_dias",
+                "mortalidad_sqlite",
+                "mortalidad_30_dias_sqlite",
+                "mortalidad_30_dias_sqlite_mismatch",
+            ],
+            "drop_columns": [
+                "index",
+                "episode_key",
+                "fecha_nacimiento",
+                "age_at_admission",
+                "age_at_hemoculture",
+                "tipo_cancer",
+                "tipo_hepatopatia",
+                "causa_inmunosupresion",
+                "clasificacion_quemadura",
+                "duracion_sintoma",
+                "laboratorio_n_rows",
+                "fecha_alta",
+                "fecha_mortalidad",
+                "mortalidad_14_dias_desde_hemocultivo",
+                "mortalidad_30_dias_desde_hemocultivo",
+                "dias_hemocultivo_mortalidad",
+                "duracion_UCI",
+                "dias_hemocultivo_ingresoUCI",
+                "dias_hemocultivo_salidaUCI",
+                "fecha_ingreso_UCI",
+                "uci_por_el_episodio",
+                "episode_id",
+                "id_cultivo",
+                "especimen",
+                "organism_list",
+                "resistance_mechanism_labels",
+                "microorganismo_recoded",
+                "dominant_microorganism",
+                "fenotipo_resistencia",
+                "resistance_mechanism_target",
+                "resistente_cefalosporina",
+            ],
+            "drop_patterns": [
+                "*_mean",
+                "*_max",
+                "treatment_*",
+                "antibiogram_*",
+                "infection_*_count",
+            ],
+            "forbidden_predictor_columns": [
+                "fecha_alta",
+                "fecha_mortalidad",
+                "mortalidad_14_dias_desde_hemocultivo",
+                "mortalidad_30_dias_desde_hemocultivo",
+                "dias_hemocultivo_mortalidad",
+                "duracion_UCI",
+                "dias_hemocultivo_ingresoUCI",
+                "dias_hemocultivo_salidaUCI",
+                "fecha_ingreso_UCI",
+                "uci_por_el_episodio",
+                "mortalidad",
+            ],
+        },
+        "validation": {
+            "require_unique_episode_keys": True,
+            "require_unique_admission_keys": True,
+            "validate_binary_targets": True,
+            "log_target_prevalence": True,
+        },
+    }
+
+
+def load_config(config_path: Path) -> dict[str, Any]:
+    config = default_config()
+    if config_path.exists():
+        if yaml is None:
+            raise ImportError(
+                "PyYAML is required to read preprocess_bacthecom.yml. "
+                "Install it with: pip install pyyaml"
+            )
+        with config_path.open("r", encoding="utf-8") as handle:
+            user_config = yaml.safe_load(handle) or {}
+        if not isinstance(user_config, dict):
+            raise ValueError(f"Config file must contain a YAML mapping: {config_path}")
+        config = deep_update(config, user_config)
+    return config
+
+
+def config_drop_columns(config: dict[str, Any], columns: list[str]) -> list[str]:
+    filtering = config.get("filtering", {})
+    always_keep = set(filtering.get("always_keep_columns", []))
+    selected: list[str] = []
+
+    for entry in filtering.get("drop_columns", []):
+        if entry in columns and entry not in always_keep:
+            selected.append(entry)
+
+    for pattern in filtering.get("drop_patterns", []):
+        matches = sorted(fnmatch.filter(columns, pattern))
+        selected.extend(column for column in matches if column not in always_keep)
+
+    if filtering.get("drop_list_like_text_features", True):
+        # Backward-compatible alias if someone places this under filtering.
+        pass
+
+    return list(dict.fromkeys(selected))
+
+
+def validate_binary_target_column(df: pd.DataFrame, target: str) -> None:
+    if target not in df.columns:
+        raise ValueError(f"Required target column is missing from final dataset: {target}")
+    values = set(pd.Series(df[target]).dropna().unique().tolist())
+    if not values.issubset({0, 1, 0.0, 1.0, True, False}):
+        raise ValueError(f"Target {target} is not binary. Observed values: {sorted(map(str, values))}")
+
+
+def append_target_validation_checks(log: TableLog, df: pd.DataFrame, config: dict[str, Any]) -> None:
+    required_targets = config.get("targets", {}).get("required_final_targets", [])
+    validate_binary = config.get("validation", {}).get("validate_binary_targets", True)
+    log_prevalence = config.get("validation", {}).get("log_target_prevalence", True)
+
+    for target in required_targets:
+        if validate_binary:
+            validate_binary_target_column(df, target)
+        if target in df.columns and log_prevalence:
+            positive = pd.to_numeric(df[target], errors="coerce")
+            log.validation_checks.append(f"{target}_n:{int(positive.notna().sum())}")
+            log.validation_checks.append(f"{target}_positive:{int(positive.fillna(0).sum())}")
+            log.validation_checks.append(f"{target}_positive_rate:{positive.mean():.6f}")
+
+
+def create_mortality_targets(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
+    result = df.copy()
+
+    if "fecha_mortalidad" in result.columns:
+        result["fecha_mortalidad"] = pd.to_datetime(result["fecha_mortalidad"], errors="coerce")
+
+    # Preserve SQLite-provided targets before recomputing benchmark targets.
+    # These audit columns allow direct checks without letting the SQLite values
+    # drive the final labels.
+    if "mortalidad" in result.columns and "mortalidad_sqlite" not in result.columns:
+        result["mortalidad_sqlite"] = pd.to_numeric(result["mortalidad"], errors="coerce")
+    if "mortalidad_30_dias" in result.columns and "mortalidad_30_dias_sqlite" not in result.columns:
+        result["mortalidad_30_dias_sqlite"] = pd.to_numeric(result["mortalidad_30_dias"], errors="coerce")
+
+    # Prefer the explicit death date for benchmark target creation. If the death
+    # date is unavailable, fall back only for all-cause mortality from SQLite.
+    if "fecha_mortalidad" in result.columns:
+        result["mortalidad_any"] = result["fecha_mortalidad"].notna().astype(int)
+        if "mortalidad_sqlite" in result.columns:
+            result["mortalidad_any"] = np.where(
+                result["mortalidad_any"].eq(1) | result["mortalidad_sqlite"].eq(1),
+                1,
+                0,
+            )
+    elif "mortalidad_sqlite" in result.columns:
+        result["mortalidad_any"] = result["mortalidad_sqlite"].fillna(0).astype(int)
+    else:
+        return result
+
+    target_config = config.get("targets", {}).get("early_mortality", {})
+    windows = target_config.get("windows_days", [14, 30])
+    columns = target_config.get("columns", {})
+
+    def in_window(reference_col: str, days: int) -> pd.Series:
+        if reference_col not in result.columns or "fecha_mortalidad" not in result.columns:
+            return pd.Series(0, index=result.index, dtype=int)
+        reference = pd.to_datetime(result[reference_col], errors="coerce")
+        delta = result["fecha_mortalidad"] - reference
+        return (
+            result["fecha_mortalidad"].notna()
+            & reference.notna()
+            & (delta >= pd.Timedelta(days=0))
+            & (delta <= pd.Timedelta(days=int(days)))
+        ).astype(int)
+
+    # Benchmark labels: recompute from admission date and overwrite any same-name
+    # SQLite columns. Do not create *_desde_hemocultivo columns.
+    if 14 in windows:
+        result[columns.get("admission_14", "mortalidad_14_dias")] = in_window("fecha_ingreso", 14)
+    if 30 in windows:
+        result[columns.get("admission_30", "mortalidad_30_dias")] = in_window("fecha_ingreso", 30)
+
+    if {"mortalidad_30_dias", "mortalidad_30_dias_sqlite"}.issubset(result.columns):
+        computed = pd.to_numeric(result["mortalidad_30_dias"], errors="coerce")
+        sqlite = pd.to_numeric(result["mortalidad_30_dias_sqlite"], errors="coerce")
+        result["mortalidad_30_dias_sqlite_mismatch"] = (
+            sqlite.notna() & computed.notna() & sqlite.ne(computed)
+        ).astype(int)
+
+    return result
+
+
+def choose_lab_transform_columns(lab_columns: list[str], config: dict[str, Any]) -> tuple[set[str], set[str]]:
+    lab_config = config.get("features", {}).get("laboratory", {})
+    transform = lab_config.get("transform", "log1p_selected")
+    explicit_log = set(lab_config.get("log1p_columns", []) or [])
+    explicit_skip = set(lab_config.get("skip_log1p_columns", []) or [])
+
+    if transform == "none":
+        return set(), explicit_skip
+    if transform == "log1p_all":
+        return set(lab_columns) - explicit_skip, explicit_skip
+    if transform == "log1p_selected":
+        return explicit_log & set(lab_columns), explicit_skip
+    raise ValueError(f"Unsupported laboratory transform: {transform}")
+
+
+def oxygen_saturation_threshold(values: pd.Series, config: dict[str, Any]) -> float:
+    vital_config = config.get("features", {}).get("vital_signs", {})
+    scale = vital_config.get("oxygen_saturation_scale", "auto")
+    if scale == "fraction":
+        return float(vital_config.get("oxygen_saturation_threshold_fraction", 0.90))
+    if scale == "percent":
+        return float(vital_config.get("oxygen_saturation_threshold_percent", 90))
+    if scale != "auto":
+        raise ValueError(f"Unsupported oxygen_saturation_scale: {scale}")
+
+    observed = pd.to_numeric(values, errors="coerce").dropna()
+    if observed.empty:
+        return float(vital_config.get("oxygen_saturation_threshold_fraction", 0.90))
+    return (
+        float(vital_config.get("oxygen_saturation_threshold_percent", 90))
+        if observed.median() > 1
+        else float(vital_config.get("oxygen_saturation_threshold_fraction", 0.90))
+    )
+
+
+def hemoculture_buffer_days(config: dict[str, Any]) -> int:
+    return int(
+        config.get("episode_definition", {}).get(
+            "hemoculture_pre_admission_buffer_days",
+            HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+        )
+    )
 
 
 def attach_metadata(log: TableLog, metadata: dict[str, str]) -> None:
@@ -554,7 +862,7 @@ def preprocess_paciente(tables: dict[str, pd.DataFrame], metadata: dict[str, str
 
 
 def preprocess_episodio_ingreso(
-    tables: dict[str, pd.DataFrame], metadata: dict[str, str]
+    tables: dict[str, pd.DataFrame], metadata: dict[str, str], config: dict[str, Any]
 ) -> PreprocessResult:
     source = clean_missing_values(tables["episodio_ingreso"])
     df = source.copy()
@@ -578,16 +886,15 @@ def preprocess_episodio_ingreso(
 
     # Enforce one ML episode per admission: choose the first hemoculture since admission,
     # allowing a 2-day pre-admission buffer.
+    buffer_days = hemoculture_buffer_days(config)
     df, selection_stats = keep_first_hemoculture_with_buffer(
         df,
-        buffer_days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+        buffer_days=buffer_days,
     )
 
-    # Original notebook target recode: mortality within 14 days from admission.
-    if {"fecha_mortalidad", "fecha_ingreso"}.issubset(df.columns):
-        delta = df["fecha_mortalidad"] - df["fecha_ingreso"]
-        df["mortalidad_14_dias"] = np.where(delta <= pd.Timedelta(days=14), 1, 0)
-        df.loc[df["fecha_mortalidad"].isna(), "mortalidad_14_dias"] = 0
+    # Explicit target creation for staged mortality modelling.
+    # Non-negative windows avoid labelling impossible deaths before the reference date as positives.
+    df = create_mortality_targets(df, config)
 
     if "en_uci_antes_del_hemocultivo" in df.columns:
         df["en_uci_antes_del_hemocultivo"] = df["en_uci_antes_del_hemocultivo"].fillna(0)
@@ -603,8 +910,12 @@ def preprocess_episodio_ingreso(
         "foco_controlable",
         "foco_controlado",
         "mortalidad",
+        "mortalidad_any",
         "mortalidad_30_dias",
         "mortalidad_14_dias",
+        "mortalidad_sqlite",
+        "mortalidad_30_dias_sqlite",
+        "mortalidad_30_dias_sqlite_mismatch",
         "uci_por_el_episodio",
         "en_uci_antes_del_hemocultivo",
         "mujer_gestante",
@@ -648,8 +959,8 @@ def preprocess_episodio_ingreso(
         target=result.columns.tolist(),
         how=(
             "deduplicate admissions using priority_days as in original notebook; select earliest "
-            f"fecha_hemocultivo per record_id + fecha_ingreso using >= fecha_ingreso - {HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS} days buffer; "
-            "derive mortalidad_14_dias and recode IRAs_nosocomial"
+            f"fecha_hemocultivo per record_id + fecha_ingreso using >= fecha_ingreso - {buffer_days} days buffer; "
+            "preserve SQLite mortality values for audit, recompute benchmark mortalidad_14_dias and mortalidad_30_dias from admission date, and recode IRAs_nosocomial"
         ),
     )
     add_change(
@@ -662,7 +973,7 @@ def preprocess_episodio_ingreso(
     log.metadata.update({f"hemoculture_selection_{k}": v for k, v in selection_stats.items()})
     log.notes.append(
         "ML unit is one row per record_id + fecha_ingreso + selected fecha_hemocultivo; "
-        f"selection allows {HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS} pre-admission days."
+        f"selection allows {buffer_days} pre-admission days."
     )
     log.validation_checks.append(
         "selected_hemoculture_duplicate_admissions:"
@@ -794,7 +1105,7 @@ def preprocess_simple_admission_table(
 
 
 
-def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[str, str]) -> PreprocessResult:
+def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[str, str], config: dict[str, Any]) -> PreprocessResult:
     """Process symptoms and vital signs using the original notebook recodes."""
     source = clean_missing_values(tables["signos_sintomas"])
     df = source.copy()
@@ -851,9 +1162,12 @@ def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[s
         df["taquicardia"] = np.where(df["frec_cardiaca"].isna(), np.nan, np.where(df["frec_cardiaca"] > 90, 1, 0))
     if "saturacion_pO2" in df.columns:
         df["saturacion_pO2"] = pd.to_numeric(df["saturacion_pO2"], errors="coerce")
-        # Preserve the original threshold. If values are stored as 90-100 instead of 0.90-1.00,
-        # this will almost always be 0 and should be reviewed upstream.
-        df["hipoxemia"] = np.where(df["saturacion_pO2"].isna(), np.nan, np.where(df["saturacion_pO2"] < 0.90, 1, 0))
+        spo2_threshold = oxygen_saturation_threshold(df["saturacion_pO2"], config)
+        df["hipoxemia"] = np.where(
+            df["saturacion_pO2"].isna(),
+            np.nan,
+            np.where(df["saturacion_pO2"] < spo2_threshold, 1, 0),
+        )
 
     signs_cols = ["hipertermia", "hipotermia", "hipotension", "hipertension", "taquipnea", "taquicardia", "hipoxemia"]
     available_signs_cols = [c for c in signs_cols if c in df.columns]
@@ -897,7 +1211,7 @@ def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[s
     return validate_result(PreprocessResult(df=result, log=log))
 
 
-def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, str]) -> PreprocessResult:
+def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, str], config: dict[str, Any]) -> PreprocessResult:
     source = clean_missing_values(tables["laboratorio"])
     df = source.copy()
     df["fecha_ingreso"] = pd.to_datetime(df["fecha_ingreso"], errors="coerce")
@@ -911,12 +1225,16 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
     for column in lab_columns:
         df[column] = pd.to_numeric(df[column], errors="coerce")
 
-    # Normalize laboratory values with log1p in-place. This reduces right-skew
-    # without fitting distributional parameters on the full dataset. Negative
-    # values, if any, are treated as invalid and set to NaN before log1p.
+    # Laboratory transformations are now config-driven.
+    # By default, raw values are preserved for tree-based models; selected skewed
+    # biomarkers can be log1p-transformed through preprocess_bacthecom.yml.
+    log1p_columns, _skip_columns = choose_lab_transform_columns(lab_columns, config)
+    negative_to_nan = config.get("features", {}).get("laboratory", {}).get("negative_values_to_nan", True)
     for column in lab_columns:
-        df.loc[df[column] < 0, column] = np.nan
-        df[column] = np.log1p(df[column])
+        if negative_to_nan:
+            df.loc[df[column] < 0, column] = np.nan
+        if column in log1p_columns:
+            df[column] = np.log1p(df[column])
 
     # Keep one normalized value per lab feature. Do not create *_mean / *_max
     # features and do not add laboratorio_n_rows; those summaries are not
@@ -931,7 +1249,7 @@ def preprocess_laboratorio(tables: dict[str, pd.DataFrame], metadata: dict[str, 
         "transformed_variables",
         source=lab_columns,
         target=[column for column in result.columns if column not in ADMISSION_KEYS],
-        how="log1p-normalize laboratory values and collapse to one value per selected hemoculture using first non-missing value; no *_mean, *_max, or row-count features",
+        how="apply config-driven laboratory transformations and collapse to one value per selected hemoculture using first non-missing value; no *_mean, *_max, or row-count features",
     )
     return validate_result(PreprocessResult(df=result, log=log))
 
@@ -962,7 +1280,7 @@ def preprocess_episodio_uci(tables: dict[str, pd.DataFrame], metadata: dict[str,
 
 
 def preprocess_episodio_infeccion(
-    tables: dict[str, pd.DataFrame], metadata: dict[str, str]
+    tables: dict[str, pd.DataFrame], metadata: dict[str, str], config: dict[str, Any]
 ) -> PreprocessResult:
     """Process infection episodes using the original BactHeCom microorganism logic.
 
@@ -988,9 +1306,10 @@ def preprocess_episodio_infeccion(
     df["infection_after_admission"] = (df["days_culture_from_admission"] > 0).astype(int)
 
     blood = df.loc[df["blood_culture"].eq(1)].copy()
+    buffer_days = hemoculture_buffer_days(config)
     current, selection_stats = keep_first_hemoculture_with_buffer(
         blood,
-        buffer_days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS,
+        buffer_days=buffer_days,
     )
     selected_keys = current[ADMISSION_KEYS].drop_duplicates()
     current_rows = blood.merge(selected_keys, on=ADMISSION_KEYS, how="inner")
@@ -1049,7 +1368,7 @@ def preprocess_episodio_infeccion(
         rid = row["record_id"]
         ingreso = pd.to_datetime(row["fecha_ingreso"])
         hc = pd.to_datetime(row["fecha_hemocultivo"])
-        cutoff = ingreso - pd.Timedelta(days=HEMOCULTURE_PRE_ADMISSION_BUFFER_DAYS)
+        cutoff = ingreso - pd.Timedelta(days=buffer_days)
         prev = all_blood.loc[(all_blood["record_id"].eq(rid)) & (all_blood["fecha_cultivo"] < cutoff)].copy()
         prev = prev.sort_values(["fecha_cultivo", "episode_id"], ascending=[False, True]).head(5)
         days_since = (hc - prev["fecha_cultivo"]).dt.days if not prev.empty else pd.Series(dtype=float)
@@ -1201,7 +1520,7 @@ def preprocess_tto_antimicrobiano(
     return validate_result(PreprocessResult(df=result, log=log))
 
 
-def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]) -> PreprocessResult:
+def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str], config: dict[str, Any]) -> PreprocessResult:
     base = normalize_merge_key_dtypes(results["episodio_ingreso"].df.copy())
     input_df = base.copy()
     for name, result in results.items():
@@ -1241,24 +1560,7 @@ def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]
         if column in base.columns:
             base[column] = base[column].fillna("[]")
 
-    columns_to_drop = [
-        "index",
-        "episode_key",
-        "fecha_nacimiento",
-        "age_at_admission",
-        "age_at_hemoculture",
-        "tipo_cancer",
-        "tipo_hepatopatia",
-        "causa_inmunosupresion",
-        "clasificacion_quemadura",
-        "duracion_sintoma",
-        "laboratorio_n_rows",
-    ]
-    columns_to_drop.extend([c for c in base.columns if c.endswith("_mean") or c.endswith("_max")])
-    columns_to_drop.extend([c for c in base.columns if c.startswith("treatment_")])
-    columns_to_drop.extend([c for c in base.columns if c.startswith("antibiogram_")])
-    columns_to_drop.extend([c for c in base.columns if c.startswith("infection_") and c.endswith("_count")])
-    columns_to_drop.extend([c for c in base.columns if c == "resistente_cefalosporina"])
+    columns_to_drop = config_drop_columns(config, base.columns.tolist())
     base = base.drop(columns=[c for c in columns_to_drop if c in base.columns], errors="ignore")
 
     duplicate_selected_admissions = duplicate_key_groups(base, BASE_ADMISSION_KEYS)
@@ -1300,47 +1602,42 @@ def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str]
         ),
     )
     log.validation_checks.append(f"duplicate_selected_admissions:{duplicate_selected_admissions}")
+    append_target_validation_checks(log, base, config)
     return validate_result(PreprocessResult(df=base, log=log))
 
 
 def export_dataset_outputs(
-    df: pd.DataFrame, output_path: Path, drop_columns_path: Path
+    df: pd.DataFrame, output_path: Path, config: dict[str, Any]
 ) -> tuple[pd.DataFrame, list[str], Path]:
     serializable = df.copy()
-    automatic_drop_columns = [
-        "index",
-        "episode_key",
-        "fecha_nacimiento",
-        "age_at_admission",
-        "age_at_hemoculture",
-        "tipo_cancer",
-        "tipo_hepatopatia",
-        "causa_inmunosupresion",
-        "clasificacion_quemadura",
-        "duracion_sintoma",
-        "laboratorio_n_rows",
-    ]
-    automatic_drop_columns.extend([c for c in serializable.columns if c.endswith("_mean") or c.endswith("_max")])
-    automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("treatment_")])
-    automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("antibiogram_")])
-    automatic_drop_columns.extend([c for c in serializable.columns if c.startswith("infection_") and c.endswith("_count")])
-    automatic_drop_columns.extend([c for c in serializable.columns if c == "resistente_cefalosporina"])
-    serializable = serializable.drop(columns=[c for c in automatic_drop_columns if c in serializable.columns], errors="ignore")
+    config_drops = config_drop_columns(config, serializable.columns.tolist())
+    serializable = serializable.drop(columns=[c for c in config_drops if c in serializable.columns], errors="ignore")
+    append_target_validation_checks(
+        TableLog(
+            table_name="_export_validation",
+            input_rows=len(df),
+            output_rows=len(serializable),
+            input_columns=df.columns.tolist(),
+            output_columns=serializable.columns.tolist(),
+            merge_keys=[],
+        ),
+        serializable,
+        config,
+    )
     for column in serializable.select_dtypes(include=["datetime64[ns]"]).columns:
         serializable[column] = serializable[column].dt.strftime("%Y-%m-%d")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     serializable.to_csv(output_path, index=False)
-    drop_columns = read_drop_columns(drop_columns_path, serializable.columns.tolist())
-    filtered = serializable.drop(columns=drop_columns, errors="ignore")
+    filtered = serializable.copy()
     filtered_path = output_path.with_name(f"{output_path.stem}_filtered.csv")
     filtered.to_csv(filtered_path, index=False)
-    return filtered, sorted(set(drop_columns + [c for c in automatic_drop_columns if c in df.columns])), filtered_path
+    return filtered, sorted(set(config_drops)), filtered_path
 
 
 def build_run_log(
     input_path: Path,
     output_path: Path,
-    drop_columns_path: Path,
+    config_path: Path,
     metadata: dict[str, str],
 ) -> TableLog:
     log = TableLog(
@@ -1356,9 +1653,10 @@ def build_run_log(
         [
             f"input_file_path={input_path}",
             f"output_file_path={output_path}",
-            f"drop_columns_path={drop_columns_path}",
+            f"config_path={config_path}",
             "aggregation_level=one selected fecha_hemocultivo per record_id + fecha_ingreso",
             "antimicrobial_treatment_exposure=excluded_to_avoid_post_hemoculture_leakage",
+            "filtering_config=preprocess_bacthecom.yml",
         ]
     )
     return log
@@ -1370,7 +1668,7 @@ def build_filtered_dataset_log(
     dropped_columns: list[str],
     output_path: Path,
     filtered_path: Path,
-    drop_columns_path: Path,
+    config_path: Path,
     metadata: dict[str, str],
 ) -> TableLog:
     log = finalize_log(
@@ -1385,7 +1683,7 @@ def build_filtered_dataset_log(
         "dropped_variables",
         source=dropped_columns,
         target=filtered_df.columns.tolist(),
-        how=f"drop columns matching explicit names or glob patterns from {drop_columns_path}",
+        how=f"drop columns matching explicit names or glob patterns from {config_path}",
     )
     log.notes.extend([f"full_output_path={output_path}", f"filtered_output_path={filtered_path}"])
     log.validation_checks.append(f"filtered_columns_dropped:{len(dropped_columns)}")
@@ -1395,13 +1693,17 @@ def build_filtered_dataset_log(
 def run_pipeline(
     input_path: Path = DEFAULT_DB_PATH,
     output_path: Path = DEFAULT_OUTPUT_PATH,
-    drop_columns_path: Path = DEFAULT_DROP_COLUMNS_PATH,
+    config_path: Path = DEFAULT_CONFIG_PATH,
     run_label: str = "",
 ) -> PipelineArtifacts:
+    config = load_config(config_path)
     metadata = run_metadata(run_label)
+    metadata["config_name"] = str(config.get("metadata", {}).get("config_name", metadata.get("config_name", "")))
+    metadata["config_version"] = str(config.get("metadata", {}).get("config_version", metadata.get("config_version", "")))
+    metadata["config_path"] = str(config_path)
     tables = load_tables(input_path)
     results: dict[str, PreprocessResult] = {}
-    results["episodio_ingreso"] = preprocess_episodio_ingreso(tables, metadata)
+    results["episodio_ingreso"] = preprocess_episodio_ingreso(tables, metadata, config)
     results["paciente"] = preprocess_paciente(tables, metadata)
     results["comorbilidad"] = preprocess_comorbilidad(tables, metadata)
     results["factores_riesgo_infeccion_bmr"] = preprocess_simple_admission_table(
@@ -1425,24 +1727,24 @@ def run_pipeline(
             "portador_otros_disposit",
         ],
     )
-    results["signos_sintomas"] = preprocess_signos_sintomas(tables, metadata)
-    results["laboratorio"] = preprocess_laboratorio(tables, metadata)
+    results["signos_sintomas"] = preprocess_signos_sintomas(tables, metadata, config)
+    results["laboratorio"] = preprocess_laboratorio(tables, metadata, config)
     results["episodio_uci"] = preprocess_episodio_uci(tables, metadata)
-    results["episodio_infeccion"] = preprocess_episodio_infeccion(tables, metadata)
+    results["episodio_infeccion"] = preprocess_episodio_infeccion(tables, metadata, config)
     # Do not include antibiogram-derived features or cefalosporin-resistance targets
     # for this mortality model. They are post-culture microbiology outputs and can
     # introduce leakage or answer a different prediction task.
     # Do not include antimicrobial treatment exposures: antibiotics given after the
     # hemoculture are post-index information and can leak outcome/severity.
-    merged = merge_results(results, metadata)
+    merged = merge_results(results, metadata, config)
 
     filtered_df, dropped_columns, filtered_path = export_dataset_outputs(
         merged.df,
         output_path,
-        drop_columns_path,
+        config,
     )
     logs = [
-        build_run_log(input_path, output_path, drop_columns_path, metadata),
+        build_run_log(input_path, output_path, config_path, metadata),
         *[result.log for result in results.values()],
         merged.log,
         build_filtered_dataset_log(
@@ -1451,7 +1753,7 @@ def run_pipeline(
             dropped_columns,
             output_path,
             filtered_path,
-            drop_columns_path,
+            config_path,
             metadata,
         ),
     ]
@@ -1473,7 +1775,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--input-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--output-path", type=Path, default=DEFAULT_OUTPUT_PATH)
-    parser.add_argument("--drop-columns-path", type=Path, default=DEFAULT_DROP_COLUMNS_PATH)
+    parser.add_argument("--config-path", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--run-label", default="")
     return parser.parse_args()
 
@@ -1483,7 +1785,7 @@ def main() -> None:
     run_pipeline(
         input_path=args.input_path,
         output_path=args.output_path,
-        drop_columns_path=args.drop_columns_path,
+        config_path=args.config_path,
         run_label=args.run_label,
     )
 
