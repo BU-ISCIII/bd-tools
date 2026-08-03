@@ -60,25 +60,68 @@ def safe_str(value: Any) -> str:
 def display_labels_for_context(labels: list[str], context_name: str) -> list[str]:
     """Return plot-facing class labels without changing metric labels.
 
-    Binary level-1 sepsis plots use clinically readable labels instead of 0/1.
-    Binary level-2 gate/hemo/etiology plots use culture-status labels.
+    - Level 1 binary sepsis: no sepsis / sepsis
+    - Level 2 Stage 1 gate: cultivo - / cultivo +
+    - Level 2 Stage 2 binary subtype: nonGNB / GNB
     """
     context = context_name.lower()
     labels_as_str = [str(label) for label in labels]
 
+    # Level 1: sepsis
     if len(labels) == 2 and ("level1" in context or "sepsis" in context):
         if set(labels_as_str) == {"0", "1"}:
             mapping = {"0": "no sepsis", "1": "sepsis"}
             return [mapping[label] for label in labels_as_str]
 
-    if len(labels) == 2 and any(token in context for token in ("gate", "level2_etiology", "etiology", "etiologia")):
+    # Level 2 Stage 2 subtype must be checked BEFORE the gate branch.
+    if len(labels) == 2 and any(
+        token in context
+        for token in ("stage2_subtype", "stage2", "subtype", "gnb")
+    ):
+        normalised = {
+            label.lower().replace("_", "").replace("-", "").replace(" ", "")
+            for label in labels_as_str
+        }
+
+        # Preserve semantic order when labels already contain subtype names.
+        if normalised <= {"gnb", "nongnb"}:
+            mapped = []
+            for label in labels_as_str:
+                key = label.lower().replace("_", "").replace("-", "").replace(" ", "")
+                mapped.append("GNB" if key == "gnb" else "nonGNB")
+            return mapped
+
+        # Fallback for encoded binary subtype predictions.
         if set(labels_as_str) == {"0", "1"}:
-            mapping = {"0": "cultivo -", "1": "cultivo +"}
+            mapping = {"0": "nonGNB", "1": "GNB"}
             return [mapping[label] for label in labels_as_str]
-        return ["cultivo -", "cultivo +"]
+
+    # Level 2 Stage 1 culture gate only.
+    # Preserve the original confusion-matrix class order; only replace
+    # plot-facing labels with clinically readable names.
+    if len(labels) == 2 and any(
+        token in context
+        for token in ("stage1_gate", "gate")
+    ):
+        mapped = []
+        for label in labels_as_str:
+            key = (
+                label.lower()
+                .replace("_", "")
+                .replace("-", "")
+                .replace(" ", "")
+            )
+
+            if key in {"0", "gatenegative", "negative", "false"}:
+                mapped.append("cultivo -")
+            elif key in {"1", "gatepositive", "positive", "true"}:
+                mapped.append("cultivo +")
+            else:
+                mapped.append(label)
+
+        return mapped
 
     return labels_as_str
-
 
 def load_json(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as handle:
@@ -342,6 +385,7 @@ def summarize_processing(
         "l1_rfecv_features.csv": plot_rfecv_feature_list,
         "l2_gate_rfecv_features.csv": plot_rfecv_feature_list,
         "l2_sub_rfecv_features.csv": plot_rfecv_feature_list,
+        "l2_direct_rfecv_features.csv": plot_rfecv_feature_list,
         "l3_rfecv_features.csv": plot_rfecv_feature_list,
     }
 
@@ -1036,33 +1080,102 @@ def _top_shap_features(shap_matrix: np.ndarray, feature_names: list[str], max_di
     return [feature_names[i] for i in order]
 
 
-def plot_shap_importance_bar(
-    shap_matrix: np.ndarray,
-    feature_names: list[str],
+def plot_shap_importance_bar_from_csv(
+    importance_path: Path,
     output_path: Path,
     title: str,
     max_display: int = 20,
 ) -> dict[str, Any]:
-    mean_abs = np.nanmean(np.abs(shap_matrix), axis=0)
-    order = np.argsort(mean_abs)[::-1][:max_display]
-    ordered_features = [feature_names[i] for i in order][::-1]
-    ordered_values = mean_abs[order][::-1]
+    """Plot absolute SHAP importance directly from *_shap_importance.csv.
 
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.30 * len(ordered_features))))
-    ax.barh(ordered_features, ordered_values)
+    Expected columns include:
+      - feature
+      - mean_abs_shap
+
+    The plot matches the saved SHAP importance table exactly and avoids
+    cancellation from signed mean SHAP values.
+    """
+    if not importance_path.exists():
+        raise FileNotFoundError(f"SHAP importance CSV not found: {importance_path}")
+
+    importance_df = pd.read_csv(importance_path)
+    if importance_df.empty:
+        raise ValueError(f"SHAP importance CSV is empty: {importance_path}")
+
+    feature_candidates = [
+        "feature",
+        "Feature",
+        "feature_name",
+        "feature_names",
+        "variable",
+        "Variable",
+        "name",
+    ]
+    feature_col = next(
+        (col for col in feature_candidates if col in importance_df.columns),
+        None,
+    )
+    if feature_col is None:
+        raise ValueError(
+            f"No feature-name column found in {importance_path}. "
+            f"Available columns: {list(importance_df.columns)}"
+        )
+
+    importance_candidates = [
+        "mean_abs_shap",
+        "mean_absolute_shap",
+        "mean_abs_shap_value",
+        "importance",
+    ]
+    importance_col = next(
+        (col for col in importance_candidates if col in importance_df.columns),
+        None,
+    )
+    if importance_col is None:
+        raise ValueError(
+            f"No absolute SHAP importance column found in {importance_path}. "
+            f"Available columns: {list(importance_df.columns)}"
+        )
+
+    plot_df = importance_df[[feature_col, importance_col]].copy()
+    plot_df[feature_col] = plot_df[feature_col].astype(str)
+    plot_df[importance_col] = pd.to_numeric(
+        plot_df[importance_col],
+        errors="coerce",
+    )
+    plot_df = plot_df.dropna(subset=[feature_col, importance_col])
+
+    # SHAP importance is absolute by definition here.
+    plot_df[importance_col] = plot_df[importance_col].abs()
+
+    top = (
+        plot_df.sort_values(importance_col, ascending=False)
+        .head(max_display)
+        .iloc[::-1]
+    )
+
+    fig, ax = plt.subplots(figsize=(10, max(5, 0.30 * len(top))))
+    ax.barh(
+        top[feature_col],
+        top[importance_col],
+    )
     ax.set_xlabel("Mean |SHAP value|")
     ax.set_title(title)
     ax.grid(axis="x", alpha=0.25)
     plt.tight_layout()
     save_figure(fig, output_path)
 
+    ranked = plot_df.sort_values(importance_col, ascending=False)
     return {
-        "rows": int(shap_matrix.shape[0]),
-        "features": int(shap_matrix.shape[1]),
-        "top_features": [str(feature_names[i]) for i in order[:10]],
-        "top_mean_abs_shap": [float(mean_abs[i]) for i in order[:10]],
+        "rows": int(len(importance_df)),
+        "features": int(plot_df[feature_col].nunique()),
+        "top_features": ranked[feature_col].head(10).astype(str).tolist(),
+        "top_mean_abs_shap": [
+            float(v) for v in ranked[importance_col].head(10).tolist()
+        ],
+        "importance_source": str(importance_path),
+        "importance_column": importance_col,
     }
-
 
 def plot_shap_beeswarm(
     shap_matrix: np.ndarray,
@@ -1186,15 +1299,14 @@ def plot_shap_artifact(shap_values_path: Path, plots_dir: Path) -> dict[str, Any
         "metadata": metadata,
     }
 
-    # Overall plots are the most useful and avoid too many outputs. For multiclass,
-    # "overall" is mean absolute SHAP across classes.
+    # Beeswarm uses the SHAP value matrix. The bar importance plot is read
+    # directly from *_shap_importance.csv so it exactly reflects mean_abs_shap.
     matrix = matrices.get("overall", next(iter(matrices.values())))
     title_prefix = prefix.replace("_", " ")
 
-    bar_metrics = plot_shap_importance_bar(
-        matrix,
-        feature_names,
-        output_dir / f"{safe_str(prefix)}_shap_bar.png",
+    bar_metrics = plot_shap_importance_bar_from_csv(
+        importance_path=importance_path,
+        output_path=output_dir / f"{safe_str(prefix)}_shap_bar.png",
         title=f"SHAP importance: {title_prefix}",
     )
     beeswarm_metrics = plot_shap_beeswarm(

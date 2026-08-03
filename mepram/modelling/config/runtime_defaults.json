@@ -8,7 +8,8 @@
     "hemo_target": "resultado_hemo_gnb_selected",
     "hemo_gate_target": "infected_yes_no",
     "hemo_gate_negative_label": "NEGATIVE",
-    "bmr_target": "bmr_etiologia",
+    "resistance_gate_target": "infected_yes_no",
+    "resistance_gate_negative_label": "NEGATIVE",
     "cef_target": "resistente_cefalosporina",
     "weight_column": "sample_weight"
   },
@@ -34,6 +35,7 @@
     "skip_l2_gate": false,
     "l2_gate_proba_as_feature": false,
     "set_gate_recall": null,
+    "set_resistance_gate_recall": null,
     "hemo_stage2_mode": "auto"
   },
   "categorical_for_dummies": ["foco", "ultimo_antib"]

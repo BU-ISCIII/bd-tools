@@ -366,10 +366,10 @@ def run_training(args: argparse.Namespace) -> None:
     # ------------------------------------------------------------------
     all_targets = {
         args.sepsis_target,
-        args.hemo_target,
-        args.hemo_gate_target,
+        args.etiology_target,
+        args.etiology_gate_target,
+        args.resistance_gate_target,
         args.cef_target,
-        args.bmr_target,
         args.weight_column,
     }
     cols_to_delete = list(DELETE_COLUMNS)
@@ -420,10 +420,9 @@ def run_training(args: argparse.Namespace) -> None:
     )
 
     y_sepsis = working_df.loc[feature_df_raw.index, args.sepsis_target]
-    y_hemo = working_df.loc[feature_df_raw.index, args.hemo_target]
-    y_hemo_gate = working_df.loc[feature_df_raw.index, args.hemo_gate_target]
+    y_hemo = working_df.loc[feature_df_raw.index, args.etiology_target]
+    y_hemo_gate = working_df.loc[feature_df_raw.index, args.etiology_gate_target]
     y_cef = working_df.loc[feature_df_raw.index, args.cef_target]
-    y_bmr = working_df.loc[feature_df_raw.index, args.bmr_target]
     w = working_df.loc[feature_df_raw.index, args.weight_column]
 
     (
@@ -432,7 +431,6 @@ def run_training(args: argparse.Namespace) -> None:
         y_hemo_train, y_hemo_test,
         y_hemo_gate_train, y_hemo_gate_test,
         y_cef_train, y_cef_test,
-        y_bmr_train, y_bmr_test,
         w_train, w_test,
     ) = train_test_split(
         feature_df_raw,
@@ -440,7 +438,6 @@ def run_training(args: argparse.Namespace) -> None:
         y_hemo,
         y_hemo_gate,
         y_cef,
-        y_bmr,
         w,
         test_size=args.test_size,
         random_state=args.random_state,
@@ -483,20 +480,18 @@ def run_training(args: argparse.Namespace) -> None:
         },
     )
     # Align targets/weights after row filtering caused by no-impute mode
-    y_sep_train, y_hemo_train, y_hemo_gate_train, y_cef_train, y_bmr_train, w_train = (
+    y_sep_train, y_hemo_train, y_hemo_gate_train, y_cef_train, w_train = (
         y_sep_train.loc[X_train.index],
         y_hemo_train.loc[X_train.index],
         y_hemo_gate_train.loc[X_train.index],
         y_cef_train.loc[X_train.index],
-        y_bmr_train.loc[X_train.index],
         w_train.loc[X_train.index],
     )
-    y_sep_test, y_hemo_test, y_hemo_gate_test, y_cef_test, y_bmr_test, w_test = (
+    y_sep_test, y_hemo_test, y_hemo_gate_test, y_cef_test, w_test = (
         y_sep_test.loc[X_test.index],
         y_hemo_test.loc[X_test.index],
         y_hemo_gate_test.loc[X_test.index],
         y_cef_test.loc[X_test.index],
-        y_bmr_test.loc[X_test.index],
         w_test.loc[X_test.index],
     )
     print(f"Train: {len(X_train)} rows  |  Test: {len(X_test)} rows")
@@ -794,6 +789,7 @@ def run_training(args: argparse.Namespace) -> None:
                 X_train=X_l1_train,
                 X_test=X_l1_test,
                 feature_names=l1_features,
+                explain_size=len(X_l1_test),
                 output_dir=l1_dir / "shap",
                 stage_name="level1_sepsis",
                 class_names=[str(c) for c in le_sep.classes_],
@@ -844,6 +840,33 @@ def run_training(args: argparse.Namespace) -> None:
             )
             y2_train_raw = y_hemo_train.loc[hemo_valid_train].astype(str)
             y2_test_raw = y_hemo_test.loc[hemo_valid_test].astype(str)
+
+            # Direct etiology uses the same target-mode semantics as gated
+            # Stage 2:
+            #   binary     -> GNB vs non_GNB
+            #   multiclass -> original etiology classes
+            #   auto       -> keep original classes; use binary estimator only
+            #                 when exactly two classes are present
+            direct_mode = args.etiology_stage2_mode
+            if direct_mode == "binary":
+                print("  Direct etiology mode: binary GNB vs non-GNB")
+                y2_train_raw = _map_hemo_subtype_to_gnb_binary(y2_train_raw)
+                y2_test_raw = _map_hemo_subtype_to_gnb_binary(y2_test_raw)
+            elif direct_mode == "multiclass":
+                print("  Direct etiology mode: multiclass (all etiology classes)")
+            elif direct_mode == "auto":
+                print("  Direct etiology mode: auto (binary if 2 classes else multiclass)")
+            else:
+                raise ValueError(
+                    "Unknown etiology stage-2 mode "
+                    f"{direct_mode!r}; expected 'auto', 'binary', or 'multiclass'."
+                )
+
+            if direct_mode == "binary" and y2_train_raw.nunique() < 2:
+                raise ValueError(
+                    "Direct Level 2 binary mode requires both GNB and non_GNB "
+                    "labels in the training subset."
+                )
 
             le_l2 = LabelEncoder()
             y2_train = pd.Series(
@@ -1016,8 +1039,14 @@ def run_training(args: argparse.Namespace) -> None:
             stage_pred_counts = stage_pred_df["pred_label"].value_counts().to_dict()
             stage_true_counts = stage_pred_df["true_label"].value_counts().to_dict()
 
+            actual_direct_mode = (
+                direct_mode
+                if direct_mode != "auto"
+                else ("binary" if is_binary_subtype else "multiclass")
+            )
             stage2_summary = {
                 "mode": "binary" if is_binary_subtype else "multiclass",
+                "stage2_mode": actual_direct_mode,
                 "classes": l2_target_names,
                 "params": l2_params,
                 "threshold": l2_threshold,
@@ -1038,10 +1067,11 @@ def run_training(args: argparse.Namespace) -> None:
                 stage2_summary["positive_label"] = l2_target_names[1]
             
             # Level 2
-            (l2_dir / f"report_{args.hemo_target}.txt").write_text(l2_report_text)
+            (l2_dir / f"report_{args.etiology_target}.txt").write_text(l2_report_text)
             (l2_dir / "summary.json").write_text(json.dumps({
                 "mode": "direct_binary" if is_binary_subtype else "direct_multiclass",
-                "target": args.hemo_target,
+                "stage2_mode": actual_direct_mode,
+                "target": args.etiology_target,
                 **stage2_summary,
             }, indent=2))
 
@@ -1074,7 +1104,8 @@ def run_training(args: argparse.Namespace) -> None:
 
             all_summaries["level2_etiology"] = {
                 "mode": "direct_binary" if is_binary_subtype else "direct_multiclass",
-                "target": args.hemo_target,
+                "stage2_mode": actual_direct_mode,
+                "target": args.etiology_target,
                 "classes": l2_target_names,
                 "threshold": l2_threshold,
                 "macro_f1": l2_f1,
@@ -1096,6 +1127,7 @@ def run_training(args: argparse.Namespace) -> None:
                     X_train=X2_train_scaled,
                     X_test=X2_test_scaled,
                     feature_names=l2_features,
+                    explain_size=len(X2_test_scaled),
                     output_dir=l2_dir / "shap",
                     stage_name="level2_direct_etiology",
                     class_names=l2_target_names,
@@ -1107,11 +1139,11 @@ def run_training(args: argparse.Namespace) -> None:
             hemo_gate_valid_train = y_hemo_gate_train.notna()
             hemo_gate_valid_test = y_hemo_gate_test.notna()
             y2_gate_train = (
-                y_hemo_gate_train.loc[hemo_gate_valid_train].astype(str) != args.hemo_gate_negative_label
+                y_hemo_gate_train.loc[hemo_gate_valid_train].astype(str) != args.etiology_gate_negative_label
             ).astype(int)
             gate_test_mask = hemo_gate_valid_test
             y2_gate_test = (
-                y_hemo_gate_test.loc[gate_test_mask].astype(str) != args.hemo_gate_negative_label
+                y_hemo_gate_test.loc[gate_test_mask].astype(str) != args.etiology_gate_negative_label
             ).astype(int)
 
             X2_gate_train_view, X2_gate_test_view = apply_feature_view(
@@ -1182,6 +1214,7 @@ def run_training(args: argparse.Namespace) -> None:
                     X_train=X2_gate_train_scaled,
                     X_test=X2_gate_test_scaled,
                     feature_names=l2_gate_features,
+                    explain_size=len(X2_gate_test_scaled),
                     output_dir=l2_dir / "shap",
                     stage_name="level2_gate",
                     class_names=["gate_negative", "gate_positive"],
@@ -1272,7 +1305,7 @@ def run_training(args: argparse.Namespace) -> None:
             y2_sub_train_raw = y_hemo_train.loc[subtype_train_mask].astype(str)
             y2_sub_test_raw = y_hemo_test.loc[subtype_test_mask].astype(str)
 
-            stage2_mode = args.hemo_stage2_mode
+            stage2_mode = args.etiology_stage2_mode
             if stage2_mode == "binary":
                 print("  Stage 2 mode: binary GNB vs non-GNB")
                 y2_sub_train_raw = _map_hemo_subtype_to_gnb_binary(y2_sub_train_raw)
@@ -1404,6 +1437,7 @@ def run_training(args: argparse.Namespace) -> None:
                     X_train=X2_train_scaled,
                     X_test=X2_test_scaled,
                     feature_names=l2_features,
+                    explain_size=len(X2_test_scaled),
                     output_dir=l2_dir / "shap",
                     stage_name="level2_subtype",
                     class_names=l2_target_names,
@@ -1475,7 +1509,7 @@ def run_training(args: argparse.Namespace) -> None:
                 binary_labels=("gate_negative", "gate_positive"),
             )
 
-            (l2_dir / f"report_gate_{args.hemo_gate_target}.txt").write_text(stage1_report_text)
+            (l2_dir / f"report_gate_{args.etiology_gate_target}.txt").write_text(stage1_report_text)
 
             l2_gate_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage1_gate.csv", index=False)
             l2_study.trials_dataframe().to_csv(l2_dir / "optuna_trials_stage2_subtype.csv", index=False)
@@ -1511,7 +1545,7 @@ def run_training(args: argparse.Namespace) -> None:
                 binary_labels=(l2_target_names[0], l2_target_names[1]) if is_binary_subtype else None,
             )
 
-            (l2_dir / f"report_staged_{args.hemo_target}.txt").write_text(stage2_report_text)
+            (l2_dir / f"report_staged_{args.etiology_target}.txt").write_text(stage2_report_text)
 
             actual_stage2_mode = (
                 stage2_mode
@@ -1544,8 +1578,8 @@ def run_training(args: argparse.Namespace) -> None:
             (l2_dir / "summary.json").write_text(json.dumps({
                 "mode": "two_stage_binary" if is_binary_subtype else "two_stage_multiclass",
                 "stage1_gate": {
-                    "negative_label": args.hemo_gate_negative_label,
-                    "positive_label": f"not_{args.hemo_gate_negative_label}",
+                    "negative_label": args.etiology_gate_negative_label,
+                    "positive_label": f"not_{args.etiology_gate_negative_label}",
                     "params": l2_gate_params,
                     "optuna_threshold": l2_gate_optuna_threshold,
                     "threshold": l2_gate_threshold,
@@ -1657,8 +1691,8 @@ def run_training(args: argparse.Namespace) -> None:
                     "pr_auc": l2_gate_pr_auc,
                     "precision": l2_gate_precision,
                     "recall": l2_gate_recall,
-                    "negative_label": args.hemo_gate_negative_label,
-                    "positive_label": f"not_{args.hemo_gate_negative_label}",
+                    "negative_label": args.etiology_gate_negative_label,
+                    "positive_label": f"not_{args.etiology_gate_negative_label}",
                     "threshold": l2_gate_threshold,
                     "gate_proba_feature": args.l2_gate_proba_as_feature,
                     "predicted_true": stage1_pred_counts["gate_positive"],
@@ -1700,63 +1734,510 @@ def run_training(args: argparse.Namespace) -> None:
     l3_dir.mkdir(exist_ok=True)
 
     # ------------------------------------------------------------------
-    # Reuse Level 2 hemoculture gate
+    # Level 3 resistance population mode
     # ------------------------------------------------------------------
-    if args.skip_level2 or args.skip_l2_gate:
+    # Supported modes:
+    #   gated:
+    #       reuse the Level-2 gate. Train resistance on TRUE culture-positive
+    #       rows and test only on rows predicted culture-positive by Level 2.
+    #   resistance_gate:
+    #       train an independent culture-positive/culture-negative gate for
+    #       Level 3, then test resistance only on rows predicted positive by
+    #       this Level-3 gate. This works even when Level 2 etiology is direct.
+    #   direct:
+    #       train/test on every row with a non-null resistance target. This is
+    #       independent of Level 2 and works with --skip-l2-gate.
+    #   true_positive_only:
+    #       train/test only on TRUE culture-positive rows, without using gate
+    #       predictions. Useful as an oracle/benchmark population.
+    #
+    # Backward-compatible "auto":
+    #   - direct when Level 2 or its gate is skipped
+    #   - gated otherwise
+    requested_resistance_mode = getattr(args, "resistance_mode", "auto")
+    if requested_resistance_mode == "auto":
+        resistance_mode = (
+            "direct"
+            if args.skip_level2 or args.skip_l2_gate
+            else "gated"
+        )
+    else:
+        resistance_mode = requested_resistance_mode
+
+    if resistance_mode not in {
+        "gated",
+        "resistance_gate",
+        "direct",
+        "true_positive_only",
+    }:
         raise ValueError(
-            "Level 3 requires Level 2 gate predictions. "
-            "Do not use --skip-level2 or --skip-l2-gate."
+            f"Unknown resistance_mode={resistance_mode!r}. "
+            "Expected 'auto', 'gated', 'resistance_gate', 'direct', "
+            "or 'true_positive_only'."
         )
 
-    # TRAIN:
-    # Use TRUE hemoculture-positive samples to train resistance.
-    hemo_pos_train_mask = (
-        y_hemo_gate_train.notna()
-        & (
-            y_hemo_gate_train.astype(str)
-            != args.hemo_gate_negative_label
+    print(f"  Level 3 resistance mode: {resistance_mode}")
+
+    # These are populated for gate-based Level-3 modes and later reused by
+    # end-to-end cascade accounting.
+    resistance_gate_summary: Optional[dict[str, Any]] = None
+    cascade_gate_test_pred: Optional[pd.Series] = None
+    cascade_y_gate_test: Optional[pd.Series] = None
+    cascade_gate_mode: Optional[str] = None
+    cascade_gate_proba: Optional[pd.Series] = None
+
+    if resistance_mode == "gated":
+        if args.skip_level2 or args.skip_l2_gate:
+            raise ValueError(
+                "Level 3 resistance_mode='gated' requires Level 2 gate "
+                "predictions. Use resistance_mode='direct', "
+                "'true_positive_only', or 'resistance_gate' when skipping "
+                "the Level-2 gate."
+            )
+
+        # TRAIN: true culture-positive rows.
+        hemo_pos_train_mask = (
+            y_hemo_gate_train.notna()
+            & (
+                y_hemo_gate_train.astype(str)
+                != args.etiology_gate_negative_label
+            )
         )
-    )
 
-    # TEST / INFERENCE:
-    # Use PREDICTED hemoculture-positive samples from Level 2.
-    predicted_hemo_positive_idx = l2_gate_test_pred[
-        l2_gate_test_pred == 1
-    ].index
+        # TEST: rows predicted culture-positive by Level 2 gate.
+        predicted_hemo_positive_idx = l2_gate_test_pred[
+            l2_gate_test_pred == 1
+        ].index
+        hemo_pos_test_mask = (
+            y_hemo_gate_test.notna()
+            & X_test.index.isin(predicted_hemo_positive_idx)
+        )
 
-    hemo_pos_test_mask = (
-        y_hemo_gate_test.notna()
-        & X_test.index.isin(predicted_hemo_positive_idx)
-    )
+        cef_valid_train_mask = y_cef_train.notna() & hemo_pos_train_mask
+        cef_valid_test_mask = y_cef_test.notna() & hemo_pos_test_mask
 
-    print(
-        f"  Level 3: training on true hemoculture-positive rows "
-        f"({hemo_pos_train_mask.sum()} samples)"
-    )
+        cascade_gate_test_pred = l2_gate_test_pred
+        cascade_y_gate_test = y2_gate_test
+        cascade_gate_mode = "level2_gate_reused"
+        cascade_gate_proba = l2_gate_test_proba
 
-    print(
-        f"  Level 3: predicting resistance only for Level-2 "
-        f"predicted hemoculture-positive rows "
-        f"({hemo_pos_test_mask.sum()} samples)"
-    )
+        print(
+            f"  Level 3: training on true culture-positive rows "
+            f"({int(hemo_pos_train_mask.sum())} samples)"
+        )
+        print(
+            f"  Level 3: testing on Level-2 predicted culture-positive rows "
+            f"({int(hemo_pos_test_mask.sum())} samples)"
+        )
 
-    # ------------------------------------------------------------------
-    # Resistance target filtering
-    # ------------------------------------------------------------------
-    cef_valid_train_mask = (
-        y_cef_train.notna()
-        & hemo_pos_train_mask
-    )
+    elif resistance_mode == "resistance_gate":
+        # Independent Level-3 culture gate. This is intentionally separate
+        # from the Level-2 etiology workflow, so direct etiology can still be
+        # combined with gate-filtered resistance prediction.
+        l3_gate_target_train = working_df.loc[X_train.index, args.resistance_gate_target]
+        l3_gate_target_test = working_df.loc[X_test.index, args.resistance_gate_target]
+        gate_valid_train = l3_gate_target_train.notna()
+        gate_valid_test = l3_gate_target_test.notna()
 
-    cef_valid_test_mask = (
-        y_cef_test.notna()
-        & hemo_pos_test_mask
-    )
+        if not gate_valid_train.any():
+            raise ValueError(
+                "No non-null Level-3 resistance gate labels in train. "
+                f"Check --resistance-gate-target {args.resistance_gate_target!r}."
+            )
+        if not gate_valid_test.any():
+            raise ValueError(
+                "No non-null Level-3 resistance gate labels in test. "
+                f"Check --resistance-gate-target {args.resistance_gate_target!r}."
+            )
+
+        y3_gate_train = (
+            l3_gate_target_train.loc[gate_valid_train].astype(str)
+            != args.resistance_gate_negative_label
+        ).astype(int)
+        y3_gate_test = (
+            l3_gate_target_test.loc[gate_valid_test].astype(str)
+            != args.resistance_gate_negative_label
+        ).astype(int)
+
+        X3_gate_train_view, X3_gate_test_view = apply_feature_view(
+            X_train,
+            X_test,
+            view_name=stage_feature_views["level2_gate"],
+            view_config=feature_view_config,
+            stage_name="level3_resistance_gate",
+            output_dir=processing_dir,
+        )
+        X3_gate_train_base = X3_gate_train_view.loc[gate_valid_train].copy()
+        X3_gate_test_base = X3_gate_test_view.loc[gate_valid_test].copy()
+        X3_gate_train_base, X3_gate_test_base = apply_stage_correlation_filter(
+            X3_gate_train_base,
+            X3_gate_test_base,
+            max_corr=args.max_corr,
+            stage_name="level3_resistance_gate",
+            output_dir=processing_dir,
+        )
+
+        rank_model_l3_gate = _build_ranking_model(
+            args.model_type,
+            y3_gate_train,
+            args.random_state,
+        )
+        if args.skip_rfecv:
+            print("  Skipping RFECV for Level 3 resistance gate – using all features.")
+            l3_gate_shap_feats = X3_gate_train_base.columns.tolist()
+            l3_gate_rfecv_history = {}
+        else:
+            print("  Selecting Level 3 resistance-gate features by SHAP importance …")
+            l3_gate_shap_feats, l3_gate_rfecv_history = shap_rfecv(
+                rank_model_l3_gate,
+                X3_gate_train_base,
+                y3_gate_train,
+                min_features=1,
+                max_features=args.max_features,
+                scoring="pr_auc",
+                output_csv_path=(
+                    output_dir
+                    / "processing"
+                    / "l3_resistance_gate_rfecv_features.csv"
+                ),
+            )
+
+        l3_gate_features = cap_features(
+            l3_gate_shap_feats,
+            X3_gate_train_base,
+            y3_gate_train,
+            args.max_features,
+            args.random_state,
+            args.model_type,
+            rank_model=rank_model_l3_gate,
+        )
+
+        scaler_l3_gate = MinMaxScaler()
+        X3_gate_train_scaled = pd.DataFrame(
+            scaler_l3_gate.fit_transform(X3_gate_train_base[l3_gate_features]),
+            columns=l3_gate_features,
+            index=X3_gate_train_base.index,
+        )
+        X3_gate_test_scaled = pd.DataFrame(
+            scaler_l3_gate.transform(X3_gate_test_base[l3_gate_features]),
+            columns=l3_gate_features,
+            index=X3_gate_test_base.index,
+        )
+
+        sw_l3_gate = compute_balanced_sample_weight(
+            y3_gate_train,
+            w_train.reindex(y3_gate_train.index),
+        )
+        print("  Optimising independent Level 3 resistance gate model …")
+        l3_gate_params, l3_gate_threshold, l3_gate_study = _optimise_binary(
+            X=X3_gate_train_scaled,
+            y=y3_gate_train,
+            n_splits=args.cv_splits,
+            n_trials=args.binary_trials,
+            random_state=args.random_state,
+            sample_weight=sw_l3_gate,
+            model_type=args.model_type,
+            study_name=_study_name("l3_resistance_gate"),
+        )
+
+        l3_gate_base = build_binary_model(
+            args.model_type,
+            l3_gate_params.copy(),
+        )
+        l3_gate_model = _fit_stratified_calibrated_ensemble(
+            l3_gate_base,
+            X3_gate_train_scaled,
+            y3_gate_train,
+            n_splits=min(5, args.cv_splits),
+            random_state=args.random_state,
+            method="isotonic",
+            sample_weight=sw_l3_gate,
+        )
+
+        if not skip_shap_values:
+            save_shap_artifacts(
+                model=l3_gate_model,
+                X_train=X3_gate_train_scaled,
+                X_test=X3_gate_test_scaled,
+                feature_names=l3_gate_features,
+                explain_size=len(X3_gate_test_scaled),
+                output_dir=l3_dir / "shap",
+                stage_name="level3_resistance_gate",
+                class_names=["gate_negative", "gate_positive"],
+                random_state=args.random_state,
+            )
+
+        l3_gate_train_proba = pd.Series(
+            _generate_stratified_calibrated_oof_binary(
+                X=X3_gate_train_scaled,
+                y=y3_gate_train,
+                best_params=l3_gate_params,
+                model_type=args.model_type,
+                n_splits=args.cv_splits,
+                random_state=args.random_state,
+                sample_weight=sw_l3_gate,
+                method="isotonic",
+            ),
+            index=X3_gate_train_scaled.index,
+            name="l3_resistance_gate_proba",
+        )
+
+        l3_gate_optuna_threshold = l3_gate_threshold
+        resistance_gate_recall = getattr(
+            args,
+            "set_resistance_gate_recall",
+            None,
+        )
+
+        if resistance_gate_recall is not None:
+            if not 0.0 <= resistance_gate_recall <= 1.0:
+                raise ValueError(
+                    "--set-resistance-gate-recall must be between 0 and 1."
+                )
+            l3_gate_threshold = _find_threshold_for_recall(
+                y3_gate_train,
+                l3_gate_train_proba,
+                target_recall=resistance_gate_recall,
+            )
+            l3_gate_threshold_strategy = (
+                f"target_recall_{resistance_gate_recall}"
+            )
+        else:
+            l3_gate_threshold_strategy = "best_threshold"
+
+        l3_gate_test_proba = pd.Series(
+            l3_gate_model.predict_proba(X3_gate_test_scaled)[:, 1],
+            index=X3_gate_test_scaled.index,
+            name="l3_resistance_gate_proba",
+        )
+        l3_gate_test_pred = pd.Series(
+            (l3_gate_test_proba >= l3_gate_threshold).astype(int),
+            index=X3_gate_test_scaled.index,
+            name="l3_resistance_gate_pred",
+        )
+        l3_gate_train_pred = pd.Series(
+            (l3_gate_train_proba >= l3_gate_threshold).astype(int),
+            index=X3_gate_train_scaled.index,
+            name="l3_resistance_gate_pred",
+        )
+
+        l3_gate_f1 = f1_score(
+            y3_gate_test,
+            l3_gate_test_pred,
+            average="macro",
+            zero_division=0,
+        )
+        l3_gate_precision = precision_score(
+            y3_gate_test,
+            l3_gate_test_pred,
+            average="macro",
+            zero_division=0,
+        )
+        l3_gate_recall = recall_score(
+            y3_gate_test,
+            l3_gate_test_pred,
+            average="macro",
+            zero_division=0,
+        )
+        l3_gate_auc: Optional[float] = None
+        l3_gate_pr_auc: Optional[float] = None
+        if y3_gate_test.nunique() > 1:
+            l3_gate_auc = float(roc_auc_score(y3_gate_test, l3_gate_test_proba))
+            l3_gate_pr_auc = float(
+                average_precision_score(y3_gate_test, l3_gate_test_proba)
+            )
+
+        l3_gate_confusion = confusion_matrix(
+            y3_gate_test,
+            l3_gate_test_pred,
+            labels=[0, 1],
+        ).tolist()
+        l3_gate_pred_counts = {
+            "gate_negative": int((l3_gate_test_pred == 0).sum()),
+            "gate_positive": int((l3_gate_test_pred == 1).sum()),
+        }
+        l3_gate_true_counts = {
+            "gate_negative": int((y3_gate_test == 0).sum()),
+            "gate_positive": int((y3_gate_test == 1).sum()),
+        }
+
+        l3_gate_report_text = _format_report_with_confusion(
+            title="Level 3 Independent Resistance Gate Report",
+            report_label="Resistance gate",
+            report=classification_report(
+                y3_gate_test,
+                l3_gate_test_pred,
+                target_names=["gate_negative", "gate_positive"],
+                zero_division=0,
+            ),
+            confusion=l3_gate_confusion,
+            predicted_counts=l3_gate_pred_counts,
+            actual_counts=l3_gate_true_counts,
+            binary_labels=("gate_negative", "gate_positive"),
+        )
+        (l3_dir / f"report_resistance_gate_{args.etiology_gate_target}.txt").write_text(
+            l3_gate_report_text
+        )
+        l3_gate_study.trials_dataframe().to_csv(
+            l3_dir / "optuna_trials_resistance_gate.csv",
+            index=False,
+        )
+
+        l3_gate_pred_df = pd.DataFrame(
+            {
+                "true": y3_gate_test.values,
+                "pred": l3_gate_test_pred.values,
+                "proba": l3_gate_test_proba.values,
+            },
+            index=X3_gate_test_scaled.index,
+        )
+        l3_gate_pred_df["true_label"] = np.where(
+            l3_gate_pred_df["true"] == 1,
+            "gate_positive",
+            "gate_negative",
+        )
+        l3_gate_pred_df["pred_label"] = np.where(
+            l3_gate_pred_df["pred"] == 1,
+            "gate_positive",
+            "gate_negative",
+        )
+        l3_gate_pred_df["error_type"] = np.select(
+            [
+                (l3_gate_pred_df["true"] == 0)
+                & (l3_gate_pred_df["pred"] == 0),
+                (l3_gate_pred_df["true"] == 0)
+                & (l3_gate_pred_df["pred"] == 1),
+                (l3_gate_pred_df["true"] == 1)
+                & (l3_gate_pred_df["pred"] == 0),
+                (l3_gate_pred_df["true"] == 1)
+                & (l3_gate_pred_df["pred"] == 1),
+            ],
+            ["TN", "FP", "FN", "TP"],
+            default="NA",
+        )
+        l3_gate_pred_df["margin_from_threshold"] = (
+            l3_gate_pred_df["proba"] - l3_gate_threshold
+        )
+        l3_gate_pred_df["abs_margin_from_threshold"] = (
+            l3_gate_pred_df["margin_from_threshold"].abs()
+        )
+        l3_gate_pred_df = metadata_df.reindex(l3_gate_pred_df.index).join(
+            l3_gate_pred_df
+        )
+        l3_gate_pred_df.to_csv(
+            l3_dir / "predictions_resistance_gate.csv",
+            index_label="row_index",
+        )
+
+        hemo_pos_train_mask = (
+            y_hemo_gate_train.notna()
+            & (
+                y_hemo_gate_train.astype(str)
+                != args.etiology_gate_negative_label
+            )
+        )
+        hemo_pos_test_mask = (
+            y_hemo_gate_test.notna()
+            & X_test.index.isin(l3_gate_test_pred[l3_gate_test_pred == 1].index)
+        )
+
+        cef_valid_train_mask = y_cef_train.notna() & hemo_pos_train_mask
+        cef_valid_test_mask = y_cef_test.notna() & hemo_pos_test_mask
+
+        resistance_gate_summary = {
+            "negative_label": args.resistance_gate_negative_label,
+            "positive_label": f"not_{args.resistance_gate_negative_label}",
+            "params": l3_gate_params,
+            "optuna_threshold": l3_gate_optuna_threshold,
+            "threshold": l3_gate_threshold,
+            "threshold_strategy": l3_gate_threshold_strategy,
+            "macro_f1": l3_gate_f1,
+            "roc_auc": l3_gate_auc,
+            "pr_auc": l3_gate_pr_auc,
+            "precision": l3_gate_precision,
+            "recall": l3_gate_recall,
+            "predicted_true": l3_gate_pred_counts["gate_positive"],
+            "predicted_false": l3_gate_pred_counts["gate_negative"],
+            "real_true": l3_gate_true_counts["gate_positive"],
+            "real_false": l3_gate_true_counts["gate_negative"],
+            "confusion_matrix": l3_gate_confusion,
+            "shaprfecv_features": l3_gate_shap_feats,
+            "features": l3_gate_features,
+        }
+
+        cascade_gate_test_pred = l3_gate_test_pred
+        cascade_y_gate_test = y3_gate_test
+        cascade_gate_mode = "level3_resistance_gate"
+        cascade_gate_proba = l3_gate_test_proba
+
+        print(
+            f"  Level 3 resistance gate – Macro F1: {l3_gate_f1:.3f}"
+            + (f"  |  ROC-AUC: {l3_gate_auc:.3f}" if l3_gate_auc is not None else "")
+            + (f"  |  PR-AUC: {l3_gate_pr_auc:.3f}" if l3_gate_pr_auc is not None else "")
+            + f"  |  Precision: {l3_gate_precision:.3f}  |  Recall: {l3_gate_recall:.3f}"
+        )
+        print(
+            f"  Level 3: training resistance on true culture-positive rows "
+            f"({int(cef_valid_train_mask.sum())} valid resistance targets)"
+        )
+        print(
+            f"  Level 3: testing resistance on independent-gate predicted "
+            f"culture-positive rows ({int(cef_valid_test_mask.sum())} "
+            "valid resistance targets)"
+        )
+
+    elif resistance_mode == "direct":
+        # Fully independent direct resistance prediction.
+        cef_valid_train_mask = y_cef_train.notna()
+        cef_valid_test_mask = y_cef_test.notna()
+
+        print(
+            f"  Level 3: direct resistance training on all rows with valid "
+            f"target ({int(cef_valid_train_mask.sum())} samples)"
+        )
+        print(
+            f"  Level 3: direct resistance testing on all rows with valid "
+            f"target ({int(cef_valid_test_mask.sum())} samples)"
+        )
+
+    else:  # true_positive_only
+        hemo_pos_train_mask = (
+            y_hemo_gate_train.notna()
+            & (
+                y_hemo_gate_train.astype(str)
+                != args.etiology_gate_negative_label
+            )
+        )
+        hemo_pos_test_mask = (
+            y_hemo_gate_test.notna()
+            & (
+                y_hemo_gate_test.astype(str)
+                != args.etiology_gate_negative_label
+            )
+        )
+
+        cef_valid_train_mask = y_cef_train.notna() & hemo_pos_train_mask
+        cef_valid_test_mask = y_cef_test.notna() & hemo_pos_test_mask
+
+        print(
+            f"  Level 3: training on true culture-positive rows "
+            f"({int(cef_valid_train_mask.sum())} valid resistance targets)"
+        )
+        print(
+            f"  Level 3: testing on true culture-positive rows "
+            f"({int(cef_valid_test_mask.sum())} valid resistance targets)"
+        )
 
     if not cef_valid_train_mask.any():
         raise ValueError(
-            "No training rows with positive blood culture and valid Level-3 label. "
-            "Check that 'resultado_hemo_grouped', 'bmr_etiologia', and the chosen --cef-target are present."
+            f"No Level-3 training rows remain in resistance mode "
+            f"{resistance_mode!r} with a valid --cef-target."
+        )
+
+    if not cef_valid_test_mask.any():
+        raise ValueError(
+            f"No Level-3 test rows remain in resistance mode "
+            f"{resistance_mode!r} with a valid --cef-target."
         )
 
     # Direct Level-3 resistance model (no L3 binary gate):
@@ -1877,6 +2358,7 @@ def run_training(args: argparse.Namespace) -> None:
             X_train=X3_train_scaled,
             X_test=X3_test_scaled,
             feature_names=l3_features,
+            explain_size=len(X3_test_scaled),
             output_dir=l3_dir / "shap",
             stage_name="level3_cefalosporina",
             class_names=l3_target_names,
@@ -1910,8 +2392,9 @@ def run_training(args: argparse.Namespace) -> None:
         target_names=l3_target_names,
         zero_division=0,
     )
-    (l3_dir / "summary.json").write_text(json.dumps({
+    l3_summary_payload = {
         "mode": "direct_binary" if is_l3_binary else "direct_multiclass",
+        "resistance_mode": resistance_mode,
         "target": args.cef_target,
         "classes": l3_target_names,
         "params": l3_params,
@@ -1923,8 +2406,11 @@ def run_training(args: argparse.Namespace) -> None:
         "recall": l3_recall,
         "features": l3_features,
         "shaprfecv_features": l3_shap_feats,
-        "hemo_positive_filter": True,
-    }, indent=2))
+        "hemo_positive_filter": resistance_mode != "direct",
+    }
+    if resistance_gate_summary is not None:
+        l3_summary_payload["resistance_gate"] = resistance_gate_summary
+    (l3_dir / "summary.json").write_text(json.dumps(l3_summary_payload, indent=2))
     l3_study.trials_dataframe().to_csv(l3_dir / "optuna_trials.csv", index=False)
 
     l3_pred_df = pd.DataFrame(index=X3_test_scaled.index)
@@ -1976,6 +2462,7 @@ def run_training(args: argparse.Namespace) -> None:
 
     all_summaries["level3_cefalosporina"] = {
         "mode": "direct_binary" if is_l3_binary else "direct_multiclass",
+        "resistance_mode": resistance_mode,
         "target": args.cef_target,
         "macro_f1": l3_f1,
         "roc_auc": l3_auc,
@@ -1988,42 +2475,85 @@ def run_training(args: argparse.Namespace) -> None:
         "actual_counts": l3_true_counts,
         "confusion_matrix": l3_confusion,
     }
+    if resistance_gate_summary is not None:
+        all_summaries["level3_cefalosporina"]["resistance_gate"] = (
+            resistance_gate_summary
+        )
 
     all_summaries["l1_rfecv_scores"] = l1_rfecv_history
     all_summaries["l2_rfecv_scores"] = l2_rfecv_history
     all_summaries["l3_rfecv_scores"] = l3_rfecv_history
 
-    # End-to-end cascade accounting from all Level-2 gate-evaluable test admissions.
-    gate_eval_index = y2_gate_test.index
-    true_gate_positive = y2_gate_test.reindex(gate_eval_index).eq(1)
-    predicted_gate_positive = l2_gate_test_pred.reindex(gate_eval_index).eq(1)
-    cef_available = y_cef_test.reindex(gate_eval_index).notna()
-    resistant_label = None
-    resistant_detected_overall = None
-    resistant_total_overall = None
-    if is_l3_binary and len(l3_target_names) == 2:
-        resistant_label = l3_target_names[1]
-        true_resistant = y_cef_test.reindex(gate_eval_index).astype(str).eq(resistant_label) & cef_available
-        predicted_resistant = pd.Series(False, index=gate_eval_index)
-        predicted_resistant.loc[l3_pred_df.index] = l3_pred_df["pred"].eq(1).values
-        resistant_detected_overall = int((true_resistant & predicted_resistant).sum())
-        resistant_total_overall = int(true_resistant.sum())
+    # End-to-end cascade accounting is meaningful only when Level 3 uses a
+    # predicted culture-positive gate, either reused from Level 2 or trained
+    # independently for resistance.
+    if resistance_mode in {"gated", "resistance_gate"}:
+        if cascade_gate_test_pred is None or cascade_y_gate_test is None:
+            raise RuntimeError(
+                "Internal error: gate-based Level 3 mode did not populate "
+                "cascade gate predictions."
+            )
 
-    all_summaries["end_to_end_cascade"] = {
-        "gate_evaluable_admissions": int(len(gate_eval_index)),
-        "true_gate_positive": int(true_gate_positive.sum()),
-        "predicted_gate_positive": int(predicted_gate_positive.sum()),
-        "true_gate_positive_lost": int((true_gate_positive & ~predicted_gate_positive).sum()),
-        "gate_false_positives": int((~true_gate_positive & predicted_gate_positive).sum()),
-        "resistance_reference_available_after_gate": int((predicted_gate_positive & cef_available).sum()),
-        "resistant_label": resistant_label,
-        "resistant_cases_detected_end_to_end": resistant_detected_overall,
-        "resistant_cases_total_with_reference": resistant_total_overall,
-        "end_to_end_resistant_recall": (
-            resistant_detected_overall / resistant_total_overall
-            if resistant_total_overall not in (None, 0) else None
-        ),
-    }
+        gate_eval_index = cascade_y_gate_test.index
+        true_gate_positive = cascade_y_gate_test.reindex(gate_eval_index).eq(1)
+        predicted_gate_positive = (
+            cascade_gate_test_pred.reindex(gate_eval_index).eq(1)
+        )
+        cef_available = y_cef_test.reindex(gate_eval_index).notna()
+        resistant_label = None
+        resistant_detected_overall = None
+        resistant_total_overall = None
+
+        if is_l3_binary and len(l3_target_names) == 2:
+            resistant_label = l3_target_names[1]
+            true_resistant = (
+                y_cef_test.reindex(gate_eval_index)
+                .astype(str)
+                .eq(resistant_label)
+                & cef_available
+            )
+            predicted_resistant = pd.Series(False, index=gate_eval_index)
+            predicted_resistant.loc[l3_pred_df.index] = (
+                l3_pred_df["pred"].eq(1).values
+            )
+            resistant_detected_overall = int(
+                (true_resistant & predicted_resistant).sum()
+            )
+            resistant_total_overall = int(true_resistant.sum())
+
+        all_summaries["end_to_end_cascade"] = {
+            "mode": resistance_mode,
+            "gate_mode": cascade_gate_mode,
+            "gate_evaluable_admissions": int(len(gate_eval_index)),
+            "true_gate_positive": int(true_gate_positive.sum()),
+            "predicted_gate_positive": int(predicted_gate_positive.sum()),
+            "true_gate_positive_lost": int(
+                (true_gate_positive & ~predicted_gate_positive).sum()
+            ),
+            "gate_false_positives": int(
+                (~true_gate_positive & predicted_gate_positive).sum()
+            ),
+            "resistance_reference_available_after_gate": int(
+                (predicted_gate_positive & cef_available).sum()
+            ),
+            "resistant_label": resistant_label,
+            "resistant_cases_detected_end_to_end": resistant_detected_overall,
+            "resistant_cases_total_with_reference": resistant_total_overall,
+            "end_to_end_resistant_recall": (
+                resistant_detected_overall / resistant_total_overall
+                if resistant_total_overall not in (None, 0)
+                else None
+            ),
+        }
+    else:
+        all_summaries["end_to_end_cascade"] = {
+            "mode": resistance_mode,
+            "skipped": True,
+            "reason": (
+                "End-to-end gate cascade metrics are not applicable because "
+                "Level 3 resistance did not use predicted gate-positive rows."
+            ),
+        }
 
     # ------------------------------------------------------------------
     # Aggregate summary

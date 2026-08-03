@@ -87,6 +87,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     target_group.add_argument(
+        "--resistance-gate-target",
+        type=str,
+        default=targets.get("resistance_gate_target", targets["hemo_gate_target"]),
+        help=(
+            "Column name for the independent Level 3 resistance gate target. "
+            "Defaults to the Level 2 gate target for backward compatibility."
+        ),
+    )
+
+    target_group.add_argument(
+        "--resistance-gate-negative-label",
+        type=str,
+        default=targets.get("resistance_gate_negative_label", targets["hemo_gate_negative_label"]),
+        help="Label treated as gate-negative for the Level 3 resistance gate.",
+    )
+
+    target_group.add_argument(
         "--cef-target",
         type=str,
         default=targets["cef_target"],
@@ -135,16 +152,49 @@ def build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    l3_group = parser.add_argument_group("Level 3 resistance configuration")
+
+    l3_group.add_argument(
+        "--set-resistance-gate-recall",
+        type=float,
+        default=tcfg.get("set_resistance_gate_recall", None),
+        help=(
+            "Optional recall target for the independent Level 3 resistance-gate "
+            "threshold selection. If unset, the default threshold strategy is used."
+        ),
+    )
+
     l2_group.add_argument(
         "--etiology-stage2-mode",
         type=str,
         choices=["auto", "binary", "multiclass"],
         default=tcfg.get("hemo_stage2_mode", "auto"),
         help=(
-            "Level 2 Stage 2 subtype mode when using the two-stage gate. "
-            "auto = binary if exactly 2 labels otherwise multiclass; "
-            "binary = GNB vs non-GNB; "
+            "Level 2 Stage 2 subtype mode, also used for direct etiology when "
+            "--skip-l2-gate is set. "
+            "auto = keep target classes and use binary estimator only if exactly "
+            "2 labels; binary = GNB vs non-GNB; "
             "multiclass = predict all etiology classes."
+        ),
+    )
+
+    l3_group.add_argument(
+        "--resistance-mode",
+        type=str,
+        choices=["auto", "gated", "resistance_gate", "direct", "true_positive_only"],
+        default=tcfg.get("resistance_mode", "auto"),
+        help=(
+            "Population used for Level 3 resistance modelling. "
+            "auto = gated when the Level 2 gate is available, otherwise direct; "
+            "gated = train on true culture-positive rows and test on rows "
+            "predicted culture-positive by the existing Level 2 gate; "
+            "resistance_gate = train an independent infected +/- gate for "
+            "Level 3, then train resistance on true culture-positive rows and "
+            "test resistance on rows predicted positive by that Level 3 gate; "
+            "direct = train/test on all rows with a non-null resistance target, "
+            "independent of Level 2; "
+            "true_positive_only = train/test only on true culture-positive rows "
+            "without using predicted gate output."
         ),
     )
 
@@ -332,7 +382,7 @@ def main() -> None:
             shutil.rmtree(output_folder)
         raise
 
-    print(f"\nElapsed: {(time.time() - start) / 60:.1f} min")
+    print(f"\\nElapsed: {(time.time() - start) / 60:.1f} min")
 
 
 if __name__ == "__main__":
