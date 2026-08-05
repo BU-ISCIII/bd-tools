@@ -34,6 +34,7 @@
     "skip_level3": false,
     "skip_l2_gate": false,
     "l2_gate_proba_as_feature": false,
+    "level2_focuses": [],
     "set_gate_recall": null,
     "set_resistance_gate_recall": null,
     "hemo_stage2_mode": "auto"

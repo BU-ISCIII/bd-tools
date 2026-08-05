@@ -143,6 +143,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
 
     l2_group.add_argument(
+        "--level2-focus",
+        nargs="+",
+        default=tcfg.get("level2_focus", []),
+        help=(
+            "Optional foco allowlist for Level 2 etiology. "
+            "Use one or more foco labels, e.g. --level2-focus urinario "
+            "or --level2-focus urinario pulmonar."
+        ),
+    )
+
+    l2_group.add_argument(
         "--set-gate-recall",
         type=float,
         default=tcfg.get("set_gate_recall", None),

@@ -329,6 +329,22 @@ def _map_hemo_subtype_to_gnb_binary(target_series: pd.Series) -> pd.Series:
         name=target_series.name,
     )
 
+def _encode_gnb_binary(target_series: pd.Series) -> pd.Series:
+    return pd.Series(
+        np.where(target_series.str.contains("GNB", case=False, na=False), 1, 0),
+        index=target_series.index,
+        name=target_series.name,
+    )
+
+def _build_focus_mask(foco_series: pd.Series, allowed_focos: List[str]) -> pd.Series:
+    if not allowed_focos:
+        return pd.Series(True, index=foco_series.index)
+    allowed = {str(value).strip().casefold() for value in allowed_focos if str(value).strip()}
+    if not allowed:
+        return pd.Series(True, index=foco_series.index)
+    normalized = foco_series.astype("string").fillna("").str.casefold()
+    return normalized.isin(allowed)
+
 def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print("SELECTED ARGS:", args)
@@ -390,6 +406,8 @@ def run_training(args: argparse.Namespace) -> None:
     working_df = working_df[working_df[args.weight_column] > 0]
 
     available_metadata_cols = [c for c in METADATA_COLUMNS if c in working_df.columns]
+    if "foco" in working_df.columns and "foco" not in available_metadata_cols:
+        available_metadata_cols.append("foco")
     metadata_df = working_df[available_metadata_cols].copy()
 
     exclude_cols = all_targets.union(available_metadata_cols)
@@ -424,6 +442,7 @@ def run_training(args: argparse.Namespace) -> None:
     y_hemo_gate = working_df.loc[feature_df_raw.index, args.etiology_gate_target]
     y_cef = working_df.loc[feature_df_raw.index, args.cef_target]
     w = working_df.loc[feature_df_raw.index, args.weight_column]
+    foco = working_df.loc[feature_df_raw.index, "foco"] if "foco" in working_df.columns else pd.Series(index=feature_df_raw.index, dtype="object")
 
     (
         X_train, X_test,
@@ -432,6 +451,7 @@ def run_training(args: argparse.Namespace) -> None:
         y_hemo_gate_train, y_hemo_gate_test,
         y_cef_train, y_cef_test,
         w_train, w_test,
+        foco_train, foco_test,
     ) = train_test_split(
         feature_df_raw,
         y_sepsis,
@@ -439,6 +459,7 @@ def run_training(args: argparse.Namespace) -> None:
         y_hemo_gate,
         y_cef,
         w,
+        foco,
         test_size=args.test_size,
         random_state=args.random_state,
         stratify=y_sepsis,
@@ -494,6 +515,8 @@ def run_training(args: argparse.Namespace) -> None:
         y_cef_test.loc[X_test.index],
         w_test.loc[X_test.index],
     )
+    foco_train = foco_train.loc[X_train.index]
+    foco_test = foco_test.loc[X_test.index]
     print(f"Train: {len(X_train)} rows  |  Test: {len(X_test)} rows")
 
     # ------------------------------------------------------------------
@@ -815,11 +838,17 @@ def run_training(args: argparse.Namespace) -> None:
         print("=" * 60)
         l2_dir = output_dir / "level2_etiology"
         l2_dir.mkdir(exist_ok=True)
+        l2_focus_train_mask = _build_focus_mask(foco_train, args.level2_focus)
+        l2_focus_test_mask = _build_focus_mask(foco_test, args.level2_focus)
+        if args.level2_focus:
+            print(f"  Level 2 foco filter: {args.level2_focus}")
 
-        hemo_valid_train = y_hemo_train.notna()
-        hemo_valid_test = y_hemo_test.notna()
+        hemo_valid_train = y_hemo_train.notna() & l2_focus_train_mask
+        hemo_valid_test = y_hemo_test.notna() & l2_focus_test_mask
         if not hemo_valid_train.any():
-            raise ValueError("No non-null hemo labels in train.")
+            raise ValueError(
+                "No non-null hemo labels remain in train for Level 2 after foco filtering."
+            )
 
         if args.skip_l2_gate:
             # Direct etiology prediction including NEGATIVE as a class.
@@ -868,29 +897,54 @@ def run_training(args: argparse.Namespace) -> None:
                     "labels in the training subset."
                 )
 
-            le_l2 = LabelEncoder()
-            y2_train = pd.Series(
-                le_l2.fit_transform(y2_train_raw),
-                index=y2_train_raw.index,
-                name="hemo_enc",
-            )
-
-            test_mask = y2_test_raw.isin(le_l2.classes_)
-            X2_test_base = X2_test_base.loc[test_mask].copy()
-            y2_test_raw = y2_test_raw.loc[test_mask]
-            y2_test = pd.Series(
-                le_l2.transform(y2_test_raw),
-                index=y2_test_raw.index,
-                name="hemo_enc",
-            )
-
-            if X2_test_base.empty:
-                raise ValueError(
-                    "No test rows remain for Level 2 direct etiology after filtering to labels seen in training."
+            if direct_mode == "binary":
+                label_map = {"non_GNB": 0, "GNB": 1}
+                y2_train = pd.Series(
+                    y2_train_raw.map(label_map).astype(int),
+                    index=y2_train_raw.index,
+                    name="hemo_enc",
                 )
 
-            l2_target_names = [str(c) for c in le_l2.classes_]
-            is_binary_subtype = len(le_l2.classes_) == 2
+                test_mask = y2_test_raw.isin(label_map)
+                X2_test_base = X2_test_base.loc[test_mask].copy()
+                y2_test_raw = y2_test_raw.loc[test_mask]
+                y2_test = pd.Series(
+                    y2_test_raw.map(label_map).astype(int),
+                    index=y2_test_raw.index,
+                    name="hemo_enc",
+                )
+
+                if X2_test_base.empty:
+                    raise ValueError(
+                        "No test rows remain for Level 2 direct etiology after filtering to labels seen in training."
+                    )
+
+                l2_target_names = ["non_GNB", "GNB"]
+                is_binary_subtype = True
+            else:
+                le_l2 = LabelEncoder()
+                y2_train = pd.Series(
+                    le_l2.fit_transform(y2_train_raw),
+                    index=y2_train_raw.index,
+                    name="hemo_enc",
+                )
+
+                test_mask = y2_test_raw.isin(le_l2.classes_)
+                X2_test_base = X2_test_base.loc[test_mask].copy()
+                y2_test_raw = y2_test_raw.loc[test_mask]
+                y2_test = pd.Series(
+                    le_l2.transform(y2_test_raw),
+                    index=y2_test_raw.index,
+                    name="hemo_enc",
+                )
+
+                if X2_test_base.empty:
+                    raise ValueError(
+                        "No test rows remain for Level 2 direct etiology after filtering to labels seen in training."
+                    )
+
+                l2_target_names = [str(c) for c in le_l2.classes_]
+                is_binary_subtype = len(le_l2.classes_) == 2
 
             print(f"  Direct hemo etiology classes: {l2_target_names}")
             print(f"  Train rows: {len(X2_train_base)}  |  test rows: {len(X2_test_base)}")
@@ -986,7 +1040,7 @@ def run_training(args: argparse.Namespace) -> None:
                 else:
                     l2_auc = float(roc_auc_score(y2_test, l2_test_proba, multi_class="ovr", average="macro"))
                     l2_pr_auc = float(average_precision_score(
-                        label_binarize(y2_test, classes=np.arange(len(le_l2.classes_))),
+                        label_binarize(y2_test, classes=np.arange(len(l2_target_names))),
                         l2_test_proba,
                         average="macro"
                     ))
@@ -1009,10 +1063,10 @@ def run_training(args: argparse.Namespace) -> None:
                 labels=np.arange(len(l2_target_names)),
             ).tolist()
             l2_pred_counts = pd.Series(l2_test_pred).map(
-                {i: le_l2.classes_[i] for i in range(len(le_l2.classes_))}
+                {i: l2_target_names[i] for i in range(len(l2_target_names))}
             ).value_counts().to_dict()
             l2_true_counts = pd.Series(y2_test).map(
-                {i: le_l2.classes_[i] for i in range(len(le_l2.classes_))}
+                {i: l2_target_names[i] for i in range(len(l2_target_names))}
             ).value_counts().to_dict()
             l2_report_text = _format_report_with_confusion(
                 title="Level 2 Target Report",
@@ -1026,14 +1080,14 @@ def run_training(args: argparse.Namespace) -> None:
 
             stage_pred_df = pd.DataFrame(index=X2_test_scaled.index)
             stage_pred_df["true"] = y2_test.values
-            stage_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_test.values]
+            stage_pred_df["true_label"] = [l2_target_names[x] for x in y2_test.values]
             stage_pred_df["pred"] = l2_test_pred
-            stage_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
+            stage_pred_df["pred_label"] = [l2_target_names[x] for x in l2_test_pred]
 
             if is_binary_subtype:
                 stage_pred_df["proba_positive"] = l2_test_proba[:, 1]
             else:
-                for idx, class_name in enumerate(le_l2.classes_):
+                for idx, class_name in enumerate(l2_target_names):
                     stage_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
 
             stage_pred_counts = stage_pred_df["pred_label"].value_counts().to_dict()
@@ -1326,32 +1380,60 @@ def run_training(args: argparse.Namespace) -> None:
                     "Stage 2 binary mode requires both GNB and non-GNB labels in the training subset."
                 )
 
-            le_l2 = LabelEncoder()
-            y2_sub_train = pd.Series(
-                le_l2.fit_transform(y2_sub_train_raw),
-                index=y2_sub_train_raw.index,
-                name="hemo_sub_enc",
-            )
-
-            subtype_test_mask = subtype_test_mask & y2_sub_test_raw.isin(le_l2.classes_)
-
-            X2_sub_test_base = X2_sub_test_base.loc[subtype_test_mask].copy()
-
-            y2_sub_test_raw = y2_sub_test_raw.loc[subtype_test_mask].astype(str)
-            y2_sub_test = pd.Series(
-                le_l2.transform(y2_sub_test_raw),
-                index=y2_sub_test_raw.index,
-                name="hemo_sub_enc",
-            )
-
-            if X2_sub_test_base.empty:
-                raise ValueError(
-                    "No test rows for Level 2 Stage-2 subtype after filtering to labels seen in training. "
-                    "Verify the hemo target values and the train/test split."
+            if stage2_mode == "binary" and set(y2_sub_train_raw.unique()) <= {"GNB", "non_GNB"}:
+                label_map = {"non_GNB": 0, "GNB": 1}
+                y2_sub_train = pd.Series(
+                    y2_sub_train_raw.map(label_map).astype(int),
+                    index=y2_sub_train_raw.index,
+                    name="hemo_sub_enc",
                 )
 
-            l2_target_names = [str(c) for c in le_l2.classes_]
-            is_binary_subtype = len(le_l2.classes_) == 2
+                subtype_test_mask = subtype_test_mask & y2_sub_test_raw.isin(label_map)
+                X2_sub_test_base = X2_sub_test_base.loc[subtype_test_mask].copy()
+
+                y2_sub_test_raw = y2_sub_test_raw.loc[subtype_test_mask].astype(str)
+                y2_sub_test = pd.Series(
+                    y2_sub_test_raw.map(label_map).astype(int),
+                    index=y2_sub_test_raw.index,
+                    name="hemo_sub_enc",
+                )
+
+                if X2_sub_test_base.empty:
+                    raise ValueError(
+                        "No test rows for Level 2 Stage-2 subtype after filtering to labels seen in training. "
+                        "Verify the hemo target values and the train/test split."
+                    )
+
+                l2_target_names = ["non_GNB", "GNB"]
+            else:
+                le_l2 = LabelEncoder()
+                y2_sub_train = pd.Series(
+                    le_l2.fit_transform(y2_sub_train_raw),
+                    index=y2_sub_train_raw.index,
+                    name="hemo_sub_enc",
+                )
+
+                subtype_test_mask = subtype_test_mask & y2_sub_test_raw.isin(le_l2.classes_)
+
+                X2_sub_test_base = X2_sub_test_base.loc[subtype_test_mask].copy()
+
+                y2_sub_test_raw = y2_sub_test_raw.loc[subtype_test_mask].astype(str)
+                y2_sub_test = pd.Series(
+                    le_l2.transform(y2_sub_test_raw),
+                    index=y2_sub_test_raw.index,
+                    name="hemo_sub_enc",
+                )
+
+                if X2_sub_test_base.empty:
+                    raise ValueError(
+                        "No test rows for Level 2 Stage-2 subtype after filtering to labels seen in training. "
+                        "Verify the hemo target values and the train/test split."
+                    )
+
+                l2_target_names = [str(c) for c in le_l2.classes_]
+                is_binary_subtype = len(le_l2.classes_) == 2
+            if stage2_mode == "binary" and set(y2_sub_train_raw.unique()) <= {"GNB", "non_GNB"}:
+                is_binary_subtype = True
 
             print(f"  Positive hemo classes: {l2_target_names}")
             print(f"  Stage-2 train rows: {len(X2_sub_train_base)}  |  test rows: {len(X2_sub_test_base)}")
@@ -1516,14 +1598,14 @@ def run_training(args: argparse.Namespace) -> None:
 
             stage2_pred_df = pd.DataFrame(index=X2_test_scaled.index)
             stage2_pred_df["true"] = y2_sub_test.values
-            stage2_pred_df["true_label"] = [le_l2.classes_[x] for x in y2_sub_test.values]
+            stage2_pred_df["true_label"] = [l2_target_names[x] for x in y2_sub_test.values]
             stage2_pred_df["pred"] = l2_test_pred
-            stage2_pred_df["pred_label"] = [le_l2.classes_[x] for x in l2_test_pred]
+            stage2_pred_df["pred_label"] = [l2_target_names[x] for x in l2_test_pred]
 
             if is_binary_subtype:
                 stage2_pred_df["proba_positive"] = l2_test_proba[:, 1]
             else:
-                for idx, class_name in enumerate(le_l2.classes_):
+                for idx, class_name in enumerate(l2_target_names):
                     stage2_pred_df[f"proba_{class_name}"] = l2_test_proba[:, idx]
 
             stage2_pred_counts = stage2_pred_df["pred_label"].value_counts().to_dict()

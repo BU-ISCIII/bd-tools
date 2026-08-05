@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Plot model results, evaluation curves, confusion matrices and processing summaries.
 
-This template is intended for analysis runs like:
+This template is intended for an analysis directory containing one or more
+model-training runs like:
+
   01-training_5756602/
     level1_sepsis/
     level2_etiology/
     level3_cefalosporina/
     processing/
 
-It collects prediction files and summary JSON files, then writes plots under
-<run_dir>/plots/.
+  01-training_5756741/
+    ...
+
+When the supplied path is a parent directory, every immediate child directory
+whose name begins with ``01-`` is processed independently. Plots are written
+under each ``<run_dir>/plots/`` directory.
 """
 
 from __future__ import annotations
@@ -1360,6 +1366,34 @@ def collect_prediction_files(run_dir: Path) -> list[Path]:
     return sorted(run_dir.rglob("predictions*.csv"))
 
 
+def discover_run_directories(root_dir: Path, run_prefix: str = "01-") -> list[Path]:
+    """Return model-training run directories below ``root_dir``.
+
+    If ``root_dir`` itself starts with the requested prefix, it is treated as
+    one run. Otherwise, only immediate child directories starting with the
+    prefix are returned. Restricting discovery to immediate children prevents
+    nested result folders from being processed more than once.
+    """
+    root_dir = root_dir.expanduser().resolve()
+
+    if not root_dir.exists():
+        raise FileNotFoundError(f"Run root not found: {root_dir}")
+    if not root_dir.is_dir():
+        raise NotADirectoryError(f"Run root is not a directory: {root_dir}")
+
+    if root_dir.name.startswith(run_prefix):
+        return [root_dir]
+
+    return sorted(
+        (
+            path.resolve()
+            for path in root_dir.iterdir()
+            if path.is_dir() and path.name.startswith(run_prefix)
+        ),
+        key=lambda path: path.name,
+    )
+
+
 def run_plotting(run_dir: Path, plots_dir: Path) -> Path:
     run_dir = run_dir.resolve()
     plots_dir = plots_dir.resolve()
@@ -1427,21 +1461,99 @@ def run_plotting(run_dir: Path, plots_dir: Path) -> Path:
     return manifest_path
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Plot model evaluation results and processing reports.")
-    parser.add_argument("--run-dir", nargs="?", default=None, help="Path to the run directory containing level*/ and processing/ subfolders.")
-    parser.add_argument("--plots-dir", default=None, help="Output directory for plots. Default is <run_dir>/plots.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Plot model evaluation results and processing reports for every "
+            "model-training folder matching a run prefix."
+        )
+    )
+    parser.add_argument(
+        "--run-dir",
+        default=".",
+        help=(
+            "Parent directory containing run folders, or one individual run "
+            "directory. Default: current directory."
+        ),
+    )
+    parser.add_argument(
+        "--run-prefix",
+        default="01-",
+        help="Prefix used to discover run directories. Default: 01-.",
+    )
+    parser.add_argument(
+        "--plots-dir",
+        default=None,
+        help=(
+            "Optional plot output path. For one run, this is the exact output "
+            "directory. For multiple runs, one subdirectory per run is "
+            "created below it. Default: <run_dir>/plots for every run."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    run_dir = Path(args.run_dir).expanduser().resolve()
-    if not run_dir.exists():
-        raise FileNotFoundError(f"Run directory not found: {run_dir}")
-    plots_dir = Path(args.plots_dir).expanduser().resolve() if args.plots_dir else run_dir / "plots"
-    manifest_path = run_plotting(run_dir, plots_dir)
-    print(f"Saved plots to {plots_dir}")
-    print(f"Saved plot manifest to {manifest_path}")
+    root_dir = Path(args.run_dir).expanduser().resolve()
+    run_dirs = discover_run_directories(root_dir, args.run_prefix)
+
+    if not run_dirs:
+        raise FileNotFoundError(
+            f"No immediate child directories starting with "
+            f"{args.run_prefix!r} were found in {root_dir}"
+        )
+
+    shared_plots_root = (
+        Path(args.plots_dir).expanduser().resolve()
+        if args.plots_dir
+        else None
+    )
+    multiple_runs = len(run_dirs) > 1
+    completed: list[tuple[Path, Path, Path]] = []
+    failed: list[tuple[Path, str]] = []
+
+    print(
+        f"Found {len(run_dirs)} model-training run(s) matching "
+        f"{args.run_prefix!r} in {root_dir}"
+    )
+    for run_dir in run_dirs:
+        print(f"\n{'=' * 72}\nProcessing run: {run_dir.name}\n{'=' * 72}")
+
+        if shared_plots_root is None:
+            plots_dir = run_dir / "plots"
+        elif multiple_runs:
+            plots_dir = shared_plots_root / run_dir.name
+        else:
+            plots_dir = shared_plots_root
+
+        try:
+            manifest_path = run_plotting(run_dir, plots_dir)
+        except Exception as exc:
+            failed.append((run_dir, str(exc)))
+            print(f"Failed to plot {run_dir}: {exc}")
+            continue
+
+        completed.append((run_dir, plots_dir, manifest_path))
+        print(f"Saved plots to {plots_dir}")
+        print(f"Saved plot manifest to {manifest_path}")
+
+    print(f"\n{'=' * 72}\nPLOTTING SUMMARY\n{'=' * 72}")
+    print(f"Runs discovered : {len(run_dirs)}")
+    print(f"Runs completed  : {len(completed)}")
+    print(f"Runs failed     : {len(failed)}")
+
+    for run_dir, plots_dir, manifest_path in completed:
+        print(f"  OK     {run_dir.name}")
+        print(f"         plots:    {plots_dir}")
+        print(f"         manifest: {manifest_path}")
+
+    for run_dir, error in failed:
+        print(f"  FAILED {run_dir.name}: {error}")
+
+    if failed:
+        raise RuntimeError(
+            f"Plotting failed for {len(failed)} of {len(run_dirs)} runs."
+        )
 
 
 if __name__ == "__main__":
