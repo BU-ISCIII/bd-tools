@@ -8,6 +8,7 @@ from .models import (
     _fit_model,
     _find_best_threshold,
 )
+from sqlalchemy.pool import NullPool
 
 _ALGO_PARAMS = algorithm_params()
 _SEARCH_SPACES = optuna_search_spaces()

@@ -668,7 +668,11 @@ def infer_labels(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     if "true_label" in df.columns and "pred_label" in df.columns:
         y_true = df["true_label"].astype(str).to_numpy()
         y_pred = df["pred_label"].astype(str).to_numpy()
-        labels = sorted(np.unique(np.concatenate([y_true, y_pred])).tolist())
+        raw_labels = list(dict.fromkeys(np.concatenate([y_true, y_pred]).tolist()))
+        if set(raw_labels) == {"GNB", "non_GNB"}:
+            labels = ["non_GNB", "GNB"]
+        else:
+            labels = raw_labels
     else:
         y_true = df["true"].to_numpy().astype(int)
         y_pred = df["pred"].to_numpy().astype(int)
@@ -676,12 +680,60 @@ def infer_labels(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
     return y_true, y_pred, labels
 
 
-def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    if "proba" in df.columns:
-        return df["proba"].to_numpy().astype(float), np.array(labels)
+def infer_positive_label(labels: list[str], context_name: str) -> str | int:
+    """Infer the clinically meaningful positive class for a binary target."""
+    if len(labels) != 2:
+        return labels[-1]
 
+    context = context_name.lower()
+    normalised = {
+        str(label).lower().replace("_", "").replace("-", "").replace(" ", ""): label
+        for label in labels
+    }
+
+    # Numeric / boolean encodings: class 1 is positive.
+    for key in ("1", "true", "yes", "positive"):
+        if key in normalised:
+            return normalised[key]
+
+    # Level 1: sepsis is the positive outcome.
+    if "sepsis" in context or "level1" in context:
+        for key, original in normalised.items():
+            if key in {"sepsis", "withsepsis"} or ("sepsis" in key and "no" not in key and "non" not in key):
+                return original
+
+    # Level 3: antimicrobial resistance is the positive outcome.
+    if any(token in context for token in ("level3", "resist", "cefalospor")):
+        for key, original in normalised.items():
+            if (
+                key in {"r", "resistant", "resistente", "resistance", "resistencia"}
+                or "resist" in key
+            ) and not any(neg in key for neg in ("nonresist", "noresist", "suscept", "sensible")):
+                return original
+
+    # Level 2 gate/subtype defaults.
+    if any(token in context for token in ("stage1", "gate")):
+        for key, original in normalised.items():
+            if key in {"cultivo+", "cultivopositivo", "gatepositive", "positive"} or "positive" in key:
+                return original
+    if any(token in context for token in ("stage2", "subtype", "gnb")):
+        for key, original in normalised.items():
+            if key == "gnb":
+                return original
+
+    return labels[-1]
+
+
+def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.ndarray]:
     if "proba_positive" in df.columns:
+        # Explicitly exported positive-class probability; never invert it.
         return df["proba_positive"].to_numpy().astype(float), np.array(labels)
+
+    if "proba" in df.columns:
+        # The generic ``proba`` column is ambiguous: some exports contain the
+        # probability of class 0, while the plotting code evaluates class 1.
+        # Its orientation is resolved later from the saved predicted labels.
+        return df["proba"].to_numpy().astype(float), np.array(labels)
 
     prob_cols = [
         c for c in df.columns
@@ -693,6 +745,51 @@ def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.nd
         return df[prob_cols].to_numpy().astype(float), np.array(class_names)
 
     return np.array([]), np.array(labels)
+
+
+def orient_binary_score_to_positive_class(
+    y_true: np.ndarray,
+    positive_label: str | int,
+    y_score: np.ndarray,
+    source_name: str,
+    score_source: str,
+) -> np.ndarray:
+    """Ensure a one-dimensional binary score represents P(positive class).
+
+    Binary prediction exports are not consistent: columns named ``proba`` or
+    even ``proba_positive`` may contain the probability of the first estimator
+    class rather than the clinically positive outcome. The orientation is
+    resolved against ``y_true`` for the explicitly selected positive label.
+
+    When the score is the complement of the positive-class probability, its
+    ROC AUC is below 0.5. In that case ``1 - score`` is used. This changes only
+    probability orientation; predicted labels and confusion matrices are not
+    modified.
+    """
+    if y_score.ndim != 1 or y_score.size == 0:
+        return y_score
+
+    y_binary = (np.asarray(y_true).astype(str) == str(positive_label)).astype(int)
+    if np.unique(y_binary).size < 2:
+        return y_score
+
+    finite = np.isfinite(y_score)
+    if finite.sum() == 0 or np.unique(y_binary[finite]).size < 2:
+        return y_score
+
+    score_auc = float(roc_auc_score(y_binary[finite], y_score[finite]))
+    if score_auc < 0.5:
+        print(
+            f"Inverting {score_source} for {source_name}: raw ROC-AUC={score_auc:.4f} "
+            f"for positive class {positive_label!r}; using 1 - score"
+        )
+        return 1.0 - y_score
+
+    print(
+        f"Keeping {score_source} for {source_name}: ROC-AUC={score_auc:.4f} "
+        f"for positive class {positive_label!r}"
+    )
+    return y_score
 
 
 def _json_safe(value: Any) -> Any:
@@ -770,6 +867,7 @@ def compute_prediction_metrics(
     labels: list[str],
     y_score: np.ndarray,
     class_names: np.ndarray,
+    positive_label: str | int | None = None,
 ) -> dict[str, Any]:
     cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
     report = classification_report(
@@ -788,7 +886,8 @@ def compute_prediction_metrics(
     }
 
     if y_score.size and y_score.ndim == 1 and len(labels) == 2:
-        positive_label = labels[-1]
+        if positive_label is None:
+            positive_label = labels[-1]
         y_binary = np.array([1 if y == positive_label else 0 for y in y_true])
         if np.unique(y_binary).size == 2:
             fpr, tpr, _ = roc_curve(y_binary, y_score)
@@ -849,12 +948,28 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
     plot_prefix = level_name if not base_name else f"{level_name}_{base_name}"
 
     y_true, y_pred, labels = infer_labels(df)
+    context_name = f"{prediction_path.parent.name}_{base_name}"
+    positive_label = infer_positive_label(labels, context_name)
     y_score, class_names = infer_scores(df, labels)
+    if y_score.size and y_score.ndim == 1:
+        if "proba_positive" in df.columns:
+            score_source = "proba_positive"
+        elif "proba" in df.columns:
+            score_source = "proba"
+        else:
+            score_source = "binary probability score"
+        y_score = orient_binary_score_to_positive_class(
+            y_true=y_true,
+            positive_label=positive_label,
+            y_score=y_score,
+            source_name=str(prediction_path),
+            score_source=score_source,
+        )
 
     cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
     plot_confusion(
         cmatrix,
-        display_labels_for_context(labels, f"{prediction_path.parent.name}_{base_name}"),
+        display_labels_for_context(labels, context_name),
         out_dir / f"{plot_prefix}_confusion_matrix.png",
     )
 
@@ -863,7 +978,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
             y_true=y_true,
             y_score=y_score,
             output_prefix=out_dir / Path(plot_prefix),
-            positive_label=labels[-1],
+            positive_label=positive_label,
         )
     elif y_score.size and y_score.ndim == 2:
         if y_score.shape[1] == 1:
@@ -871,7 +986,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
                 y_true=y_true,
                 y_score=y_score[:, 0],
                 output_prefix=out_dir / Path(plot_prefix),
-                positive_label=labels[-1],
+                positive_label=positive_label,
             )
         else:
             plot_multiclass_curves(
@@ -887,6 +1002,7 @@ def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
         labels=labels,
         y_score=y_score,
         class_names=class_names,
+        positive_label=positive_label,
     )
     true_col = "true_label" if "true_label" in df.columns else "true"
     metrics["label_distribution"] = {

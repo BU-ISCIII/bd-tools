@@ -600,7 +600,7 @@ def run_training(args: argparse.Namespace) -> None:
 
 
     # ==================================================================
-    # LEVEL 1 – sepsis
+    # LEVEL 1 â€“ sepsis
     # ==================================================================
     if args.skip_level1:
         print("\n" + "=" * 60)
@@ -646,11 +646,11 @@ def run_training(args: argparse.Namespace) -> None:
 
         rank_model_l1 = _build_ranking_model(args.model_type, y_sep_train_enc, args.random_state)
         if args.skip_rfecv:
-            print("  Skipping RFECV for Level 1 – using all features.")
+            print("  Skipping RFECV for Level 1 â€“ using all features.")
             selected_features = X1_train_base.columns.tolist()
             l1_rfecv_history = {}
         else:
-            print("  Selecting Level 1 features by SHAP importance …")
+            print("  Selecting Level 1 features by SHAP importance â€¦")
             selected_features, l1_rfecv_history = shap_rfecv(
                 rank_model_l1, X1_train_base, y_sep_train_enc, min_features=1, max_features=args.max_features, scoring="pr_auc",
                 output_csv_path=output_dir / "processing" / "l1_rfecv_features.csv",
@@ -671,7 +671,7 @@ def run_training(args: argparse.Namespace) -> None:
             columns=l1_features, index=X_test.index,
         )
 
-        print("  Optimising Level 1 model …")
+        print("  Optimising Level 1 model â€¦")
         l1_params, l1_threshold, l1_study = _optimise_binary(
             X=X_l1_train, y=y_sep_train_enc,
             n_splits=args.cv_splits,
@@ -722,7 +722,7 @@ def run_training(args: argparse.Namespace) -> None:
         l1_precision = precision_score(y_sep_test_enc, l1_test_pred, average="macro", zero_division=0)
         l1_recall = recall_score(y_sep_test_enc, l1_test_pred, average="macro", zero_division=0)
         print(
-            f"  Level 1 – Macro F1: {l1_f1:.3f}  |  ROC-AUC: {l1_auc:.3f}  |  PR-AUC: {l1_pr_auc:.3f}"
+            f"  Level 1 â€“ Macro F1: {l1_f1:.3f}  |  ROC-AUC: {l1_auc:.3f}  |  PR-AUC: {l1_pr_auc:.3f}"
             f"  |  Precision: {l1_precision:.3f}  |  Recall: {l1_recall:.3f}"
         )
 
@@ -820,7 +820,7 @@ def run_training(args: argparse.Namespace) -> None:
             )
 
     # ==================================================================
-    # LEVEL 2 – two-stage binary hemo model
+    # LEVEL 2 â€“ two-stage binary hemo model
     # ==================================================================
     if args.skip_level2:
         print("\n" + "=" * 60)
@@ -841,7 +841,15 @@ def run_training(args: argparse.Namespace) -> None:
         l2_focus_train_mask = _build_focus_mask(foco_train, args.level2_focus)
         l2_focus_test_mask = _build_focus_mask(foco_test, args.level2_focus)
         if args.level2_focus:
-            print(f"  Level 2 foco filter: {args.level2_focus}")
+            print(
+                "  Level 2 pre-gate/direct foco hard filter: "
+                f"{args.level2_focus}"
+            )
+            print(
+                "  Rows retained by foco filter â€“ "
+                f"train: {int(l2_focus_train_mask.sum())}/{len(l2_focus_train_mask)}"
+                f"  |  test: {int(l2_focus_test_mask.sum())}/{len(l2_focus_test_mask)}"
+            )
 
         hemo_valid_train = y_hemo_train.notna() & l2_focus_train_mask
         hemo_valid_test = y_hemo_test.notna() & l2_focus_test_mask
@@ -951,11 +959,11 @@ def run_training(args: argparse.Namespace) -> None:
 
             rank_model_l2 = _build_ranking_model(args.model_type, y2_train, args.random_state)
             if args.skip_rfecv:
-                print("  Skipping RFECV for Level 2 direct etiology – using all features.")
+                print("  Skipping RFECV for Level 2 direct etiology â€“ using all features.")
                 l2_shap_feats = X2_train_base.columns.tolist()
                 l2_rfecv_history = {}
             else:
-                print("  Selecting Level 2 direct etiology features by SHAP importance …")
+                print("  Selecting Level 2 direct etiology features by SHAP importance â€¦")
                 l2_shap_feats, l2_rfecv_history = shap_rfecv(
                     rank_model_l2, X2_train_base, y2_train, min_features=1, max_features=args.max_features, scoring="pr_auc",
                     output_csv_path=output_dir / "processing" / "l2_direct_rfecv_features.csv",
@@ -977,7 +985,7 @@ def run_training(args: argparse.Namespace) -> None:
             )
 
             sw_l2 = compute_balanced_sample_weight(y2_train, w_train.reindex(y2_train.index))
-            print("  Optimising Level 2 direct etiology model …")
+            print("  Optimising Level 2 direct etiology model â€¦")
             if is_binary_subtype:
                 l2_params, l2_threshold, l2_study = _optimise_binary(
                     X=X2_train_scaled, y=y2_train,
@@ -1051,7 +1059,7 @@ def run_training(args: argparse.Namespace) -> None:
                 zero_division=0,
             )
             print(
-                f"  Level 2 direct etiology – Macro F1: {l2_f1:.3f}"
+                f"  Level 2 direct etiology â€“ Macro F1: {l2_f1:.3f}"
                 + (f"  |  ROC-AUC: {l2_auc:.3f}" if l2_auc is not None else "")
                 + (f"  |  PR-AUC: {l2_pr_auc:.3f}" if l2_pr_auc is not None else "")
                 + f"  |  Precision: {l2_precision:.3f}  |  Recall: {l2_recall:.3f}"
@@ -1189,9 +1197,30 @@ def run_training(args: argparse.Namespace) -> None:
                 )
 
         else:
-            # Stage 1: binary gate using separate gate target (e.g. infected_yes_no)
-            hemo_gate_valid_train = y_hemo_gate_train.notna()
-            hemo_gate_valid_test = y_hemo_gate_test.notna()
+            # Stage 1: binary gate using the separate gate target
+            # (e.g. infected_yes_no). Apply the optional foco hard filter
+            # before fitting or evaluating the gate, so a urinary-only run
+            # has a urinary-only gate and urinary-only Stage 2.
+            hemo_gate_valid_train = (
+                y_hemo_gate_train.notna()
+                & l2_focus_train_mask
+            )
+            hemo_gate_valid_test = (
+                y_hemo_gate_test.notna()
+                & l2_focus_test_mask
+            )
+
+            if not hemo_gate_valid_train.any():
+                raise ValueError(
+                    "No non-null gate labels remain in train after the "
+                    "Level-2 foco hard filter."
+                )
+            if not hemo_gate_valid_test.any():
+                raise ValueError(
+                    "No non-null gate labels remain in test after the "
+                    "Level-2 foco hard filter."
+                )
+
             y2_gate_train = (
                 y_hemo_gate_train.loc[hemo_gate_valid_train].astype(str) != args.etiology_gate_negative_label
             ).astype(int)
@@ -1199,6 +1228,18 @@ def run_training(args: argparse.Namespace) -> None:
             y2_gate_test = (
                 y_hemo_gate_test.loc[gate_test_mask].astype(str) != args.etiology_gate_negative_label
             ).astype(int)
+
+            if y2_gate_train.nunique() < 2:
+                raise ValueError(
+                    "The Level-2 gate requires both gate-negative and "
+                    "gate-positive training rows after foco filtering."
+                )
+            if y2_gate_test.nunique() < 2:
+                raise ValueError(
+                    "The Level-2 gate test subset contains only one class "
+                    "after foco filtering, so gate metrics cannot be "
+                    "evaluated reliably."
+                )
 
             X2_gate_train_view, X2_gate_test_view = apply_feature_view(
                 X_train, X_test,
@@ -1218,11 +1259,11 @@ def run_training(args: argparse.Namespace) -> None:
 
             rank_model_l2_gate = _build_ranking_model(args.model_type, y2_gate_train, args.random_state)
             if args.skip_rfecv:
-                print("  Skipping RFECV for Level 2 Stage-1 – using all features.")
+                print("  Skipping RFECV for Level 2 Stage-1 â€“ using all features.")
                 l2_gate_shap_feats = X2_gate_train_base.columns.tolist()
                 l2_gate_rfecv_history = {}
             else:
-                print("  Selecting Level 2 Stage-1 features by SHAP importance …")
+                print("  Selecting Level 2 Stage-1 features by SHAP importance â€¦")
                 l2_gate_shap_feats, l2_gate_rfecv_history = shap_rfecv(
                     rank_model_l2_gate, X2_gate_train_base, y2_gate_train, min_features=1, max_features=args.max_features, scoring="pr_auc",
                     output_csv_path=output_dir / "processing" / "l2_gate_rfecv_features.csv",
@@ -1243,7 +1284,7 @@ def run_training(args: argparse.Namespace) -> None:
             )
 
             sw_l2_gate = compute_balanced_sample_weight(y2_gate_train, w_train.reindex(y2_gate_train.index))
-            print("  Optimising Level 2 Stage-1 binary gate model …")
+            print("  Optimising Level 2 Stage-1 binary gate model â€¦")
             l2_gate_params, l2_gate_threshold, l2_gate_study = _optimise_binary(
                 X=X2_gate_train_scaled, y=y2_gate_train,
                 n_splits=args.cv_splits,
@@ -1440,11 +1481,11 @@ def run_training(args: argparse.Namespace) -> None:
 
             rank_model_l2_sub = _build_ranking_model(args.model_type, y2_sub_train, args.random_state)
             if args.skip_rfecv:
-                print("  Skipping RFECV for Level 2 Stage-2 – using all features.")
+                print("  Skipping RFECV for Level 2 Stage-2 â€“ using all features.")
                 l2_shap_feats = X2_sub_train_base.columns.tolist()
                 l2_rfecv_history = {}
             else:
-                print("  Selecting Level 2 Stage-2 features by SHAP importance …")
+                print("  Selecting Level 2 Stage-2 features by SHAP importance â€¦")
                 l2_shap_feats, l2_rfecv_history = shap_rfecv(
                     rank_model_l2_sub, X2_sub_train_base, y2_sub_train, min_features=1, max_features=args.max_features, scoring="pr_auc",
                     output_csv_path=output_dir / "processing" / "l2_sub_rfecv_features.csv",
@@ -1466,7 +1507,7 @@ def run_training(args: argparse.Namespace) -> None:
             )
 
             sw_l2 = compute_balanced_sample_weight(y2_sub_train, w_train.reindex(y2_sub_train.index))
-            print("  Optimising Level 2 Stage-2 subtype model …")
+            print("  Optimising Level 2 Stage-2 subtype model â€¦")
             if is_binary_subtype:
                 l2_params, l2_threshold, l2_study = _optimise_binary(
                     X=X2_train_scaled, y=y2_sub_train,
@@ -1554,13 +1595,13 @@ def run_training(args: argparse.Namespace) -> None:
                 zero_division=0,
             )
             print(
-                f"  Level 2 Stage-1 gate – Macro F1: {l2_gate_f1:.3f}"
+                f"  Level 2 Stage-1 gate â€“ Macro F1: {l2_gate_f1:.3f}"
                 + (f"  |  ROC-AUC: {l2_gate_auc:.3f}" if l2_gate_auc is not None else "")
                 + (f"  |  PR-AUC: {l2_gate_pr_auc:.3f}" if l2_gate_pr_auc is not None else "")
                 + f"  |  Precision: {l2_gate_precision:.3f}  |  Recall: {l2_gate_recall:.3f}"
             )
             print(
-                f"  Level 2 Stage-2 subtype – Macro F1: {l2_f1:.3f}"
+                f"  Level 2 Stage-2 subtype â€“ Macro F1: {l2_f1:.3f}"
                 + (f"  |  ROC-AUC: {l2_auc:.3f}" if l2_auc is not None else "")
                 + (f"  |  PR-AUC: {l2_pr_auc:.3f}" if l2_pr_auc is not None else "")
                 + f"  |  Precision: {l2_precision:.3f}  |  Recall: {l2_recall:.3f}"
@@ -1797,7 +1838,7 @@ def run_training(args: argparse.Namespace) -> None:
             all_summaries["l2_stage2_rfecv_scores"] = l2_rfecv_history
 
     # ==================================================================
-    # LEVEL 3 – resistente_cefalosporina
+    # LEVEL 3 â€“ resistente_cefalosporina
     # ==================================================================
     print("\n" + "=" * 60)
     print("LEVEL 3: resistente_cefalosporina")
@@ -1965,11 +2006,11 @@ def run_training(args: argparse.Namespace) -> None:
             args.random_state,
         )
         if args.skip_rfecv:
-            print("  Skipping RFECV for Level 3 resistance gate – using all features.")
+            print("  Skipping RFECV for Level 3 resistance gate â€“ using all features.")
             l3_gate_shap_feats = X3_gate_train_base.columns.tolist()
             l3_gate_rfecv_history = {}
         else:
-            print("  Selecting Level 3 resistance-gate features by SHAP importance …")
+            print("  Selecting Level 3 resistance-gate features by SHAP importance â€¦")
             l3_gate_shap_feats, l3_gate_rfecv_history = shap_rfecv(
                 rank_model_l3_gate,
                 X3_gate_train_base,
@@ -2010,7 +2051,7 @@ def run_training(args: argparse.Namespace) -> None:
             y3_gate_train,
             w_train.reindex(y3_gate_train.index),
         )
-        print("  Optimising independent Level 3 resistance gate model …")
+        print("  Optimising independent Level 3 resistance gate model â€¦")
         l3_gate_params, l3_gate_threshold, l3_gate_study = _optimise_binary(
             X=X3_gate_train_scaled,
             y=y3_gate_train,
@@ -2253,7 +2294,7 @@ def run_training(args: argparse.Namespace) -> None:
         cascade_gate_proba = l3_gate_test_proba
 
         print(
-            f"  Level 3 resistance gate – Macro F1: {l3_gate_f1:.3f}"
+            f"  Level 3 resistance gate â€“ Macro F1: {l3_gate_f1:.3f}"
             + (f"  |  ROC-AUC: {l3_gate_auc:.3f}" if l3_gate_auc is not None else "")
             + (f"  |  PR-AUC: {l3_gate_pr_auc:.3f}" if l3_gate_pr_auc is not None else "")
             + f"  |  Precision: {l3_gate_precision:.3f}  |  Recall: {l3_gate_recall:.3f}"
@@ -2362,11 +2403,11 @@ def run_training(args: argparse.Namespace) -> None:
 
     rank_model_l3 = _build_ranking_model(args.model_type, y3_train_enc, args.random_state)
     if args.skip_rfecv:
-        print("  Skipping RFECV for Level 3 – using all features.")
+        print("  Skipping RFECV for Level 3 â€“ using all features.")
         l3_shap_feats = X3_train_base.columns.tolist()
         l3_rfecv_history = {}
     else:
-        print("  Selecting Level 3 features by SHAP importance …")
+        print("  Selecting Level 3 features by SHAP importance â€¦")
         l3_shap_feats, l3_rfecv_history = shap_rfecv(
             rank_model_l3, X3_train_base, y3_train_enc, min_features=1, max_features=args.max_features, scoring="pr_auc",
             output_csv_path=output_dir / "processing" / "l3_rfecv_features.csv",

@@ -1,0 +1,98 @@
+{
+  "version": 1,
+  "paths": {
+    "bind_path": "/data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C",
+    "mount_path": "/mnt",
+    "input_data": "/data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C/ANALYSIS/01-PREPROCESS/20260702_base_corrected/20260702_base_corrected_filtered.csv",
+    "singularity_image": "DOC/env_singularity_img.sif",
+    "working_directory": "DOC/bd-tools"
+  },
+  "defaults": {
+    "model_type": "catb",
+    "binary_trials": 1000,
+    "cv_splits": 5,
+    "test_size": 0.35,
+    "random_state": 42,
+    "na_perc_limit": 0.2,
+    "max_features": 210,
+    "max_corr": 0.99,
+    "skip_rfecv": false,
+    "skip_optuna": false,
+    "optuna_load_if_exists": true,
+    "weight_column": "sample_weight",
+    "sepsis_target": "sepsis",
+    "etiology_target": "resultado_hemo_gnb_selected",
+    "etiology_gate_target": "infected_yes_no",
+    "etiology_stage2_mode": "auto",
+    "resistance_target": "resistente_cefalosporina",
+    "resistance_mode": "direct",
+    "slurm": {
+      "time": "48:00:00",
+      "ntasks": 1,
+      "cpus_per_task": 4,
+      "memory": "16G",
+      "partition": "long_idx"
+    }
+  },
+  "scopes": {
+    "sepsis": {
+      "directory": "03-SEPSIS",
+      "optuna_database": "optuna_studies/sepsis_optuna.db",
+      "study_prefix": "sepsis_{model_type}",
+      "runs": [
+        {"name": "sepsis_catb", "enabled": true, "algorithm": "catb", "sepsis_target": "sepsis"},  
+        {"name": "sepsis_lgbm", "enabled": true, "algorithm": "lgbm", "sepsis_target": "sepsis"},
+        {"name": "sepsis_xgb", "enabled": true, "algorithm": "xgb", "sepsis_target": "sepsis"},
+        {"name": "sepsis_rf", "enabled": true, "algorithm": "rf", "sepsis_target": "sepsis"}
+      ]
+    },
+    "etiology": {
+      "directory": "04-ETIOLOGY",
+      "optuna_database": "optuna_studies/etiology_optuna.db",
+      "study_prefix": "etiology_{model_type}",
+      "runs": [
+        {"name":"direct_gnbselected_multi","enabled":true,"skip_l2_gate":true,"etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"multiclass"},
+        {"name":"direct_gnball_multi","enabled":true,"skip_l2_gate":true,"etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"multiclass"},
+        {"name":"direct_gnbselected_binary","enabled":true,"skip_l2_gate":true,"etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary"},
+        {"name":"direct_gnball_binary","enabled":true,"skip_l2_gate":true,"etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary"},
+        {"name":"direct_urinario_gnbselected_binary","enabled":true,"skip_l2_gate":true,"etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary","level2_focus":["urinario"]},
+        {"name":"direct_urinario_gnball_binary","enabled":true,"skip_l2_gate":true,"etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary","level2_focus":["urinario"]},
+        {"name":"staged_hemocultivo_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_selected","etiology_stage2_mode":"binary"},
+        {"name":"staged_hemocultivo_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_all","etiology_stage2_mode":"binary"},
+        {"name":"staged_hemocultivo_0.8_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_selected","etiology_stage2_mode":"binary","min_recall_gate":0.8},
+        {"name":"staged_hemocultivo_0.8_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_all","etiology_stage2_mode":"binary","min_recall_gate":0.8},
+        {"name":"staged_hemocultivo_0.8_passproba_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_selected","etiology_stage2_mode":"binary","min_recall_gate":0.8,"l2_gate_proba_as_feature":true},
+        {"name":"staged_hemocultivo_0.8_passproba_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_all","etiology_stage2_mode":"binary","min_recall_gate":0.8,"l2_gate_proba_as_feature":true},
+        {"name":"staged_urinario_hemocultivo_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_selected","etiology_stage2_mode":"binary","level2_focus":["urinario"]},
+        {"name":"staged_urinario_hemocultivo_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_all","etiology_stage2_mode":"binary","level2_focus":["urinario"]},
+        {"name":"staged_urinario_hemocultivo_0.8_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_selected","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"]},
+        {"name":"staged_urinario_hemocultivo_0.8_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_all","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"]},
+        {"name":"staged_urinario_hemocultivo_0.8_passproba_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_selected","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"],"l2_gate_proba_as_feature":true},
+        {"name":"staged_urinario_hemocultivo_0.8_passproba_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no","etiology_target":"resultado_hemo_gnb_all","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"],"l2_gate_proba_as_feature":true},
+        {"name":"staged_cultivo_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary"},
+        {"name":"staged_cultivo_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary"},
+        {"name":"staged_cultivo_0.8_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary","min_recall_gate":0.8},
+        {"name":"staged_cultivo_0.8_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary","min_recall_gate":0.8},
+        {"name":"staged_cultivo_0.8_passproba_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary","min_recall_gate":0.8,"l2_gate_proba_as_feature":true},
+        {"name":"staged_cultivo_0.8_passproba_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary","min_recall_gate":0.8,"l2_gate_proba_as_feature":true},
+        {"name":"staged_urinario_cultivo_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary","level2_focus":["urinario"]},
+        {"name":"staged_urinario_cultivo_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary","level2_focus":["urinario"]},
+        {"name":"staged_urinario_cultivo_0.8_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"]},
+        {"name":"staged_urinario_cultivo_0.8_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"]},
+        {"name":"staged_urinario_cultivo_0.8_passproba_gnbselected_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnbselected","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"],"l2_gate_proba_as_feature":true},
+        {"name":"staged_urinario_cultivo_0.8_passproba_gnball_binary","enabled":true,"etiology_gate_target":"infected_yes_no_wother_cultures","etiology_target":"resultado_inf_gnball","etiology_stage2_mode":"binary","min_recall_gate":0.8,"level2_focus":["urinario"],"l2_gate_proba_as_feature":true}
+      ]
+    },
+    "resistance": {
+      "directory": "05-RESISTANCE",
+      "optuna_database": "optuna_studies/resistance_optuna.db",
+      "study_prefix": "resistance_{model_type}",
+      "runs": [
+        {"name":"direct","enabled":true,"resistance_mode":"direct"},
+        {"name":"resistance_gate","enabled":true,"resistance_mode":"resistance_gate"},
+        {"name":"true_positive_only","enabled":true,"resistance_mode":"true_positive_only"},
+        {"name":"auto","enabled":false,"resistance_mode":"auto"}
+      ]
+    }
+  }
+}
