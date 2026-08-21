@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 from fnmatch import fnmatch
+import sys
 from pathlib import Path
 from typing import Dict, Optional, Sequence, Any
 
@@ -22,7 +23,7 @@ from sklearn.metrics import (
 )
 from sklearn.base import clone
 from sklearn.calibration import CalibratedClassifierCV
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold, KFold
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler, label_binarize
 
 from .utils import (
@@ -38,15 +39,18 @@ from .utils import (
     preprocess_train_test_features,
 )
 from .config import (
+    data_processing_config,
     feature_view_definitions,
     modelling_feature_views,
     runtime_defaults,
 )
-from .models import _find_threshold_for_recall, build_binary_model, build_multiclass_model
+from .models import build_binary_model, build_multiclass_model
 from .optuna_utils import optimise_binary_model, optimise_multiclass_model
 from .feature_filters import shap_rfecv, remove_correlated_features, fit_iqr_bounds, apply_iqr_bounds_to_nan
 from .feature_selection import cap_features, _build_ranking_model
 from .shap_utils import save_shap_artifacts
+
+IQR_MULTIPLIER = float(data_processing_config().get("iqr_multiplier", 5.0))
 
 def _matching_columns(columns: Sequence[str], patterns: Sequence[str]) -> set[str]:
     return {
@@ -225,11 +229,192 @@ class CalibratedEnsemble:
         return self.classes_[np.argmax(self.predict_proba(X), axis=1)]
 
 
+
+def _make_target_aware_train_test_indices(
+    targets: dict[str, pd.Series],
+    *,
+    test_size: float,
+    random_state: int,
+) -> tuple[pd.Index, pd.Index]:
+    """Create one shared train/test split that preserves every target.
+
+    A three-level cascade needs one common patient split so that Level 1,
+    Level 2 and Level 3 predictions can still be connected by patient index.
+    A plain ``stratify=y_sepsis`` split only preserves the Level-1 prevalence.
+
+    Here each target contributes its class/missingness labels to a small
+    iterative stratification procedure.  The resulting split is shared by all
+    stages, while the CV folds used inside each model are stratified separately
+    on that model's actual target via ``_make_stratified_cv``.
+
+    Missingness is treated as a temporary stratification category. This helps
+    keep target availability similar in train and test without imputing or
+    changing the preprocessing pipeline. It is *not* used as a modelling
+    feature or target value.
+    """
+    if not targets:
+        raise ValueError("At least one target is required for target-aware splitting.")
+    if not 0.0 < test_size < 1.0:
+        raise ValueError("test_size must be strictly between 0 and 1.")
+
+    first_target = next(iter(targets.values()))
+    index = pd.Index(first_target.index)
+    n_samples = len(index)
+    if n_samples < 2:
+        raise ValueError("At least two rows are required for train/test splitting.")
+
+    n_test = int(round(n_samples * test_size))
+    n_test = max(1, min(n_samples - 1, n_test))
+
+    rng = np.random.default_rng(random_state)
+    positions = {idx: pos for pos, idx in enumerate(index)}
+
+    # Each row belongs to exactly one category per target. Missingness is
+    # represented explicitly so that availability is balanced too.
+    row_labels: list[list[tuple[str, str]]] = [[] for _ in range(n_samples)]
+    label_members: dict[tuple[str, str], set[int]] = {}
+
+    for target_name, target in targets.items():
+        target = pd.Series(target, index=index)
+        values = target.astype("string").fillna("__MISSING__")
+        for pos, value in enumerate(values.tolist()):
+            label = (str(target_name), str(value))
+            row_labels[pos].append(label)
+            label_members.setdefault(label, set()).add(pos)
+
+    # Desired test count for each target/category. For categories represented
+    # by only one observation, zero is requested: it is impossible to put the
+    # sole observation in both train and test, so the CV safeguards below will
+    # handle such rare classes explicitly.
+    desired_test: dict[tuple[str, str], int] = {}
+    for label, members in label_members.items():
+        count = len(members)
+        desired = int(round(count * test_size))
+        if count >= 2 and test_size > 0 and desired == 0:
+            desired = 1
+        desired_test[label] = min(count, desired)
+
+    selected_test: set[int] = set()
+    remaining: set[int] = set(range(n_samples))
+    selected_counts: dict[tuple[str, str], int] = {
+        label: 0 for label in label_members
+    }
+
+    # Iteratively satisfy the rarest target/category requirements first.
+    # A row that belongs to several currently under-filled categories gets a
+    # higher score because selecting it fixes several deficits at once.
+    while len(selected_test) < n_test:
+        active_labels = [
+            label
+            for label, desired in desired_test.items()
+            if desired > 0
+            and desired > selected_counts[label]
+            and any(pos in remaining for pos in label_members[label])
+        ]
+        if not active_labels:
+            break
+
+        active_labels.sort(
+            key=lambda label: (
+                len(label_members[label] & remaining),
+                desired_test[label],
+                str(label),
+            )
+        )
+        label = active_labels[0]
+        candidates = list(label_members[label] & remaining)
+        if not candidates:
+            continue
+
+        def candidate_score(pos: int) -> tuple[float, float]:
+            score = 0.0
+            coverage = 0
+            for candidate_label in row_labels[pos]:
+                desired = desired_test.get(candidate_label, 0)
+                if desired <= 0:
+                    continue
+                selected_for_label = selected_counts[candidate_label]
+                deficit = max(0, desired - selected_for_label)
+                if deficit:
+                    score += deficit / desired
+                    coverage += deficit
+            return score, float(coverage)
+
+        scores = np.asarray([candidate_score(pos)[0] for pos in candidates])
+        max_score = float(scores.max())
+        best = [pos for pos, score in zip(candidates, scores) if abs(float(score) - max_score) < 1e-12]
+        chosen = int(rng.choice(best))
+        selected_test.add(chosen)
+        remaining.remove(chosen)
+        for candidate_label in row_labels[chosen]:
+            selected_counts[candidate_label] += 1
+
+    # If all target/category quotas have been satisfied before reaching the
+    # exact test size, fill the remaining slots randomly.
+    if len(selected_test) < n_test:
+        remaining_list = np.asarray(sorted(remaining), dtype=int)
+        extra = rng.choice(remaining_list, size=n_test - len(selected_test), replace=False)
+        selected_test.update(int(pos) for pos in extra)
+
+    test_positions = sorted(selected_test)
+    train_positions = sorted(set(range(n_samples)) - selected_test)
+    train_index = index.take(train_positions)
+    test_index = index.take(test_positions)
+
+    return train_index, test_index
+
+
+def _print_target_split_diagnostics(
+    targets: dict[str, pd.Series],
+    train_index: pd.Index,
+    test_index: pd.Index,
+) -> None:
+    """Print train/test prevalence for every target used in the shared split."""
+    print("Target-aware train/test stratification:")
+    for target_name, target in targets.items():
+        series = pd.Series(target)
+        train = series.reindex(train_index)
+        test = series.reindex(test_index)
+        train_dist = train.astype("string").fillna("<MISSING>").value_counts(normalize=True).sort_index()
+        test_dist = test.astype("string").fillna("<MISSING>").value_counts(normalize=True).sort_index()
+        labels = sorted(set(train_dist.index) | set(test_dist.index))
+        parts = []
+        for label in labels:
+            parts.append(
+                f"{label}: {train_dist.get(label, 0.0):.3f}/{test_dist.get(label, 0.0):.3f}"
+            )
+        print(f"  {target_name}: " + ", ".join(parts))
+
+
 def _make_stratified_cv(y: pd.Series, n_splits: int, random_state: int):
+    """Build CV folds stratified on the target supplied to this model.
+
+    This helper is deliberately called separately for Level 1 sepsis, Level 2
+    gate/etiology, Level 3 gate and Level 3 resistance, rather than reusing
+    the Level-1 sepsis labels for every model.
+    """
     class_counts = pd.Series(y).value_counts()
     if class_counts.empty or len(class_counts) < 2:
         raise ValueError("At least two classes are required for stratified CV.")
-    effective_splits = min(n_splits, int(class_counts.min()))
+
+    min_class_count = int(class_counts.min())
+    # If any class has fewer than two observations, stratified folds are
+    # impossible. Fall back to a non-stratified KFold with a safe number of
+    # splits instead of failing hard; this keeps training going while clearly
+    # warning the user about the change in CV semantics.
+    if min_class_count < 2:
+        import warnings
+
+        warnings.warn(
+            f"Some classes have fewer than 2 observations (min={min_class_count}); "
+            "falling back to non-stratified KFold for cross-validation.",
+            UserWarning,
+        )
+        n_samples = len(y)
+        k = max(2, min(n_splits, n_samples))
+        return KFold(n_splits=k, shuffle=True, random_state=random_state)
+
+    effective_splits = min(n_splits, min_class_count)
     if effective_splits < 2:
         raise ValueError(
             "At least two observations in every class are required for stratified CV."
@@ -305,6 +490,60 @@ def _generate_stratified_calibrated_oof_binary(
 
 
 
+def _find_threshold_for_positive_recall(
+    y_true: pd.Series,
+    probabilities: np.ndarray,
+    *,
+    target_recall: float,
+) -> float:
+    """Choose the lowest threshold that reaches the requested POSITIVE recall.
+
+    ``1`` is always the clinically/model-defined positive class.  This helper
+    deliberately uses ``recall_score(..., pos_label=1)`` semantics rather than
+    macro recall, so a recall target such as 0.80 means sensitivity for the
+    positive class (e.g. culture-positive or cefalosporin-resistant), not for
+    the negative class.
+    """
+    if not 0.0 <= target_recall <= 1.0:
+        raise ValueError("target_recall must be between 0 and 1.")
+
+    y_array = np.asarray(y_true, dtype=int)
+    proba_array = np.asarray(probabilities, dtype=float)
+    if len(y_array) != len(proba_array):
+        raise ValueError("y_true and probabilities must have the same length.")
+    if not np.isfinite(proba_array).all():
+        raise ValueError("probabilities contain NaN or infinite values.")
+    if not np.any(y_array == 1):
+        raise ValueError("Positive class (1) is absent; positive recall is undefined.")
+
+    candidate_thresholds = np.unique(
+        np.concatenate(([0.0], proba_array, [1.0]))
+    )
+
+    feasible: list[tuple[float, float]] = []
+    for threshold in candidate_thresholds:
+        predictions = (proba_array >= threshold).astype(int)
+        recall = recall_score(
+            y_array, predictions, pos_label=1, zero_division=0
+        )
+        if recall + 1e-12 >= target_recall:
+            feasible.append((float(threshold), float(recall)))
+
+    if not feasible:
+        # Threshold 0.0 predicts every row positive, so this should only occur
+        # for malformed labels/probabilities; fail loudly rather than silently
+        # optimizing the wrong class.
+        raise ValueError(
+            f"No threshold achieved positive-class recall >= {target_recall:.3f}."
+        )
+
+    # Among thresholds satisfying the requested sensitivity, choose the
+    # highest threshold: this is the most conservative operating point while
+    # still meeting the recall requirement.
+    best_threshold = max(feasible, key=lambda item: item[0])[0]
+    return best_threshold
+
+
 def _find_best_macro_f1_threshold(y_true: pd.Series, probabilities: np.ndarray) -> float:
     """Choose a binary threshold from OOF probabilities by maximum macro F1."""
     y_array = np.asarray(y_true, dtype=int)
@@ -321,6 +560,100 @@ def _find_best_macro_f1_threshold(y_true: pd.Series, probabilities: np.ndarray) 
             best_score = score
             best_threshold = float(threshold)
     return best_threshold
+
+
+def _find_threshold_for_specificity(
+    y_true: pd.Series,
+    probabilities: np.ndarray,
+    *,
+    target_specificity: float,
+) -> float:
+    """
+    Select the threshold giving maximum recall while maintaining at least
+    ``target_specificity`` on the supplied OOF predictions.
+
+    This is intentionally threshold optimisation, not a change to the
+    CatBoost loss. It is therefore safe to enable/disable from the CLI while
+    keeping the feature/preprocessing pipeline unchanged.
+    """
+    if not 0.0 <= target_specificity <= 1.0:
+        raise ValueError("target_specificity must be between 0 and 1.")
+
+    y_array = np.asarray(y_true, dtype=int)
+    proba_array = np.asarray(probabilities, dtype=float)
+    candidate_thresholds = np.unique(
+        np.concatenate(([0.0], proba_array, [1.0]))
+    )
+
+    best_threshold = 1.0
+    best_recall = -np.inf
+    best_specificity = -np.inf
+
+    for threshold in candidate_thresholds:
+        predictions = (proba_array >= threshold).astype(int)
+        negatives = y_array == 0
+        positive = y_array == 1
+        tn = int(np.sum(negatives & (predictions == 0)))
+        fp = int(np.sum(negatives & (predictions == 1)))
+        fn = int(np.sum(positive & (predictions == 0)))
+        tp = int(np.sum(positive & (predictions == 1)))
+
+        specificity = tn / (tn + fp) if (tn + fp) else 0.0
+        recall = tp / (tp + fn) if (tp + fn) else 0.0
+
+        if specificity + 1e-12 >= target_specificity:
+            if (recall > best_recall + 1e-12) or (
+                abs(recall - best_recall) <= 1e-12
+                and specificity > best_specificity + 1e-12
+            ):
+                best_threshold = float(threshold)
+                best_recall = float(recall)
+                best_specificity = float(specificity)
+
+    if best_recall == -np.inf:
+        raise ValueError(
+            f"No OOF threshold achieved the requested specificity "
+            f"of {target_specificity:.3f}."
+        )
+
+    return best_threshold
+
+
+def _select_binary_threshold(
+    y_true: pd.Series,
+    probabilities: np.ndarray,
+    *,
+    recall_at_specificity: Optional[float] = None,
+) -> tuple[float, str]:
+    """Select the binary threshold according to the requested strategy."""
+    if recall_at_specificity is not None:
+        threshold = _find_threshold_for_specificity(
+            y_true,
+            probabilities,
+            target_specificity=recall_at_specificity,
+        )
+        return threshold, f"max_recall_at_specificity_{recall_at_specificity:.3f}"
+
+    return _find_best_macro_f1_threshold(y_true, probabilities), "best_macro_f1"
+
+
+def _get_target_recall(args, specific_attr: str) -> Optional[float]:
+    """Return the recall target for one prediction level.
+
+    Per-level settings take precedence. The legacy global --optimize-recall /
+    --min-recall pair remains a fallback for backwards compatibility.
+    """
+    value = getattr(args, specific_attr, None)
+    if value is None and bool(getattr(args, "optimize_recall", False)):
+        value = getattr(args, "min_recall", None)
+        if value is None:
+            value = 0.80
+    if value is None:
+        return None
+    value = float(value)
+    if not 0.0 <= value <= 1.0:
+        raise ValueError(f"{specific_attr} must be between 0 and 1.")
+    return value
 
 def _map_hemo_subtype_to_gnb_binary(target_series: pd.Series) -> pd.Series:
     return pd.Series(
@@ -349,6 +682,43 @@ def run_training(args: argparse.Namespace) -> None:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     print("SELECTED ARGS:", args)
     skip_shap_values = getattr(args, "skip_shap_values", False)
+    recall_at_specificity = getattr(args, "optimize_recall_at_specificity", None)
+    run_optimize_recall = bool(getattr(args, "optimize_recall", False))
+    run_min_recall = getattr(args, "min_recall", None)
+    recall_targets = {
+        "level1": _get_target_recall(args, "l1_min_recall"),
+        "level2_gate": _get_target_recall(args, "l2_gate_min_recall"),
+        "level2_etiology": _get_target_recall(args, "l2_etiology_min_recall"),
+        "level3_gate": _get_target_recall(args, "l3_gate_min_recall"),
+        "level3_cef": _get_target_recall(args, "l3_cef_min_recall"),
+    }
+    print("Target-specific positive-class recall thresholds:")
+    for level_name, target in recall_targets.items():
+        print(f"  {level_name}: {target if target is not None else 'disabled'}")
+    # Validate recall-related CLI flags to avoid redundant/conflicting usage.
+    if getattr(args, "optimize_recall", False):
+        per_level_flags = [
+            getattr(args, "l1_min_recall", None),
+            getattr(args, "l2_gate_min_recall", None),
+            getattr(args, "l2_etiology_min_recall", None),
+            getattr(args, "l3_gate_min_recall", None),
+            getattr(args, "l3_cef_min_recall", None),
+        ]
+        if any(flag is not None for flag in per_level_flags):
+            print(
+                "WARNING: per-level --*-min-recall settings detected; they will "
+                "take precedence over --optimize-recall for those levels.",
+                file=sys.stderr,
+            )
+    if recall_at_specificity is not None:
+        if not 0.0 <= recall_at_specificity <= 1.0:
+            raise ValueError("--optimize-recall-at-specificity must be between 0 and 1.")
+        print(
+            f"Recall optimisation enabled: maximise recall subject to "
+            f"specificity >= {recall_at_specificity:.3f}."
+        )
+    else:
+        print("Recall-at-specificity optimisation disabled; using existing threshold strategy.")
 
     feature_view_config = feature_view_definitions()
     stage_feature_views = modelling_feature_views()
@@ -440,30 +810,38 @@ def run_training(args: argparse.Namespace) -> None:
     y_sepsis = working_df.loc[feature_df_raw.index, args.sepsis_target]
     y_hemo = working_df.loc[feature_df_raw.index, args.etiology_target]
     y_hemo_gate = working_df.loc[feature_df_raw.index, args.etiology_gate_target]
+    y_resistance_gate = working_df.loc[feature_df_raw.index, args.resistance_gate_target]
     y_cef = working_df.loc[feature_df_raw.index, args.cef_target]
     w = working_df.loc[feature_df_raw.index, args.weight_column]
     foco = working_df.loc[feature_df_raw.index, "foco"] if "foco" in working_df.columns else pd.Series(index=feature_df_raw.index, dtype="object")
 
-    (
-        X_train, X_test,
-        y_sep_train, y_sep_test,
-        y_hemo_train, y_hemo_test,
-        y_hemo_gate_train, y_hemo_gate_test,
-        y_cef_train, y_cef_test,
-        w_train, w_test,
-        foco_train, foco_test,
-    ) = train_test_split(
-        feature_df_raw,
-        y_sepsis,
-        y_hemo,
-        y_hemo_gate,
-        y_cef,
-        w,
-        foco,
+    # One shared patient split is required by the three-level cascade. Rather
+    # than stratifying only on sepsis, preserve the class/missingness
+    # distribution of every modelling target in the common split. Each model
+    # then gets its own target-specific StratifiedKFold inside this split.
+    split_targets = {
+        args.sepsis_target: y_sepsis,
+        args.etiology_target: y_hemo,
+        args.etiology_gate_target: y_hemo_gate,
+        args.resistance_gate_target: y_resistance_gate,
+        args.cef_target: y_cef,
+    }
+    train_index, test_index = _make_target_aware_train_test_indices(
+        split_targets,
         test_size=args.test_size,
         random_state=args.random_state,
-        stratify=y_sepsis,
     )
+    _print_target_split_diagnostics(split_targets, train_index, test_index)
+
+    X_train = feature_df_raw.loc[train_index].copy()
+    X_test = feature_df_raw.loc[test_index].copy()
+    y_sep_train, y_sep_test = y_sepsis.loc[train_index], y_sepsis.loc[test_index]
+    y_hemo_train, y_hemo_test = y_hemo.loc[train_index], y_hemo.loc[test_index]
+    y_hemo_gate_train, y_hemo_gate_test = y_hemo_gate.loc[train_index], y_hemo_gate.loc[test_index]
+    y_resistance_gate_train, y_resistance_gate_test = y_resistance_gate.loc[train_index], y_resistance_gate.loc[test_index]
+    y_cef_train, y_cef_test = y_cef.loc[train_index], y_cef.loc[test_index]
+    w_train, w_test = w.loc[train_index], w.loc[test_index]
+    foco_train, foco_test = foco.loc[train_index], foco.loc[test_index]
 
     # ------------------------------------------------------------------
     # 2a. Leakage-safe preprocessing (fit on train, apply on test)
@@ -475,7 +853,7 @@ def run_training(args: argparse.Namespace) -> None:
     processing_dir = output_dir / "processing"
     processing_dir.mkdir(parents=True, exist_ok=True)
 
-    iqr_bounds = fit_iqr_bounds(X_train, iqr_multiplier=5.0)
+    iqr_bounds = fit_iqr_bounds(X_train, iqr_multiplier=IQR_MULTIPLIER)
 
     X_train = apply_iqr_bounds_to_nan(
         X_train,
@@ -501,17 +879,19 @@ def run_training(args: argparse.Namespace) -> None:
         },
     )
     # Align targets/weights after row filtering caused by no-impute mode
-    y_sep_train, y_hemo_train, y_hemo_gate_train, y_cef_train, w_train = (
+    y_sep_train, y_hemo_train, y_hemo_gate_train, y_resistance_gate_train, y_cef_train, w_train = (
         y_sep_train.loc[X_train.index],
         y_hemo_train.loc[X_train.index],
         y_hemo_gate_train.loc[X_train.index],
+        y_resistance_gate_train.loc[X_train.index],
         y_cef_train.loc[X_train.index],
         w_train.loc[X_train.index],
     )
-    y_sep_test, y_hemo_test, y_hemo_gate_test, y_cef_test, w_test = (
+    y_sep_test, y_hemo_test, y_hemo_gate_test, y_resistance_gate_test, y_cef_test, w_test = (
         y_sep_test.loc[X_test.index],
         y_hemo_test.loc[X_test.index],
         y_hemo_gate_test.loc[X_test.index],
+        y_resistance_gate_test.loc[X_test.index],
         y_cef_test.loc[X_test.index],
         w_test.loc[X_test.index],
     )
@@ -692,9 +1072,17 @@ def run_training(args: argparse.Namespace) -> None:
             sample_weight=sw_l1,
             method="isotonic",
         )
-        l1_threshold = _find_best_macro_f1_threshold(
-            y_sep_train_enc, l1_calibrated_oof
-        )
+        l1_recall_target = recall_targets["level1"]
+        if l1_recall_target is not None:
+            l1_threshold = _find_threshold_for_positive_recall(
+                y_sep_train_enc, l1_calibrated_oof, target_recall=l1_recall_target
+            )
+            l1_threshold_strategy = f"positive_recall_{l1_recall_target:.3f}"
+        else:
+            l1_threshold, l1_threshold_strategy = _select_binary_threshold(
+                y_sep_train_enc, l1_calibrated_oof,
+                recall_at_specificity=recall_at_specificity,
+            )
         print(
             f"  Optuna threshold: {l1_optuna_threshold:.3f}  |  "
             f"calibrated OOF threshold: {l1_threshold:.3f}"
@@ -800,6 +1188,8 @@ def run_training(args: argparse.Namespace) -> None:
             "negative_label": str(le_sep.classes_[0]),
             "positive_label": str(le_sep.classes_[1]),
             "threshold": l1_threshold,
+            "threshold_strategy": l1_threshold_strategy,
+            "positive_recall_target": recall_targets["level1"],
             "predicted_counts": l1_pred_counts,
             "actual_counts": l1_true_counts,
             "confusion_matrix": l1_confusion,
@@ -1007,9 +1397,17 @@ def run_training(args: argparse.Namespace) -> None:
                     sample_weight=sw_l2,
                     method="isotonic",
                 )
-                l2_threshold = _find_best_macro_f1_threshold(
-                    y2_train, l2_calibrated_oof
-                )
+                l2_recall_target = recall_targets["level2_etiology"]
+                if l2_recall_target is not None:
+                    l2_threshold = _find_threshold_for_positive_recall(
+                        y2_train, l2_calibrated_oof, target_recall=l2_recall_target
+                    )
+                    l2_threshold_strategy = f"positive_recall_{l2_recall_target:.3f}"
+                else:
+                    l2_threshold, l2_threshold_strategy = _select_binary_threshold(
+                        y2_train, l2_calibrated_oof,
+                        recall_at_specificity=recall_at_specificity,
+                    )
                 l2_base = build_binary_model(args.model_type, l2_params.copy())
             else:
                 l2_params, l2_study = _optimise_multiclass(
@@ -1112,6 +1510,8 @@ def run_training(args: argparse.Namespace) -> None:
                 "classes": l2_target_names,
                 "params": l2_params,
                 "threshold": l2_threshold,
+                "threshold_strategy": l2_threshold_strategy if is_binary_subtype else None,
+                "positive_recall_target": recall_targets["level2_etiology"] if is_binary_subtype else None,
                 "macro_f1": l2_f1,
                 "roc_auc": l2_auc,
                 "pr_auc": l2_pr_auc,
@@ -1332,15 +1732,21 @@ def run_training(args: argparse.Namespace) -> None:
 
             l2_gate_optuna_threshold = l2_gate_threshold
 
-            if args.set_gate_recall is not None:
-                if not 0.0 <= args.set_gate_recall <= 1.0:
-                    raise ValueError("--set-gate-recall must be between 0 and 1.")
-                l2_gate_threshold = _find_threshold_for_recall(
+            l2_gate_recall_target = recall_targets["level2_gate"]
+            if l2_gate_recall_target is None:
+                l2_gate_recall_target = getattr(args, "set_gate_recall", None)
+            if l2_gate_recall_target is not None:
+                l2_gate_threshold = _find_threshold_for_positive_recall(
+                    y2_gate_train, y2_gate_train_proba,
+                    target_recall=float(l2_gate_recall_target),
+                )
+                threshold_strategy = f"positive_gate_recall_{float(l2_gate_recall_target):.3f}"
+            elif recall_at_specificity is not None:
+                l2_gate_threshold, threshold_strategy = _select_binary_threshold(
                     y2_gate_train,
                     l2_gate_train_proba,
-                    target_recall=args.set_gate_recall,
+                    recall_at_specificity=args.optimize_recall_at_specificity,
                 )
-                threshold_strategy = f"target_recall_{args.set_gate_recall}"
             else:
                 threshold_strategy = "best_threshold"
 
@@ -1358,7 +1764,8 @@ def run_training(args: argparse.Namespace) -> None:
             )
             l2_gate_f1 = f1_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
             l2_gate_precision = precision_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
-            l2_gate_recall = recall_score(y2_gate_test, l2_gate_test_pred, average="macro", zero_division=0)
+            l2_gate_recall = recall_score(y2_gate_test, l2_gate_test_pred, pos_label=1, zero_division=0)
+            print(f"  Level 2 gate POSITIVE recall (culture-positive): {l2_gate_recall:.3f}")
             l2_gate_pr_auc: Optional[float] = None
             l2_gate_auc: Optional[float] = None
             if y2_gate_test.nunique() > 1:
@@ -1529,9 +1936,17 @@ def run_training(args: argparse.Namespace) -> None:
                     sample_weight=sw_l2,
                     method="isotonic",
                 )
-                l2_threshold = _find_best_macro_f1_threshold(
-                    y2_sub_train, l2_calibrated_oof
-                )
+                l2_recall_target = recall_targets["level2_etiology"]
+                if l2_recall_target is not None:
+                    l2_threshold = _find_threshold_for_positive_recall(
+                        y2_sub_train, l2_calibrated_oof, target_recall=l2_recall_target
+                    )
+                    l2_threshold_strategy = f"positive_recall_{l2_recall_target:.3f}"
+                else:
+                    l2_threshold, l2_threshold_strategy = _select_binary_threshold(
+                        y2_sub_train, l2_calibrated_oof,
+                        recall_at_specificity=recall_at_specificity,
+                    )
                 l2_base = build_binary_model(args.model_type, l2_params.copy())
             else:
                 l2_params, l2_study = _optimise_multiclass(
@@ -1707,6 +2122,7 @@ def run_training(args: argparse.Namespace) -> None:
                     "optuna_threshold": l2_gate_optuna_threshold,
                     "threshold": l2_gate_threshold,
                     "threshold_strategy": threshold_strategy,
+                    "positive_recall_target": recall_targets["level2_gate"],
                     "macro_f1": l2_gate_f1,
                     "roc_auc": l2_gate_auc,
                     "pr_auc": l2_gate_pr_auc,
@@ -1856,6 +2272,20 @@ def run_training(args: argparse.Namespace) -> None:
     l3_dir = output_dir / "level3_cefalosporina"
     l3_dir.mkdir(exist_ok=True)
 
+    # Optional foco hard filter for Level 3 resistance (similar to Level 2).
+    l3_focus_train_mask = _build_focus_mask(foco_train, getattr(args, "level3_focus", []))
+    l3_focus_test_mask = _build_focus_mask(foco_test, getattr(args, "level3_focus", []))
+    if getattr(args, "level3_focus", []):
+        print(
+            "  Level 3 pre-resistance foco hard filter: "
+            f"{args.level3_focus}"
+        )
+        print(
+            "  Rows retained by foco filter â€“ "
+            f"train: {int(l3_focus_train_mask.sum())}/{len(l3_focus_train_mask)}"
+            f"  |  test: {int(l3_focus_test_mask.sum())}/{len(l3_focus_test_mask)}"
+        )
+
     # ------------------------------------------------------------------
     # Level 3 resistance population mode
     # ------------------------------------------------------------------
@@ -1881,7 +2311,7 @@ def run_training(args: argparse.Namespace) -> None:
     if requested_resistance_mode == "auto":
         resistance_mode = (
             "direct"
-            if args.skip_level2 or args.skip_l2_gate
+            if args.skip_level2 or args.skip_l2_gate or getattr(args, "skip_l3_gate", False)
             else "gated"
         )
     else:
@@ -1897,6 +2327,12 @@ def run_training(args: argparse.Namespace) -> None:
             f"Unknown resistance_mode={resistance_mode!r}. "
             "Expected 'auto', 'gated', 'resistance_gate', 'direct', "
             "or 'true_positive_only'."
+        )
+
+    if getattr(args, "skip_l3_gate", False) and resistance_mode in {"gated", "resistance_gate"}:
+        raise ValueError(
+            "Conflicting options: --skip-l3-gate cannot be used with "
+            "resistance_mode='gated' or 'resistance_gate'."
         )
 
     print(f"  Level 3 resistance mode: {resistance_mode}")
@@ -1925,6 +2361,7 @@ def run_training(args: argparse.Namespace) -> None:
                 y_hemo_gate_train.astype(str)
                 != args.etiology_gate_negative_label
             )
+            & l3_focus_train_mask
         )
 
         # TEST: rows predicted culture-positive by Level 2 gate.
@@ -1934,6 +2371,7 @@ def run_training(args: argparse.Namespace) -> None:
         hemo_pos_test_mask = (
             y_hemo_gate_test.notna()
             & X_test.index.isin(predicted_hemo_positive_idx)
+            & l3_focus_test_mask
         )
 
         cef_valid_train_mask = y_cef_train.notna() & hemo_pos_train_mask
@@ -1953,14 +2391,17 @@ def run_training(args: argparse.Namespace) -> None:
             f"({int(hemo_pos_test_mask.sum())} samples)"
         )
 
+    elif resistance_mode == "true_positive_only":
+        print("  Oracle hard-filter mode selected: using true Level-2 positive rows only; no gate is trained.")
+
     elif resistance_mode == "resistance_gate":
         # Independent Level-3 culture gate. This is intentionally separate
         # from the Level-2 etiology workflow, so direct etiology can still be
         # combined with gate-filtered resistance prediction.
-        l3_gate_target_train = working_df.loc[X_train.index, args.resistance_gate_target]
-        l3_gate_target_test = working_df.loc[X_test.index, args.resistance_gate_target]
-        gate_valid_train = l3_gate_target_train.notna()
-        gate_valid_test = l3_gate_target_test.notna()
+        l3_gate_target_train = y_resistance_gate_train
+        l3_gate_target_test = y_resistance_gate_test
+        gate_valid_train = l3_gate_target_train.notna() & l3_focus_train_mask
+        gate_valid_test = l3_gate_target_test.notna() & l3_focus_test_mask
 
         if not gate_valid_train.any():
             raise ValueError(
@@ -2112,18 +2553,22 @@ def run_training(args: argparse.Namespace) -> None:
             None,
         )
 
-        if resistance_gate_recall is not None:
-            if not 0.0 <= resistance_gate_recall <= 1.0:
-                raise ValueError(
-                    "--set-resistance-gate-recall must be between 0 and 1."
-                )
-            l3_gate_threshold = _find_threshold_for_recall(
-                y3_gate_train,
-                l3_gate_train_proba,
-                target_recall=resistance_gate_recall,
+        l3_gate_recall_target = recall_targets["level3_gate"]
+        if l3_gate_recall_target is None:
+            l3_gate_recall_target = resistance_gate_recall
+        if l3_gate_recall_target is not None:
+            l3_gate_threshold = _find_threshold_for_positive_recall(
+                y3_gate_train, l3_gate_train_proba,
+                target_recall=float(l3_gate_recall_target),
             )
             l3_gate_threshold_strategy = (
-                f"target_recall_{resistance_gate_recall}"
+                f"positive_gate_recall_{float(l3_gate_recall_target):.3f}"
+            )
+        elif getattr(args, "optimize_recall_at_specificity", None) is not None:
+            l3_gate_threshold, l3_gate_threshold_strategy = _select_binary_threshold(
+                y3_gate_train,
+                l3_gate_train_proba,
+                recall_at_specificity=args.optimize_recall_at_specificity,
             )
         else:
             l3_gate_threshold_strategy = "best_threshold"
@@ -2159,9 +2604,10 @@ def run_training(args: argparse.Namespace) -> None:
         l3_gate_recall = recall_score(
             y3_gate_test,
             l3_gate_test_pred,
-            average="macro",
+            pos_label=1,
             zero_division=0,
         )
+        print(f"  Level 3 resistance gate POSITIVE recall (culture-positive): {l3_gate_recall:.3f}")
         l3_gate_auc: Optional[float] = None
         l3_gate_pr_auc: Optional[float] = None
         if y3_gate_test.nunique() > 1:
@@ -2274,11 +2720,13 @@ def run_training(args: argparse.Namespace) -> None:
             "optuna_threshold": l3_gate_optuna_threshold,
             "threshold": l3_gate_threshold,
             "threshold_strategy": l3_gate_threshold_strategy,
+            "positive_recall_target": recall_targets["level3_gate"],
             "macro_f1": l3_gate_f1,
             "roc_auc": l3_gate_auc,
             "pr_auc": l3_gate_pr_auc,
             "precision": l3_gate_precision,
-            "recall": l3_gate_recall,
+            "recall_positive": l3_gate_recall,
+            "recall_macro": recall_score(y3_gate_test, l3_gate_test_pred, average="macro", zero_division=0),
             "predicted_true": l3_gate_pred_counts["gate_positive"],
             "predicted_false": l3_gate_pred_counts["gate_negative"],
             "real_true": l3_gate_true_counts["gate_positive"],
@@ -2311,8 +2759,8 @@ def run_training(args: argparse.Namespace) -> None:
 
     elif resistance_mode == "direct":
         # Fully independent direct resistance prediction.
-        cef_valid_train_mask = y_cef_train.notna()
-        cef_valid_test_mask = y_cef_test.notna()
+        cef_valid_train_mask = y_cef_train.notna() & l3_focus_train_mask
+        cef_valid_test_mask = y_cef_test.notna() & l3_focus_test_mask
 
         print(
             f"  Level 3: direct resistance training on all rows with valid "
@@ -2338,6 +2786,9 @@ def run_training(args: argparse.Namespace) -> None:
                 != args.etiology_gate_negative_label
             )
         )
+
+        hemo_pos_train_mask = hemo_pos_train_mask & l3_focus_train_mask
+        hemo_pos_test_mask = hemo_pos_test_mask & l3_focus_test_mask
 
         cef_valid_train_mask = y_cef_train.notna() & hemo_pos_train_mask
         cef_valid_test_mask = y_cef_test.notna() & hemo_pos_test_mask
@@ -2387,11 +2838,31 @@ def run_training(args: argparse.Namespace) -> None:
         raise ValueError("No train rows available for direct Level-3 resistance modelling.")
 
     le_cef = LabelEncoder()
-    y3_train_enc = pd.Series(le_cef.fit_transform(y3_train_raw), index=y3_train_raw.index, name="cef_enc")
+    le_cef.fit(y3_train_raw)
+    cef_classes = [str(c) for c in le_cef.classes_]
+    if "NEGATIVE" in cef_classes and len(cef_classes) == 2:
+        # Explicitly define resistance as the positive class. Do not rely on
+        # alphabetical LabelEncoder ordering for a clinical recall target.
+        cef_positive_label = next(c for c in cef_classes if c != "NEGATIVE")
+        cef_label_map = {"NEGATIVE": 0, cef_positive_label: 1}
+        y3_train_enc = y3_train_raw.map(cef_label_map).astype(int)
+        y3_train_enc.name = "cef_enc"
+    else:
+        y3_train_enc = pd.Series(
+            le_cef.transform(y3_train_raw), index=y3_train_raw.index, name="cef_enc"
+        )
+        cef_positive_label = cef_classes[-1] if len(cef_classes) == 2 else None
+
     test_seen_mask = y3_test_raw.isin(le_cef.classes_)
     X3_test_base = X3_test_base.loc[test_seen_mask].copy()
     y3_test_raw = y3_test_raw.loc[test_seen_mask]
-    y3_test_enc = pd.Series(le_cef.transform(y3_test_raw), index=y3_test_raw.index, name="cef_enc")
+    if len(cef_classes) == 2 and "NEGATIVE" in cef_classes:
+        y3_test_enc = y3_test_raw.map(cef_label_map).astype(int)
+        y3_test_enc.name = "cef_enc"
+    else:
+        y3_test_enc = pd.Series(
+            le_cef.transform(y3_test_raw), index=y3_test_raw.index, name="cef_enc"
+        )
 
     if X3_test_base.empty:
         raise ValueError("No test rows remain for Level-3 after filtering labels unseen in training.")
@@ -2450,9 +2921,17 @@ def run_training(args: argparse.Namespace) -> None:
             sample_weight=sw_l3,
             method="isotonic",
         )
-        l3_threshold = _find_best_macro_f1_threshold(
-            y3_train_enc, l3_calibrated_oof
-        )
+        l3_cef_recall_target = recall_targets["level3_cef"]
+        if l3_cef_recall_target is not None:
+            l3_threshold = _find_threshold_for_positive_recall(
+                y3_train_enc, l3_calibrated_oof, target_recall=l3_cef_recall_target
+            )
+            l3_threshold_strategy = f"positive_cef_recall_{l3_cef_recall_target:.3f}"
+        else:
+            l3_threshold, l3_threshold_strategy = _select_binary_threshold(
+                y3_train_enc, l3_calibrated_oof,
+                recall_at_specificity=recall_at_specificity,
+            )
         l3_base = build_binary_model(args.model_type, l3_params.copy())
     else:
         l3_params, l3_study = _optimise_multiclass(
@@ -2495,7 +2974,7 @@ def run_training(args: argparse.Namespace) -> None:
 
     l3_f1 = f1_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
     l3_precision = precision_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
-    l3_recall = recall_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
+    l3_recall = recall_score(y3_test_enc, l3_test_pred, pos_label=1, zero_division=0) if is_l3_binary else recall_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0)
     l3_pr_auc: Optional[float] = None
     l3_auc: Optional[float] = None
     if y3_test_enc.nunique() > 1:
@@ -2510,6 +2989,12 @@ def run_training(args: argparse.Namespace) -> None:
                 average="macro"
             ))
 
+    if is_l3_binary:
+        print(
+            f"  Level 3 cefalosporin POSITIVE recall: {l3_recall:.3f} "
+            f"(positive class: {cef_positive_label!r})"
+        )
+
     l3_report = classification_report(
         y3_test_enc, l3_test_pred,
         target_names=l3_target_names,
@@ -2522,11 +3007,15 @@ def run_training(args: argparse.Namespace) -> None:
         "classes": l3_target_names,
         "params": l3_params,
         "threshold": l3_threshold,
+        "threshold_strategy": l3_threshold_strategy if is_l3_binary else "multiclass_argmax",
+        "positive_recall_target": recall_targets["level3_cef"] if is_l3_binary else None,
+        "positive_label": cef_positive_label if is_l3_binary else None,
         "macro_f1": l3_f1,
         "roc_auc": l3_auc,
         "pr_auc": l3_pr_auc,
         "precision": l3_precision,
-        "recall": l3_recall,
+        "recall_positive": l3_recall,
+        "recall_macro": recall_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0),
         "features": l3_features,
         "shaprfecv_features": l3_shap_feats,
         "hemo_positive_filter": resistance_mode != "direct",
@@ -2591,7 +3080,8 @@ def run_training(args: argparse.Namespace) -> None:
         "roc_auc": l3_auc,
         "pr_auc": l3_pr_auc,
         "precision": l3_precision,
-        "recall": l3_recall,
+        "recall_positive": l3_recall,
+        "recall_macro": recall_score(y3_test_enc, l3_test_pred, average="macro", zero_division=0),
         "classes": l3_target_names,
         "threshold": l3_threshold,
         "predicted_counts": l3_pred_counts,

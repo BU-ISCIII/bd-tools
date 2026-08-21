@@ -1,1676 +1,1825 @@
 #!/usr/bin/env python3
-"""Plot model results, evaluation curves, confusion matrices and processing summaries.
+"""
+Create publication-ready evaluation plots from a MEPRAM modelling run.
 
-This template is intended for an analysis directory containing one or more
-model-training runs like:
+This module is plotting-only: it does NOT retrain models.
 
-  01-training_5756602/
-    level1_sepsis/
-    level2_etiology/
-    level3_cefalosporina/
-    processing/
+Supported layouts
+-----------------
+Single/direct model:
+    01-*/
+        summary.json
+        predictions*.csv
+        report_*.txt
 
-  01-training_5756741/
-    ...
+Staged model:
+    01-*/
+        level1_sepsis/
+        level2_etiology/
+        level3_cefalosporina/
 
-When the supplied path is a parent directory, every immediate child directory
-whose name begins with ``01-`` is processed independently. Plots are written
-under each ``<run_dir>/plots/`` directory.
+A scope directory (e.g. 03-SEPSIS, 04-ETIOLOGY or 05-RESISTANCE)
+containing multiple 01-* runs is also supported.
+
+Plots generated
+---------------
+For every readable prediction target:
+    plots/performance/
+        <target>_confusion_matrix.png
+        <target>_roc_curve.png
+        <target>_pr_curve.png
+        <target>_<report>_metrics.png
+
+Only the requested evaluation plots are produced:
+confusion matrices, ROC curves, precision-recall curves, and
+per-category Precision/Recall/F1 plots.
+
+Class-count plots, merged staged plots and redundant overall/stage-comparison
+barplots are intentionally not generated. Available processing diagnostics,
+including RFECV histories, are plotted separately.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
-
-try:
-    import yaml
-except ImportError as exc:
-    raise ImportError("PyYAML is required: pip install pyyaml") from exc
-import math
+import sys
 from pathlib import Path
 from typing import Any
 
+import matplotlib
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
-from matplotlib import cm
-from matplotlib.colors import Normalize
-import matplotlib as mpl
-import shap
 import numpy as np
 import pandas as pd
+
 from sklearn.metrics import (
-    accuracy_score,
-    auc,
-    classification_report,
+    average_precision_score,
     confusion_matrix,
     precision_recall_curve,
-    precision_score,
-    recall_score,
     roc_auc_score,
     roc_curve,
 )
-from sklearn.preprocessing import LabelBinarizer
 
 
-def save_figure(fig: plt.Figure, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-
-
-def safe_str(value: Any) -> str:
-    return str(value).replace(" ", "_").replace("/", "_").replace("\\", "_")
-
-
-def display_labels_for_context(labels: list[str], context_name: str) -> list[str]:
-    """Return plot-facing class labels without changing metric labels.
-
-    - Level 1 binary sepsis: no sepsis / sepsis
-    - Level 2 Stage 1 gate: cultivo - / cultivo +
-    - Level 2 Stage 2 binary subtype: nonGNB / GNB
-    """
-    context = context_name.lower()
-    labels_as_str = [str(label) for label in labels]
-
-    # Level 1: sepsis
-    if len(labels) == 2 and ("level1" in context or "sepsis" in context):
-        if set(labels_as_str) == {"0", "1"}:
-            mapping = {"0": "no sepsis", "1": "sepsis"}
-            return [mapping[label] for label in labels_as_str]
-
-    # Level 2 Stage 2 subtype must be checked BEFORE the gate branch.
-    if len(labels) == 2 and any(
-        token in context
-        for token in ("stage2_subtype", "stage2", "subtype", "gnb")
-    ):
-        normalised = {
-            label.lower().replace("_", "").replace("-", "").replace(" ", "")
-            for label in labels_as_str
-        }
-
-        # Preserve semantic order when labels already contain subtype names.
-        if normalised <= {"gnb", "nongnb"}:
-            mapped = []
-            for label in labels_as_str:
-                key = label.lower().replace("_", "").replace("-", "").replace(" ", "")
-                mapped.append("GNB" if key == "gnb" else "nonGNB")
-            return mapped
-
-        # Fallback for encoded binary subtype predictions.
-        if set(labels_as_str) == {"0", "1"}:
-            mapping = {"0": "nonGNB", "1": "GNB"}
-            return [mapping[label] for label in labels_as_str]
-
-    # Level 2 Stage 1 culture gate only.
-    # Preserve the original confusion-matrix class order; only replace
-    # plot-facing labels with clinically readable names.
-    if len(labels) == 2 and any(
-        token in context
-        for token in ("stage1_gate", "gate")
-    ):
-        mapped = []
-        for label in labels_as_str:
-            key = (
-                label.lower()
-                .replace("_", "")
-                .replace("-", "")
-                .replace(" ", "")
-            )
-
-            if key in {"0", "gatenegative", "negative", "false"}:
-                mapped.append("cultivo -")
-            elif key in {"1", "gatepositive", "positive", "true"}:
-                mapped.append("cultivo +")
-            else:
-                mapped.append(label)
-
-        return mapped
-
-    return labels_as_str
-
-def load_json(path: Path) -> dict[str, Any]:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def plot_binary_curves(
-    y_true: np.ndarray,
-    y_score: np.ndarray,
-    output_prefix: Path,
-    positive_label: str | int = 1,
-) -> None:
-    y_true_binary = np.array(y_true)
-    if y_true_binary.dtype == object:
-        y_true_binary = np.array([1 if y == positive_label else 0 for y in y_true_binary])
-
-    if len(np.unique(y_true_binary)) < 2:
-        print(f"Skipping binary curves because only one class is present in y_true for {output_prefix}")
-        return
-
-    fpr, tpr, _ = roc_curve(y_true_binary, y_score)
-    precision, recall, _ = precision_recall_curve(y_true_binary, y_score)
-
-    baseline = float(np.mean(y_true_binary))
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(recall, precision, label=f"PR (AUC={auc(recall, precision):.3f})")
-    ax.axhline(
-        baseline,
-        linestyle="--",
-        color="gray",
-        linewidth=1,
-        label=f"Baseline prevalence={baseline:.3f}",
-    )
-    ax.set_xlabel("Recall")
-    ax.set_ylabel("Precision")
-    ax.set_title("Precision-Recall Curve")
-    ax.legend(loc="lower left")
-    save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-    ax.plot(fpr, tpr, label=f"ROC (AUC={auc(fpr, tpr):.3f})", linewidth=2)
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1, label="No-skill line")
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1.02)
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("ROC Curve")
-    ax.legend(loc="lower right")
-    ax.grid(alpha=0.25)
-    save_figure(fig, output_prefix.with_name(output_prefix.name + "_roc_curve.png"))
-
-    fig, ax = plt.subplots(figsize=(7, 6))
-
-    ax.plot(
-        fpr,
-        tpr,
-        label=f"ROC curve (AUC={auc(fpr, tpr):.3f})",
-        linewidth=2,
-    )
-
-    ax.plot(
-        recall,
-        precision,
-        label=f"PR curve (AUC={auc(recall, precision):.3f})",
-        linewidth=2,
-    )
-
-    ax.plot(
-        [0, 1],
-        [0, 1],
-        linestyle="--",
-        color="gray",
-        linewidth=1,
-        label="ROC no-skill line",
-    )
-
-    ax.axhline(
-        baseline,
-        linestyle=":",
-        color="gray",
-        linewidth=1,
-        label=f"PR baseline prevalence={baseline:.3f}",
-    )
-
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1.02)
-    ax.set_xlabel("False positive rate / Recall")
-    ax.set_ylabel("True positive rate / Precision")
-    ax.set_title("ROC and Precision-Recall Curves")
-    ax.legend(loc="lower left", fontsize="small")
-    ax.grid(alpha=0.25)
-
-    save_figure(
-        fig,
-        output_prefix.with_name(output_prefix.name + "_roc_pr_overlay.png"),
-    )
-
-
-def plot_confusion(cm: np.ndarray, labels: list[str], output_path: Path) -> None:
-    fig, ax = plt.subplots(figsize=(6, 5))
-    im = ax.imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
-    fig.colorbar(im, ax=ax)
-    ax.set_xticks(range(len(labels)))
-    ax.set_yticks(range(len(labels)))
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    ax.set_yticklabels(labels)
-    ax.set_xlabel("Predicted")
-    ax.set_ylabel("Actual")
-    ax.set_title("Confusion Matrix")
-
-    for i in range(cm.shape[0]):
-        for j in range(cm.shape[1]):
-            ax.text(j, i, f"{cm[i, j]:,}", ha="center", va="center", color="white" if cm[i, j] > cm.max() / 2 else "black")
-
-    fig.tight_layout()
-    save_figure(fig, output_path)
-
-
-def plot_multiclass_curves(
-    y_true: np.ndarray,
-    proba_df: pd.DataFrame,
-    class_labels: list[str],
-    output_prefix: Path,
-) -> None:
-    labels = list(class_labels)
-    lb = LabelBinarizer()
-    y_true_bin = lb.fit_transform(y_true)
-    if y_true_bin.shape[1] == 1:
-        y_true_bin = np.hstack([1 - y_true_bin, y_true_bin])
-        labels = lb.classes_.tolist()
-
-    if y_true_bin.shape[1] != proba_df.shape[1]:
-        raise ValueError("Mismatch between number of classes and probability columns")
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for index, class_name in enumerate(labels):
-        if np.unique(y_true_bin[:, index]).size < 2:
-            continue
-        fpr, tpr, _ = roc_curve(y_true_bin[:, index], proba_df.iloc[:, index])
-        ax.plot(fpr, tpr, label=f"{class_name} (AUC={auc(fpr, tpr):.3f})")
-
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", linewidth=1)
-    ax.set_xlabel("False Positive Rate")
-    ax.set_ylabel("True Positive Rate")
-    ax.set_title("Multiclass ROC Curves")
-    ax.legend(loc="lower right", fontsize="small")
-    save_figure(fig, output_prefix.with_name(output_prefix.name + "_roc_curve.png"))
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for index, class_name in enumerate(labels):
-        if np.unique(y_true_bin[:, index]).size < 2:
-            continue
-        precision, recall, _ = precision_recall_curve(y_true_bin[:, index], proba_df.iloc[:, index])
-        ax.plot(recall, precision, label=f"{class_name} (AUC={auc(recall, precision):.3f})")
-
-    ax.set_xlabel("Recall")
-    ax.set_ylabel("Precision")
-    ax.set_title("Multiclass Precision-Recall Curves")
-    ax.legend(loc="lower left", fontsize="small")
-    save_figure(fig, output_prefix.with_name(output_prefix.name + "_pr_curve.png"))
-
-    # Combined one-vs-rest ROC + PR overlay for multiclass targets (e.g. level-2 etiology).
-    fig, ax = plt.subplots(figsize=(9, 7))
-    plotted = False
-    for index, class_name in enumerate(labels):
-        if np.unique(y_true_bin[:, index]).size < 2:
-            continue
-        fpr, tpr, _ = roc_curve(y_true_bin[:, index], proba_df.iloc[:, index])
-        precision, recall, _ = precision_recall_curve(y_true_bin[:, index], proba_df.iloc[:, index])
-        ax.plot(fpr, tpr, linewidth=2, label=f"ROC {class_name} (AUC={auc(fpr, tpr):.3f})")
-        ax.plot(recall, precision, linestyle="--", linewidth=2, label=f"PR {class_name} (AUC={auc(recall, precision):.3f})")
-        plotted = True
-
-    if plotted:
-        ax.plot([0, 1], [0, 1], linestyle=":", color="gray", linewidth=1, label="ROC no-skill line")
-        ax.set_xlim(0, 1)
-        ax.set_ylim(0, 1.02)
-        ax.set_xlabel("False Positive Rate / Recall")
-        ax.set_ylabel("True Positive Rate / Precision")
-        ax.set_title("Multiclass ROC and Precision-Recall Curves")
-        ax.legend(loc="best", fontsize="small", ncol=2)
-        ax.grid(alpha=0.25)
-        save_figure(fig, output_prefix.with_name(output_prefix.name + "_roc_pr_overlay.png"))
-    else:
-        plt.close(fig)
-
-
-def plot_level_metrics_from_summary(summary_path: Path, out_dir: Path) -> None:
-    data = load_json(summary_path)
-    level_name = summary_path.parent.name
-    targets = []
-    if "target" in data:
-        targets.append((level_name, data))
-    else:
-        for key, value in data.items():
-            if isinstance(value, dict) and ("roc_auc" in value or "pr_auc" in value):
-                targets.append((f"{level_name}_{key}", value))
-
-    for name, summary in targets:
-        metrics = {
-            k: summary[k]
-            for k in ["roc_auc", "pr_auc", "macro_f1", "precision", "recall"]
-            if k in summary
-        }
-        if metrics:
-            fig, ax = plt.subplots(figsize=(7, 5))
-            ax.bar(metrics.keys(), metrics.values(), color=["#3b78b8", "#d1495b", "#edae49", "#76c893", "#4a4e69"][: len(metrics)])
-            ax.set_ylim(0, 1)
-            ax.set_ylabel("Score")
-            ax.set_title(f"Summary metrics for {name}")
-            for i, value in enumerate(metrics.values()):
-                ax.text(i, value + 0.02, f"{value:.3f}", ha="center")
-            save_figure(fig, out_dir / f"{safe_str(name)}_summary_metrics.png")
-
-        if "confusion_matrix" in summary:
-            labels = []
-            if "classes" in summary:
-                labels = [str(x) for x in summary["classes"]]
-            elif all(label in summary for label in ("negative_label", "positive_label")):
-                labels = [str(summary["negative_label"]), str(summary["positive_label"])]
-            else:
-                labels = ["0", "1"]
-
-            cm = np.array(summary["confusion_matrix"], dtype=int)
-
-            # Prediction files are plotted before summaries. If a prediction-based
-            # confusion matrix already exists for this level, keep that one and
-            # skip the summary-derived duplicate. This applies to level 1, level 2, etc.
-            summary_cm_path = out_dir / f"{safe_str(name)}_summary_confusion_matrix.png"
-            existing_prediction_cm = [
-                p for p in out_dir.glob("*_confusion_matrix.png")
-                if not p.name.endswith("_summary_confusion_matrix.png")
-            ]
-            if existing_prediction_cm:
-                continue
-
-            plot_confusion(
-                cm,
-                display_labels_for_context(labels, name),
-                summary_cm_path,
-            )
-
-
-def summarize_processing(
-    run_dir: Path,
-    out_dir: Path,
-    plots_dir: Path,
-    manifest: list[dict[str, Any]],
-) -> None:
-    processing_dir = run_dir / "processing"
-    if not processing_dir.exists():
-        return
-
-    files = {
-        "imputed_features.csv": plot_imputed_features,
-        "nan_dropped_features.csv": plot_nan_dropped_features,
-        "correlation_dropped_features.csv": plot_correlation_dropped_features,
-        "iqr_outliers_train.csv": plot_iqr_outliers,
-        "iqr_outliers_test.csv": plot_iqr_outliers,
-        "l1_rfecv_features.csv": plot_rfecv_feature_list,
-        "l2_gate_rfecv_features.csv": plot_rfecv_feature_list,
-        "l2_sub_rfecv_features.csv": plot_rfecv_feature_list,
-        "l2_direct_rfecv_features.csv": plot_rfecv_feature_list,
-        "l3_rfecv_features.csv": plot_rfecv_feature_list,
-    }
-
-    for filename, plot_func in files.items():
-        path = processing_dir / filename
-        if not path.exists():
-            continue
-        before = _png_snapshot(out_dir)
-        plot_func(path, out_dir)
-        df = pd.read_csv(path)
-        metrics: dict[str, Any] = {
-            "rows": int(len(df)),
-            "columns": [str(c) for c in df.columns],
-        }
-        if {"n_features", "roc_auc", "pr_auc"}.issubset(df.columns):
-            best_pr_idx = df["pr_auc"].idxmax()
-            best_roc_idx = df["roc_auc"].idxmax()
-            metrics.update({
-                "best_pr_auc": float(df.loc[best_pr_idx, "pr_auc"]),
-                "best_pr_auc_n_features": int(df.loc[best_pr_idx, "n_features"]),
-                "best_roc_auc": float(df.loc[best_roc_idx, "roc_auc"]),
-                "best_roc_auc_n_features": int(df.loc[best_roc_idx, "n_features"]),
-            })
-        for col in ("number_of_imputation", "nan_percentage", "abs_spearman", "n_outliers"):
-            if col in df.columns and not df.empty:
-                metrics[f"max_{col}"] = float(df[col].max())
-        _register_new_plots(
-            manifest,
-            before,
-            out_dir,
-            plots_dir,
-            path.resolve(),
-            metrics,
-        )
-
-def plot_imputed_features(path: Path, out_dir: Path) -> None:
-    df = pd.read_csv(path)
-    df = df.sort_values("number_of_imputation", ascending=False).head(30)
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.25 * len(df))))
-    ax.barh(df["feature"], df["number_of_imputation"], color="#3b78b8")
-    ax.invert_yaxis()
-    ax.set_xlabel("Number of imputed values")
-    ax.set_title("Top imputed features")
-    save_figure(fig, out_dir / "processing_imputed_features.png")
-
-
-def plot_nan_dropped_features(path: Path, out_dir: Path) -> None:
-    df = pd.read_csv(path)
-    df = df.sort_values("nan_percentage", ascending=False).head(30)
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.25 * len(df))))
-    ax.barh(df["feature"], df["nan_percentage"], color="#d1495b")
-    ax.invert_yaxis()
-    ax.set_xlabel("Missing percentage")
-    ax.set_title("Top features dropped by missingness")
-    save_figure(fig, out_dir / "processing_nan_dropped_features.png")
-
-
-def plot_correlation_dropped_features(path: Path, out_dir: Path) -> None:
-    df = pd.read_csv(path)
-
-    if "abs_spearman" not in df.columns:
-        return
-
-    top = df.sort_values("abs_spearman", ascending=False).head(50)
-
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.15 * len(top))))
-
-    norm = Normalize(vmin=0.98, vmax=1.00)
-    cmap = mpl.colormaps["Reds"]
-
-    colors = cmap(norm(top["abs_spearman"]))
-
-    ax.barh(
-        top["feature_dropped"],
-        top["abs_spearman"],
-        color=colors,
-    )
-
-    ax.invert_yaxis()
-
-    ax.set_xlim(0.98, 1.00)
-
-    ax.set_xlabel("Absolute Spearman correlation")
-    ax.set_title("Dropped correlated features")
-
-    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label("|Spearman|")
-    
-    plt.tight_layout()
-    save_figure(fig, out_dir / "processing_correlation_dropped_features.png")
-
-
-def plot_iqr_outliers(path: Path, out_dir: Path) -> None:
-    df = pd.read_csv(path)
-
-    if df.empty:
-        print(f"Skipping IQR outlier plot for {path}: empty input file")
-        return
-
-    count_candidates = [
-        "n_outliers",
-        "n_outlier",
-        "outlier_count",
-        "outliers",
-        "n_iqr_outliers",
-        "iqr_outliers",
-        "count",
-    ]
-    count_col = next((col for col in count_candidates if col in df.columns), None)
-
-    if count_col is None:
-        numeric_cols = [
-            col for col in df.columns
-            if pd.api.types.is_numeric_dtype(df[col])
-        ]
-        count_col = numeric_cols[0] if numeric_cols else None
-
-    if count_col is None:
-        print(
-            f"Skipping IQR outlier plot for {path}: no outlier-count column found. "
-            f"Available columns: {list(df.columns)}"
-        )
-        return
-
-    feature_col = "feature" if "feature" in df.columns else None
-    if feature_col is None:
-        feature_candidates = [col for col in df.columns if col != count_col]
-        feature_col = feature_candidates[0] if feature_candidates else None
-
-    if feature_col is None:
-        df = df.copy()
-        df["feature"] = df.index.astype(str)
-        feature_col = "feature"
-
-    df = df.sort_values(count_col, ascending=False).head(30)
-
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.25 * len(df))))
-    ax.barh(df[feature_col].astype(str), df[count_col], color="#76c893")
-    ax.invert_yaxis()
-    ax.set_xlabel("Outlier count")
-    ax.set_title(f"IQR outliers: {path.name}")
-    plt.tight_layout()
-    save_figure(fig, out_dir / f"processing_{path.stem}.png")
-
-
-def get_run_max_features(path: Path, default: int = 170) -> int:
-    run_dir = path.parents[1]  # processing/file.csv -> run_dir
-    summary_path = run_dir / "aggregate_summary.json"
-
-    if not summary_path.exists():
-        return default
-
-    try:
-        data = load_json(summary_path)
-        value = data.get("args", {}).get("max_features", default)
-        return int(value)
-    except Exception:
-        return default
-
-
-def plot_rfecv_feature_list(path: Path, out_dir: Path) -> None:
-    df = pd.read_csv(path)
-
-    required = {"n_features", "roc_auc", "pr_auc"}
-    if not required.issubset(df.columns):
-        print(f"Skipping RFECV performance plot for {path}: missing {required - set(df.columns)}")
-        return
-
-    df = df.sort_values("n_features")
-    max_features = get_run_max_features(path, default=170)
-
-    fig, ax = plt.subplots(figsize=(9, 5))
-
-    ax.plot(df["n_features"], df["roc_auc"], marker="o", linewidth=2, markersize=3, label="ROC-AUC")
-    ax.plot(df["n_features"], df["pr_auc"], marker="o", linewidth=2, markersize=3, label="PR-AUC")
-
-    # Best PR-AUC across all tested feature counts
-    best_pr_idx = df["pr_auc"].idxmax()
-    best_pr_n = int(df.loc[best_pr_idx, "n_features"])
-    best_pr = float(df.loc[best_pr_idx, "pr_auc"])
-
-    # Best PR-AUC within the feature cap
-    capped_df = df[df["n_features"] <= max_features]
-    if capped_df.empty:
-        capped_df = df.copy()
-
-    best_cap_idx = capped_df["pr_auc"].idxmax()
-    best_cap_n = int(capped_df.loc[best_cap_idx, "n_features"])
-    best_cap_pr = float(capped_df.loc[best_cap_idx, "pr_auc"])
-
-    ax.axvline(
-        max_features,
-        linestyle="--",
-        color="black",
-        linewidth=1.5,
-        alpha=0.8,
-        label=f"Feature cap ({max_features})",
-    )
-
-    ax.scatter(
-        best_pr_n,
-        best_pr,
-        marker="*",
-        s=260,
-        color="gold",
-        edgecolor="black",
-        linewidth=0.6,
-        zorder=20,
-        label=f"Best PR-AUC = {best_pr:.3f}",
-    )
-
-    same_best = best_pr_n == best_cap_n
-
-    if not same_best:
-        ax.scatter(
-            best_cap_n,
-            best_cap_pr,
-            marker="o",
-            color="red",
-            edgecolor="black",
-            linewidth=0.5,
-            s=90,
-            zorder=18,
-            label=f"Best capped PR-AUC = {best_cap_pr:.3f}",
-        )
-
-    if same_best:
-        ax.annotate(
-            f"{best_pr_n} features",
-            xy=(best_pr_n, best_pr),
-            xytext=(8, 12),
-            textcoords="offset points",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.85),
-            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.8),
-        )
-    else:
-        ax.annotate(
-            f"{best_pr_n} features",
-            xy=(best_pr_n, best_pr),
-            xytext=(8, 12),
-            textcoords="offset points",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.85),
-            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.8),
-        )
-
-        ax.annotate(
-            f"{best_cap_n} features",
-            xy=(best_cap_n, best_cap_pr),
-            xytext=(8, -36),
-            textcoords="offset points",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="gray", alpha=0.85),
-            arrowprops=dict(arrowstyle="->", color="gray", linewidth=0.8),
-        )
-
-    ax.set_xlim(1, 170)
-    ax.set_ylim(0, 1)
-    ax.set_xlabel("Number of features")
-    ax.set_ylabel("Score")
-    ax.set_title(f"RFECV performance: {path.stem}")
-    ax.legend(loc="lower right")
-    ax.grid(alpha=0.25)
-
-    plt.tight_layout()
-
-    save_figure(fig, out_dir / f"processing_{path.stem}_performance.png")
-
-
-def infer_labels(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    if "true_label" in df.columns and "pred_label" in df.columns:
-        y_true = df["true_label"].astype(str).to_numpy()
-        y_pred = df["pred_label"].astype(str).to_numpy()
-        raw_labels = list(dict.fromkeys(np.concatenate([y_true, y_pred]).tolist()))
-        if set(raw_labels) == {"GNB", "non_GNB"}:
-            labels = ["non_GNB", "GNB"]
-        else:
-            labels = raw_labels
-    else:
-        y_true = df["true"].to_numpy().astype(int)
-        y_pred = df["pred"].to_numpy().astype(int)
-        labels = sorted(np.unique(np.concatenate([y_true, y_pred])).tolist())
-    return y_true, y_pred, labels
-
-
-def infer_positive_label(labels: list[str], context_name: str) -> str | int:
-    """Infer the clinically meaningful positive class for a binary target."""
-    if len(labels) != 2:
-        return labels[-1]
-
-    context = context_name.lower()
-    normalised = {
-        str(label).lower().replace("_", "").replace("-", "").replace(" ", ""): label
-        for label in labels
-    }
-
-    # Numeric / boolean encodings: class 1 is positive.
-    for key in ("1", "true", "yes", "positive"):
-        if key in normalised:
-            return normalised[key]
-
-    # Level 1: sepsis is the positive outcome.
-    if "sepsis" in context or "level1" in context:
-        for key, original in normalised.items():
-            if key in {"sepsis", "withsepsis"} or ("sepsis" in key and "no" not in key and "non" not in key):
-                return original
-
-    # Level 3: antimicrobial resistance is the positive outcome.
-    if any(token in context for token in ("level3", "resist", "cefalospor")):
-        for key, original in normalised.items():
-            if (
-                key in {"r", "resistant", "resistente", "resistance", "resistencia"}
-                or "resist" in key
-            ) and not any(neg in key for neg in ("nonresist", "noresist", "suscept", "sensible")):
-                return original
-
-    # Level 2 gate/subtype defaults.
-    if any(token in context for token in ("stage1", "gate")):
-        for key, original in normalised.items():
-            if key in {"cultivo+", "cultivopositivo", "gatepositive", "positive"} or "positive" in key:
-                return original
-    if any(token in context for token in ("stage2", "subtype", "gnb")):
-        for key, original in normalised.items():
-            if key == "gnb":
-                return original
-
-    return labels[-1]
-
-
-def infer_scores(df: pd.DataFrame, labels: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    if "proba_positive" in df.columns:
-        # Explicitly exported positive-class probability; never invert it.
-        return df["proba_positive"].to_numpy().astype(float), np.array(labels)
-
-    if "proba" in df.columns:
-        # The generic ``proba`` column is ambiguous: some exports contain the
-        # probability of class 0, while the plotting code evaluates class 1.
-        # Its orientation is resolved later from the saved predicted labels.
-        return df["proba"].to_numpy().astype(float), np.array(labels)
-
-    prob_cols = [
-        c for c in df.columns
-        if c.startswith("proba_") and c != "proba_positive"
-    ]
-
-    if prob_cols:
-        class_names = [c.replace("proba_", "", 1) for c in prob_cols]
-        return df[prob_cols].to_numpy().astype(float), np.array(class_names)
-
-    return np.array([]), np.array(labels)
-
-
-def orient_binary_score_to_positive_class(
-    y_true: np.ndarray,
-    positive_label: str | int,
-    y_score: np.ndarray,
-    source_name: str,
-    score_source: str,
-) -> np.ndarray:
-    """Ensure a one-dimensional binary score represents P(positive class).
-
-    Binary prediction exports are not consistent: columns named ``proba`` or
-    even ``proba_positive`` may contain the probability of the first estimator
-    class rather than the clinically positive outcome. The orientation is
-    resolved against ``y_true`` for the explicitly selected positive label.
-
-    When the score is the complement of the positive-class probability, its
-    ROC AUC is below 0.5. In that case ``1 - score`` is used. This changes only
-    probability orientation; predicted labels and confusion matrices are not
-    modified.
-    """
-    if y_score.ndim != 1 or y_score.size == 0:
-        return y_score
-
-    y_binary = (np.asarray(y_true).astype(str) == str(positive_label)).astype(int)
-    if np.unique(y_binary).size < 2:
-        return y_score
-
-    finite = np.isfinite(y_score)
-    if finite.sum() == 0 or np.unique(y_binary[finite]).size < 2:
-        return y_score
-
-    score_auc = float(roc_auc_score(y_binary[finite], y_score[finite]))
-    if score_auc < 0.5:
-        print(
-            f"Inverting {score_source} for {source_name}: raw ROC-AUC={score_auc:.4f} "
-            f"for positive class {positive_label!r}; using 1 - score"
-        )
-        return 1.0 - y_score
-
-    print(
-        f"Keeping {score_source} for {source_name}: ROC-AUC={score_auc:.4f} "
-        f"for positive class {positive_label!r}"
-    )
-    return y_score
-
-
-def _json_safe(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _json_safe(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_safe(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if pd.isna(value):
-        return None
-    return value
-
-
-def _png_snapshot(directory: Path) -> set[Path]:
-    if not directory.exists():
-        return set()
-    return {p.resolve() for p in directory.rglob("*.png")}
-
-
-def _plot_type_from_name(path: Path) -> str:
-    name = path.stem
-    if name.endswith("_confusion_matrix"):
-        return "confusion_matrix"
-    if name.endswith("_roc_pr_overlay"):
-        return "roc_pr_overlay"
-    if name.endswith("_roc_curve"):
-        return "roc_curve"
-    if name.endswith("_pr_curve"):
-        return "precision_recall_curve"
-    if name.endswith("_summary_metrics"):
-        return "summary_metrics"
-    if "rfecv" in name and name.endswith("_performance"):
-        return "rfecv_performance"
-    if "imputed_features" in name:
-        return "imputed_features"
-    if "nan_dropped_features" in name:
-        return "missingness_dropped_features"
-    if "correlation_dropped_features" in name:
-        return "correlation_dropped_features"
-    if "iqr_outliers" in name:
-        return "iqr_outliers"
-    if "shap" in name and name.endswith("_bar"):
-        return "shap_importance_bar"
-    if "shap" in name and name.endswith("_beeswarm"):
-        return "shap_beeswarm"
-    return "plot"
-
-
-def _register_new_plots(
-    manifest: list[dict[str, Any]],
-    before: set[Path],
-    output_dir: Path,
-    plots_dir: Path,
-    source_file: Path,
-    metrics: dict[str, Any],
-) -> None:
-    after = _png_snapshot(output_dir)
-    for plot_path in sorted(after - before):
-        manifest.append({
-            "plot_file": str(plot_path.relative_to(plots_dir)),
-            "plot_type": _plot_type_from_name(plot_path),
-            "input_file": str(source_file),
-            "metrics": _json_safe(metrics),
-        })
-
-
-def compute_prediction_metrics(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    labels: list[str],
-    y_score: np.ndarray,
-    class_names: np.ndarray,
-    positive_label: str | int | None = None,
-) -> dict[str, Any]:
-    cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
-    report = classification_report(
-        y_true,
-        y_pred,
-        labels=labels,
-        zero_division=0,
-        output_dict=True,
-    )
-    metrics: dict[str, Any] = {
-        "rows": int(len(y_true)),
-        "labels": [str(x) for x in labels],
-        "accuracy": float(accuracy_score(y_true, y_pred)),
-        "confusion_matrix": cmatrix.tolist(),
-        "classification_report": report,
-    }
-
-    if y_score.size and y_score.ndim == 1 and len(labels) == 2:
-        if positive_label is None:
-            positive_label = labels[-1]
-        y_binary = np.array([1 if y == positive_label else 0 for y in y_true])
-        if np.unique(y_binary).size == 2:
-            fpr, tpr, _ = roc_curve(y_binary, y_score)
-            precision, recall, _ = precision_recall_curve(y_binary, y_score)
-            metrics.update({
-                "positive_label": str(positive_label),
-                "roc_auc": float(auc(fpr, tpr)),
-                "pr_auc": float(auc(recall, precision)),
-                "positive_prevalence": float(np.mean(y_binary)),
-            })
-    elif y_score.size and y_score.ndim == 2 and y_score.shape[1] > 1:
-        label_to_index = {str(label): i for i, label in enumerate(class_names)}
-        per_class: dict[str, Any] = {}
-        for class_name in class_names:
-            class_name_str = str(class_name)
-            idx = label_to_index[class_name_str]
-            y_binary = (np.asarray(y_true).astype(str) == class_name_str).astype(int)
-            if np.unique(y_binary).size < 2:
-                continue
-            fpr, tpr, _ = roc_curve(y_binary, y_score[:, idx])
-            precision, recall, _ = precision_recall_curve(y_binary, y_score[:, idx])
-            per_class[class_name_str] = {
-                "roc_auc": float(auc(fpr, tpr)),
-                "pr_auc": float(auc(recall, precision)),
-                "prevalence": float(np.mean(y_binary)),
-            }
-        metrics["one_vs_rest"] = per_class
-
-    return metrics
-
-
-def plot_predictions(prediction_path: Path, out_dir: Path) -> dict[str, Any]:
-    df = pd.read_csv(prediction_path)
-    if df.empty:
-        return {"rows": 0, "skipped": "empty input file"}
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Prefix every prediction-derived plot with the prediction subfolder/level.
-    # Examples:
-    #   level1_sepsis_predictions_confusion_matrix.png
-    #   level2_etiology_predictions_stage1_gate_roc_curve.png
-    #   level3_cefalosporina_predictions_pr_curve.png
-    level_name = safe_str(prediction_path.parent.name)
-
-    # Remove the leading "predictions" token from plot filenames while
-    # preserving any informative suffix, e.g.:
-    #   predictions.csv -> level1_sepsis
-    #   predictions_stage1_gate.csv -> level2_etiology_stage1_gate
-    #   predictions_stage2_subtype.csv -> level2_etiology_stage2_subtype
-    prediction_stem = re.sub(
-        r"^predictions(?:[_-]+)?",
-        "",
-        prediction_path.stem,
-        flags=re.IGNORECASE,
-    )
-    base_name = safe_str(prediction_stem).strip("_")
-    plot_prefix = level_name if not base_name else f"{level_name}_{base_name}"
-
-    y_true, y_pred, labels = infer_labels(df)
-    context_name = f"{prediction_path.parent.name}_{base_name}"
-    positive_label = infer_positive_label(labels, context_name)
-    y_score, class_names = infer_scores(df, labels)
-    if y_score.size and y_score.ndim == 1:
-        if "proba_positive" in df.columns:
-            score_source = "proba_positive"
-        elif "proba" in df.columns:
-            score_source = "proba"
-        else:
-            score_source = "binary probability score"
-        y_score = orient_binary_score_to_positive_class(
-            y_true=y_true,
-            positive_label=positive_label,
-            y_score=y_score,
-            source_name=str(prediction_path),
-            score_source=score_source,
-        )
-
-    cmatrix = confusion_matrix(y_true, y_pred, labels=labels)
-    plot_confusion(
-        cmatrix,
-        display_labels_for_context(labels, context_name),
-        out_dir / f"{plot_prefix}_confusion_matrix.png",
-    )
-
-    if y_score.size and y_score.ndim == 1:
-        plot_binary_curves(
-            y_true=y_true,
-            y_score=y_score,
-            output_prefix=out_dir / Path(plot_prefix),
-            positive_label=positive_label,
-        )
-    elif y_score.size and y_score.ndim == 2:
-        if y_score.shape[1] == 1:
-            plot_binary_curves(
-                y_true=y_true,
-                y_score=y_score[:, 0],
-                output_prefix=out_dir / Path(plot_prefix),
-                positive_label=positive_label,
-            )
-        else:
-            plot_multiclass_curves(
-                y_true=y_true,
-                proba_df=pd.DataFrame(y_score, columns=class_names),
-                class_labels=class_names.tolist(),
-                output_prefix=out_dir / Path(plot_prefix),
-            )
-
-    metrics = compute_prediction_metrics(
-        y_true=y_true,
-        y_pred=y_pred,
-        labels=labels,
-        y_score=y_score,
-        class_names=class_names,
-        positive_label=positive_label,
-    )
-    true_col = "true_label" if "true_label" in df.columns else "true"
-    metrics["label_distribution"] = {
-        str(k): int(v)
-        for k, v in df[true_col].value_counts(dropna=False).items()
-    }
-    return metrics
-
-
-
-def _first_npz_array(npz: np.lib.npyio.NpzFile, preferred_keys: tuple[str, ...] = ("shap_values", "values", "arr_0")) -> np.ndarray:
-    """Return the first useful ndarray from an NPZ SHAP artifact."""
-    for key in preferred_keys:
-        if key in npz.files:
-            return np.asarray(npz[key])
-    for key in npz.files:
-        array = np.asarray(npz[key])
-        if array.size:
-            return array
-    raise ValueError("NPZ file does not contain any non-empty arrays")
-
-
-
-def _infer_shap_feature_count(shap_values: np.ndarray, n_rows: int) -> int | None:
-    """Infer the feature dimension in a SHAP array for a known row count."""
-    values = np.asarray(shap_values)
-
-    if values.ndim == 2:
-        if values.shape[0] == n_rows:
-            return int(values.shape[1])
-        if values.shape[1] == n_rows:
-            return int(values.shape[0])
-        return None
-
-    if values.ndim == 3:
-        # Common layouts:
-        #   samples x features x classes
-        #   classes x samples x features
-        #   samples x classes x features
-        if values.shape[0] == n_rows:
-            return int(max(values.shape[1], values.shape[2])) if 1 in values.shape[1:] else int(values.shape[1])
-        if values.shape[1] == n_rows:
-            return int(values.shape[2])
-        return None
-
-    return None
-
-
-def _read_importance_feature_names(importance_path: Path) -> list[str]:
-    """Read feature names from a SHAP importance CSV when possible."""
-    if not importance_path.exists():
-        return []
-
-    try:
-        importance_df = pd.read_csv(importance_path)
-    except Exception as exc:
-        print(f"Could not read SHAP importance feature names from {importance_path}: {exc}")
-        return []
-
-    feature_col_candidates = [
-        "feature",
-        "Feature",
-        "feature_name",
-        "feature_names",
-        "variable",
-        "Variable",
-        "name",
-    ]
-    feature_col = next((col for col in feature_col_candidates if col in importance_df.columns), None)
-    if feature_col is None:
-        return []
-
-    return [str(x) for x in importance_df[feature_col].dropna().tolist()]
-
-
-def align_shap_X_to_values(
-    x_df: pd.DataFrame,
-    shap_values: np.ndarray,
-    importance_path: Path,
-    source_name: str,
-) -> pd.DataFrame:
-    """Align SHAP X columns to the SHAP value matrix.
-
-    Some training exports write an identifier, target, or prediction column into
-    *_shap_X.csv. In that case X has one or more extra columns compared with the
-    SHAP value matrix. This function keeps the feature columns that correspond
-    to the SHAP values so plotting can continue safely.
-    """
-    expected_n_features = _infer_shap_feature_count(shap_values, n_rows=x_df.shape[0])
-    if expected_n_features is None:
-        return x_df
-
-    if x_df.shape[1] == expected_n_features:
-        return x_df
-
-    original_columns = [str(c) for c in x_df.columns]
-
-    # Prefer the importance CSV because it is the most explicit feature list.
-    importance_features = _read_importance_feature_names(importance_path)
-    if importance_features:
-        unique_importance_features = []
-        seen = set()
-        for feature in importance_features:
-            if feature in original_columns and feature not in seen:
-                unique_importance_features.append(feature)
-                seen.add(feature)
-
-        if len(unique_importance_features) == expected_n_features:
-            print(
-                f"Aligned {source_name}: selected {expected_n_features} X columns "
-                "using the SHAP importance feature list"
-            )
-            return x_df.loc[:, unique_importance_features]
-
-    # Drop common non-feature columns if doing so gives the right shape.
-    non_feature_names = {
-        "id", "ID", "index", "Index", "sample", "sample_id", "row", "row_id",
-        "true", "true_label", "target", "y", "label", "pred", "pred_label",
-        "proba", "proba_positive", "prediction", "probability",
-    }
-    kept_columns = [col for col in x_df.columns if str(col) not in non_feature_names]
-    if len(kept_columns) == expected_n_features:
-        dropped = [str(col) for col in x_df.columns if col not in kept_columns]
-        print(
-            f"Aligned {source_name}: dropped non-feature column(s) {dropped} "
-            f"from SHAP X"
-        )
-        return x_df.loc[:, kept_columns]
-
-    # Very common case: first column is an exported CSV index or identifier.
-    if x_df.shape[1] == expected_n_features + 1:
-        dropped = str(x_df.columns[0])
-        print(
-            f"Aligned {source_name}: SHAP values have {expected_n_features} features "
-            f"but X has {x_df.shape[1]} columns; dropping first X column '{dropped}'"
-        )
-        return x_df.iloc[:, 1:].copy()
-
-    # Last-resort deterministic fallback: keep the first expected feature columns.
-    if x_df.shape[1] > expected_n_features:
-        print(
-            f"Aligned {source_name}: SHAP values have {expected_n_features} features "
-            f"but X has {x_df.shape[1]} columns; keeping the first {expected_n_features} columns. "
-            "Check *_shap_X.csv if these are not the model feature columns."
-        )
-        return x_df.iloc[:, :expected_n_features].copy()
-
-    return x_df
-
-
-def _normalise_shap_values(shap_values: np.ndarray, n_rows: int, n_features: int) -> dict[str, np.ndarray]:
-    """Convert SHAP arrays into one or more 2D sample x feature matrices.
-
-    Handles common layouts:
-      - binary/regression: (n_samples, n_features)
-      - multiclass: (n_samples, n_features, n_classes)
-      - multiclass: (n_classes, n_samples, n_features)
-    """
-    values = np.asarray(shap_values)
-
-    if values.ndim == 2:
-        if values.shape == (n_rows, n_features):
-            return {"overall": values}
-        if values.shape == (n_features, n_rows):
-            return {"overall": values.T}
-        raise ValueError(f"Unsupported 2D SHAP shape {values.shape}; expected ({n_rows}, {n_features})")
-
-    if values.ndim == 3:
-        matrices: dict[str, np.ndarray] = {}
-        if values.shape[0] == n_rows and values.shape[1] == n_features:
-            # sample x feature x class
-            for class_index in range(values.shape[2]):
-                matrices[f"class_{class_index}"] = values[:, :, class_index]
-            matrices["overall"] = np.mean(np.abs(values), axis=2)
-            return matrices
-
-        if values.shape[1] == n_rows and values.shape[2] == n_features:
-            # class x sample x feature
-            for class_index in range(values.shape[0]):
-                matrices[f"class_{class_index}"] = values[class_index, :, :]
-            matrices["overall"] = np.mean(np.abs(values), axis=0)
-            return matrices
-
-        if values.shape[0] == n_rows and values.shape[2] == n_features:
-            # sample x class x feature
-            for class_index in range(values.shape[1]):
-                matrices[f"class_{class_index}"] = values[:, class_index, :]
-            matrices["overall"] = np.mean(np.abs(values), axis=1)
-            return matrices
-
-    raise ValueError(f"Unsupported SHAP array shape {values.shape}")
-
-
-def _top_shap_features(shap_matrix: np.ndarray, feature_names: list[str], max_display: int = 20) -> list[str]:
-    mean_abs = np.nanmean(np.abs(shap_matrix), axis=0)
-    order = np.argsort(mean_abs)[::-1][:max_display]
-    return [feature_names[i] for i in order]
-
-
-def plot_shap_importance_bar_from_csv(
-    importance_path: Path,
-    output_path: Path,
-    title: str,
-    max_display: int = 20,
-) -> dict[str, Any]:
-    """Plot absolute SHAP importance directly from *_shap_importance.csv.
-
-    Expected columns include:
-      - feature
-      - mean_abs_shap
-
-    The plot matches the saved SHAP importance table exactly and avoids
-    cancellation from signed mean SHAP values.
-    """
-    if not importance_path.exists():
-        raise FileNotFoundError(f"SHAP importance CSV not found: {importance_path}")
-
-    importance_df = pd.read_csv(importance_path)
-    if importance_df.empty:
-        raise ValueError(f"SHAP importance CSV is empty: {importance_path}")
-
-    feature_candidates = [
-        "feature",
-        "Feature",
-        "feature_name",
-        "feature_names",
-        "variable",
-        "Variable",
-        "name",
-    ]
-    feature_col = next(
-        (col for col in feature_candidates if col in importance_df.columns),
-        None,
-    )
-    if feature_col is None:
-        raise ValueError(
-            f"No feature-name column found in {importance_path}. "
-            f"Available columns: {list(importance_df.columns)}"
-        )
-
-    importance_candidates = [
-        "mean_abs_shap",
-        "mean_absolute_shap",
-        "mean_abs_shap_value",
-        "importance",
-    ]
-    importance_col = next(
-        (col for col in importance_candidates if col in importance_df.columns),
-        None,
-    )
-    if importance_col is None:
-        raise ValueError(
-            f"No absolute SHAP importance column found in {importance_path}. "
-            f"Available columns: {list(importance_df.columns)}"
-        )
-
-    plot_df = importance_df[[feature_col, importance_col]].copy()
-    plot_df[feature_col] = plot_df[feature_col].astype(str)
-    plot_df[importance_col] = pd.to_numeric(
-        plot_df[importance_col],
-        errors="coerce",
-    )
-    plot_df = plot_df.dropna(subset=[feature_col, importance_col])
-
-    # SHAP importance is absolute by definition here.
-    plot_df[importance_col] = plot_df[importance_col].abs()
-
-    top = (
-        plot_df.sort_values(importance_col, ascending=False)
-        .head(max_display)
-        .iloc[::-1]
-    )
-
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.30 * len(top))))
-    ax.barh(
-        top[feature_col],
-        top[importance_col],
-    )
-    ax.set_xlabel("Mean |SHAP value|")
-    ax.set_title(title)
-    ax.grid(axis="x", alpha=0.25)
-    plt.tight_layout()
-    save_figure(fig, output_path)
-
-    ranked = plot_df.sort_values(importance_col, ascending=False)
-    return {
-        "rows": int(len(importance_df)),
-        "features": int(plot_df[feature_col].nunique()),
-        "top_features": ranked[feature_col].head(10).astype(str).tolist(),
-        "top_mean_abs_shap": [
-            float(v) for v in ranked[importance_col].head(10).tolist()
-        ],
-        "importance_source": str(importance_path),
-        "importance_column": importance_col,
-    }
-
-def plot_shap_beeswarm(
-    shap_matrix: np.ndarray,
-    x_df: pd.DataFrame,
-    output_path: Path,
-    title: str,
-    max_display: int = 20,
-    max_points_per_feature: int = 800,
-) -> dict[str, Any]:
-    feature_names = [str(c) for c in x_df.columns]
-    if shap_matrix.shape != x_df.shape:
-        raise ValueError(f"SHAP/X shape mismatch: SHAP {shap_matrix.shape}, X {x_df.shape}")
-
-    mean_abs = np.nanmean(np.abs(shap_matrix), axis=0)
-    order = np.argsort(mean_abs)[::-1][:max_display]
-    ordered_indices = list(order)[::-1]
-    ordered_features = [feature_names[i] for i in ordered_indices]
-
-    rng = np.random.default_rng(42)
-    fig, ax = plt.subplots(figsize=(10, max(5, 0.34 * len(ordered_features))))
-
-    for y_pos, feature_index in enumerate(ordered_indices):
-        shap_vals = np.asarray(shap_matrix[:, feature_index], dtype=float)
-        feature_vals = pd.to_numeric(x_df.iloc[:, feature_index], errors="coerce").to_numpy(dtype=float)
-        valid = np.isfinite(shap_vals)
-        shap_vals = shap_vals[valid]
-        feature_vals = feature_vals[valid]
-
-        if shap_vals.size > max_points_per_feature:
-            sample_idx = rng.choice(shap_vals.size, size=max_points_per_feature, replace=False)
-            shap_vals = shap_vals[sample_idx]
-            feature_vals = feature_vals[sample_idx]
-
-        jitter = rng.normal(loc=0.0, scale=0.08, size=shap_vals.size)
-        colors = feature_vals.copy()
-        if not np.isfinite(colors).any():
-            colors = np.zeros_like(shap_vals)
-
-        ax.scatter(
-            shap_vals,
-            np.full(shap_vals.shape, y_pos) + jitter,
-            c=colors,
-            cmap=shap.plots.colors.red_blue,
-            s=10,
-            alpha=0.65,
-            linewidths=0,
-        )
-
-    ax.axvline(0, color="gray", linewidth=1)
-    ax.set_yticks(range(len(ordered_features)))
-    ax.set_yticklabels(ordered_features)
-    ax.set_xlabel("SHAP value")
-    ax.set_title(title)
-    ax.grid(axis="x", alpha=0.25)
-
-    sm = cm.ScalarMappable(cmap=shap.plots.colors.red_blue)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=ax)
-    cbar.set_label("Feature value")
-
-    plt.tight_layout()
-    save_figure(fig, output_path)
-
-    return {
-        "rows": int(shap_matrix.shape[0]),
-        "features": int(shap_matrix.shape[1]),
-        "top_features": [str(feature_names[i]) for i in order[:10]],
-        "top_mean_abs_shap": [float(mean_abs[i]) for i in order[:10]],
-    }
-
-
-def plot_shap_artifact(shap_values_path: Path, plots_dir: Path) -> dict[str, Any]:
-    """Create SHAP importance and beeswarm plots for one SHAP artifact prefix."""
-    prefix = shap_values_path.name.replace("_shap_values.npz", "")
-    shap_dir = shap_values_path.parent
-    x_path = shap_dir / f"{prefix}_shap_X.csv"
-    importance_path = shap_dir / f"{prefix}_shap_importance.csv"
-    metadata_path = shap_dir / f"{prefix}_shap_metadata.json"
-
-    if not x_path.exists():
-        print(f"Skipping SHAP plots for {shap_values_path}: missing {x_path.name}")
-        return {"skipped": "missing shap_X.csv"}
-
-    x_df = pd.read_csv(x_path)
-    if x_df.empty:
-        print(f"Skipping SHAP plots for {shap_values_path}: empty X matrix")
-        return {"skipped": "empty shap_X.csv"}
-
-    with np.load(shap_values_path, allow_pickle=False) as npz:
-        raw_values = _first_npz_array(npz)
-
-    x_df = align_shap_X_to_values(
-        x_df=x_df,
-        shap_values=raw_values,
-        importance_path=importance_path,
-        source_name=str(shap_values_path),
-    )
-
-    matrices = _normalise_shap_values(
-        raw_values,
-        n_rows=x_df.shape[0],
-        n_features=x_df.shape[1],
-    )
-
-    metadata: dict[str, Any] = {}
-    if metadata_path.exists():
-        try:
-            metadata = load_json(metadata_path)
-        except Exception as exc:
-            print(f"Could not read SHAP metadata {metadata_path}: {exc}")
-
-    output_dir = plots_dir / shap_values_path.parent.parent.name / "shap"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    feature_names = [str(c) for c in x_df.columns]
-    metrics: dict[str, Any] = {
-        "prefix": prefix,
-        "rows": int(x_df.shape[0]),
-        "features": int(x_df.shape[1]),
-        "npz_shape": list(raw_values.shape),
-        "metadata": metadata,
-    }
-
-    # Beeswarm uses the SHAP value matrix. The bar importance plot is read
-    # directly from *_shap_importance.csv so it exactly reflects mean_abs_shap.
-    matrix = matrices.get("overall", next(iter(matrices.values())))
-    title_prefix = prefix.replace("_", " ")
-
-    bar_metrics = plot_shap_importance_bar_from_csv(
-        importance_path=importance_path,
-        output_path=output_dir / f"{safe_str(prefix)}_shap_bar.png",
-        title=f"SHAP importance: {title_prefix}",
-    )
-    beeswarm_metrics = plot_shap_beeswarm(
-        matrix,
-        x_df,
-        output_dir / f"{safe_str(prefix)}_shap_beeswarm.png",
-        title=f"SHAP values: {title_prefix}",
-    )
-
-    metrics.update({
-        "bar": bar_metrics,
-        "beeswarm": beeswarm_metrics,
-    })
-
-    # Keep a compact CSV-derived reference in the manifest when available.
-    if importance_path.exists():
-        try:
-            importance_df = pd.read_csv(importance_path)
-            metrics["importance_file_rows"] = int(len(importance_df))
-            metrics["importance_file_columns"] = [str(c) for c in importance_df.columns]
-        except Exception as exc:
-            print(f"Could not read SHAP importance {importance_path}: {exc}")
-
-    return metrics
-
-
-def plot_shap_outputs(run_dir: Path, plots_dir: Path, manifest: list[dict[str, Any]]) -> None:
-    shap_value_files = sorted(run_dir.glob("level*/shap/*_shap_values.npz"))
-    if not shap_value_files:
-        return
-
-    print(f"Plotting SHAP artifacts from {run_dir}")
-    for shap_values_path in shap_value_files:
-        level_plot_dir = plots_dir / shap_values_path.parent.parent.name / "shap"
-        before = _png_snapshot(level_plot_dir)
-        try:
-            metrics = plot_shap_artifact(shap_values_path, plots_dir)
-        except Exception as exc:
-            print(f"Skipping SHAP plots for {shap_values_path}: {exc}")
-            metrics = {"skipped": str(exc)}
-        _register_new_plots(
-            manifest,
-            before,
-            level_plot_dir,
-            plots_dir,
-            shap_values_path.resolve(),
-            metrics,
-        )
-
-def collect_prediction_files(run_dir: Path) -> list[Path]:
-    return sorted(run_dir.rglob("predictions*.csv"))
-
-
-def discover_run_directories(root_dir: Path, run_prefix: str = "01-") -> list[Path]:
-    """Return model-training run directories below ``root_dir``.
-
-    If ``root_dir`` itself starts with the requested prefix, it is treated as
-    one run. Otherwise, only immediate child directories starting with the
-    prefix are returned. Restricting discovery to immediate children prevents
-    nested result folders from being processed more than once.
-    """
-    root_dir = root_dir.expanduser().resolve()
-
-    if not root_dir.exists():
-        raise FileNotFoundError(f"Run root not found: {root_dir}")
-    if not root_dir.is_dir():
-        raise NotADirectoryError(f"Run root is not a directory: {root_dir}")
-
-    if root_dir.name.startswith(run_prefix):
-        return [root_dir]
-
-    return sorted(
-        (
-            path.resolve()
-            for path in root_dir.iterdir()
-            if path.is_dir() and path.name.startswith(run_prefix)
-        ),
-        key=lambda path: path.name,
-    )
-
-
-def run_plotting(run_dir: Path, plots_dir: Path) -> Path:
-    run_dir = run_dir.resolve()
-    plots_dir = plots_dir.resolve()
-    plots_dir.mkdir(parents=True, exist_ok=True)
-    manifest: list[dict[str, Any]] = []
-
-    for prediction_path in collect_prediction_files(run_dir):
-        level_plot_dir = plots_dir / prediction_path.parent.name
-        print(f"Plotting {prediction_path} -> {level_plot_dir}")
-        before = _png_snapshot(level_plot_dir)
-        metrics = plot_predictions(prediction_path, level_plot_dir)
-        _register_new_plots(
-            manifest,
-            before,
-            level_plot_dir,
-            plots_dir,
-            prediction_path.resolve(),
-            metrics,
-        )
-
-    summary_files = sorted(run_dir.rglob("summary.json"))
-    for summary_path in summary_files:
-        level_plot_dir = plots_dir / summary_path.parent.name
-        print(f"Plotting summary {summary_path} -> {level_plot_dir}")
-        before = _png_snapshot(level_plot_dir)
-        plot_level_metrics_from_summary(summary_path, level_plot_dir)
-        summary_data = load_json(summary_path)
-        _register_new_plots(
-            manifest,
-            before,
-            level_plot_dir,
-            plots_dir,
-            summary_path.resolve(),
-            {"summary_metrics": summary_data},
-        )
-
-    print(f"Plotting processing tables from {run_dir / 'processing'}")
-    summarize_processing(
-        run_dir,
-        plots_dir / "processing",
-        plots_dir,
-        manifest,
-    )
-
-    plot_shap_outputs(
-        run_dir,
-        plots_dir,
-        manifest,
-    )
-
-    manifest_path = plots_dir / "plot_manifest.yaml"
-    payload = {
-        "run_directory": str(run_dir),
-        "plots_directory": str(plots_dir),
-        "n_plots": len(manifest),
-        "plots": manifest,
-    }
-    with manifest_path.open("w", encoding="utf-8") as handle:
-        yaml.safe_dump(
-            _json_safe(payload),
-            handle,
-            sort_keys=False,
-            allow_unicode=True,
-        )
-    return manifest_path
+# ---------------------------------------------------------------------------
+# Publication style
+# ---------------------------------------------------------------------------
+
+plt.rcParams.update({
+    "font.family": "DejaVu Sans",
+    "font.size": 10,
+    "axes.titlesize": 11,
+    "axes.labelsize": 10,
+    "xtick.labelsize": 9,
+    "ytick.labelsize": 9,
+    "legend.fontsize": 9,
+    "axes.linewidth": 0.8,
+    "xtick.major.width": 0.7,
+    "ytick.major.width": 0.7,
+    "savefig.bbox": "tight",
+})
+
+# Blue is deliberately used for ROC/PR curves, as requested.
+CURVE_COLOR = "#1565C0"
+CHANCE_COLOR = "0.55"
+CMAP_CONFUSION = "Blues"
+
+METRIC_LABELS = {
+    "precision": "Precision",
+    "recall": "Recall",
+    "f1": "F1",
+}
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description=(
-            "Plot model evaluation results and processing reports for every "
-            "model-training folder matching a run prefix."
-        )
+        description="Create publication-ready evaluation plots from a MEPRAM run."
     )
     parser.add_argument(
         "--run-dir",
-        default=".",
+        type=Path,
+        required=True,
         help=(
-            "Parent directory containing run folders, or one individual run "
-            "directory. Default: current directory."
+            "A single 01-* modelling run directory, or a scope directory "
+            "(e.g. 03-SEPSIS, 04-ETIOLOGY, 05-RESISTANCE) containing 01-* runs."
         ),
     )
     parser.add_argument(
-        "--run-prefix",
-        default="01-",
-        help="Prefix used to discover run directories. Default: 01-.",
-    )
-    parser.add_argument(
-        "--plots-dir",
+        "--output-dir",
+        type=Path,
         default=None,
-        help=(
-            "Optional plot output path. For one run, this is the exact output "
-            "directory. For multiple runs, one subdirectory per run is "
-            "created below it. Default: <run_dir>/plots for every run."
-        ),
+        help="Plot output directory. Defaults to <run-dir>/plots.",
+    )
+    parser.add_argument(
+        "--dpi",
+        type=int,
+        default=300,
+        help="PNG resolution. Default: 300.",
+    )
+    parser.add_argument(
+        "--format",
+        dest="fmt",
+        choices=("png", "pdf", "both"),
+        default="png",
+        help="Output format. Default: png.",
     )
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
-    root_dir = Path(args.run_dir).expanduser().resolve()
-    run_dirs = discover_run_directories(root_dir, args.run_prefix)
+# ---------------------------------------------------------------------------
+# General helpers
+# ---------------------------------------------------------------------------
 
-    if not run_dirs:
-        raise FileNotFoundError(
-            f"No immediate child directories starting with "
-            f"{args.run_prefix!r} were found in {root_dir}"
-        )
+def _safe_name(value: str) -> str:
+    value = re.sub(r"[^A-Za-z0-9_.+-]+", "_", str(value))
+    return value.strip("._") or "plot"
 
-    shared_plots_root = (
-        Path(args.plots_dir).expanduser().resolve()
-        if args.plots_dir
-        else None
-    )
-    multiple_runs = len(run_dirs) > 1
-    completed: list[tuple[Path, Path, Path]] = []
-    failed: list[tuple[Path, str]] = []
 
-    print(
-        f"Found {len(run_dirs)} model-training run(s) matching "
-        f"{args.run_prefix!r} in {root_dir}"
-    )
-    for run_dir in run_dirs:
-        print(f"\n{'=' * 72}\nProcessing run: {run_dir.name}\n{'=' * 72}")
+def _save(fig: plt.Figure, path: Path, dpi: int, fmt: str) -> list[str]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    written: list[str] = []
 
-        if shared_plots_root is None:
-            plots_dir = run_dir / "plots"
-        elif multiple_runs:
-            plots_dir = shared_plots_root / run_dir.name
-        else:
-            plots_dir = shared_plots_root
+    if fmt in {"png", "both"}:
+        png = path.with_suffix(".png")
+        fig.savefig(png, dpi=dpi)
+        written.append(str(png))
 
-        try:
-            manifest_path = run_plotting(run_dir, plots_dir)
-        except Exception as exc:
-            failed.append((run_dir, str(exc)))
-            print(f"Failed to plot {run_dir}: {exc}")
+    if fmt in {"pdf", "both"}:
+        pdf = path.with_suffix(".pdf")
+        fig.savefig(pdf)
+        written.append(str(pdf))
+
+    plt.close(fig)
+    return written
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+# ---------------------------------------------------------------------------
+# Target / class semantics
+# ---------------------------------------------------------------------------
+
+def _scope_name(run_dir: Path) -> str:
+    """Return the nearest scope name, e.g. 04-ETIOLOGY or 05-RESISTANCE."""
+    for parent in (run_dir, *run_dir.parents):
+        name = parent.name.lower()
+        if name.startswith(("03-", "04-", "05-")):
+            return name
+    return ""
+
+
+def _target_kind(stage_key: str, prediction_path: Path, run_dir: Path) -> str:
+    """
+    Determine the biological target represented by a prediction file.
+
+    Returned values:
+        sepsis
+        culture_gate
+        resistance_gate
+        gnb
+        cef_resistance
+    """
+    stem = prediction_path.stem.lower()
+
+    if stage_key == "level1_sepsis":
+        return "sepsis"
+
+    if stage_key == "level2_etiology":
+        # A Level-2 file is an etiology output unless its own filename
+        # explicitly identifies the Stage-1 gate. In particular,
+        # predictions_direct_etiology.csv must never be labelled as a gate.
+        if "gate" in stem or "stage1" in stem:
+            return "culture_gate"
+        return "gnb"
+
+    if stage_key == "level3_cefalosporina":
+        if "gate" in stem or "stage1" in stem:
+            return "resistance_gate"
+        return "cef_resistance"
+
+    # Direct models: infer the target from the scope/run name and filenames.
+    combined = " ".join([
+        _scope_name(run_dir),
+        run_dir.name.lower(),
+        stem,
+    ])
+
+    # For direct runs inside a scope, prefer the scope's canonical target
+    # rather than inferring from filenames which may mention 'cultivo' etc.
+    if stage_key == "direct":
+        scope = _scope_name(run_dir)
+        if scope.startswith("04-"):
+            return "gnb"
+        if scope.startswith("05-"):
+            return "cef_resistance"
+        if scope.startswith("03-"):
+            return "sepsis"
+
+    if "sepsis" in combined:
+        return "sepsis"
+
+    if any(x in combined for x in (
+        "resistance",
+        "resistente",
+        "cefalospor",
+        "cef_res",
+    )):
+        return "cef_resistance"
+
+    # For a direct etiology model, a gate is the safest default if the
+    # prediction/report naming indicates a gate; otherwise GNB is inferred.
+    if "gate" in combined or "cultivo" in combined:
+        return "culture_gate"
+
+    if any(x in combined for x in ("gnb", "etiology", "etiologia", "gnball")):
+        return "gnb"
+
+    # The direct resistance target is particularly important in 05-RESISTANCE.
+    if _scope_name(run_dir).startswith("05-"):
+        return "cef_resistance"
+
+    # The direct etiology target is most commonly the GNB/nonGNB endpoint.
+    if _scope_name(run_dir).startswith("04-"):
+        return "gnb"
+
+    return "culture_gate"
+
+
+TARGET_LABELS = {
+    "sepsis": ("no_sepsis", "sepsis"),
+    "culture_gate": ("cultivo-", "cultivo+"),
+    "resistance_gate": ("gate_negative", "gate_positive"),
+    "gnb": ("nonGNB", "GNB"),
+    "cef_resistance": ("non_Cef_resistant", "Cef_resistant"),
+}
+
+
+def _labels_from_classes(
+    target_kind: str,
+    values: np.ndarray,
+    classes: list[str],
+) -> np.ndarray:
+    """Map encoded predictions to the authoritative exported class names.
+
+    ``summary.json["classes"]`` (or classes inferred from prediction data) is
+    authoritative. Static endpoint labels are used only when no usable class
+    metadata exists. This supports binary and multiclass direct models without
+    incorrectly forcing etiology outputs to cultivo-/cultivo+.
+    """
+    class_names = [str(value) for value in classes]
+    if not class_names:
+        return _canonicalise_array(target_kind, values)
+
+    normalised_classes = {
+        _normalise_raw_label(class_name): class_name
+        for class_name in class_names
+    }
+
+    mapped: list[str] = []
+    for value in np.asarray(values):
+        normalised = _normalise_raw_label(value)
+
+        if normalised in normalised_classes:
+            mapped.append(normalised_classes[normalised])
             continue
 
-        completed.append((run_dir, plots_dir, manifest_path))
-        print(f"Saved plots to {plots_dir}")
-        print(f"Saved plot manifest to {manifest_path}")
+        # LabelEncoder outputs are commonly stored as integer indices while
+        # summary.json stores the corresponding biological class names.
+        try:
+            numeric = float(value)
+            index = int(numeric)
+            if numeric == index and 0 <= index < len(class_names):
+                mapped.append(class_names[index])
+                continue
+        except (TypeError, ValueError):
+            pass
 
-    print(f"\n{'=' * 72}\nPLOTTING SUMMARY\n{'=' * 72}")
-    print(f"Runs discovered : {len(run_dirs)}")
-    print(f"Runs completed  : {len(completed)}")
-    print(f"Runs failed     : {len(failed)}")
+        mapped.append(str(value).strip())
 
-    for run_dir, plots_dir, manifest_path in completed:
-        print(f"  OK     {run_dir.name}")
-        print(f"         plots:    {plots_dir}")
-        print(f"         manifest: {manifest_path}")
+    return np.asarray(mapped, dtype=str)
 
-    for run_dir, error in failed:
-        print(f"  FAILED {run_dir.name}: {error}")
 
-    if failed:
-        raise RuntimeError(
-            f"Plotting failed for {len(failed)} of {len(run_dirs)} runs."
+def _normalise_raw_label(value: Any) -> str:
+    text = str(value).strip()
+    return re.sub(r"[\s_-]+", "_", text.lower())
+
+
+def _canonical_label(target_kind: str, value: Any) -> str:
+    """
+    Convert modelling labels (0/1, yes/no, textual labels, etc.) to the
+    publication labels requested for each endpoint.
+    """
+    negative, positive = TARGET_LABELS[target_kind]
+    norm = _normalise_raw_label(value)
+
+    # Numeric / boolean convention used by the modelling stages.
+    if norm in {"0", "0.0", "false", "no"}:
+        return negative
+    if norm in {"1", "1.0", "true", "yes"}:
+        return positive
+
+    if target_kind == "sepsis":
+        if norm in {
+            "no_sepsis", "nosepsis", "negative", "no_sepsis_",
+        }:
+            return negative
+        if norm in {"sepsis", "positive"}:
+            return positive
+
+    elif target_kind in {"culture_gate", "resistance_gate"}:
+        if norm in {
+            "cultivo_-", "cultivo_neg", "cultivo_negative",
+            "gate_negative", "gate_neg", "negative", "neg",
+        }:
+            return negative
+        if norm in {
+            "cultivo_+", "cultivo_pos", "cultivo_positive",
+            "gate_positive", "gate_pos", "positive", "pos",
+        }:
+            return positive
+
+    elif target_kind == "gnb":
+        if norm in {
+            "gnb", "gram_negative", "gramnegative", "gram_negative_bacteria",
+        }:
+            return positive
+        if norm in {
+            "nongnb", "non_gnb", "gram_positive", "gram_positive_bacteria",
+            "non_gram_negative",
+        }:
+            return negative
+
+    elif target_kind == "cef_resistance":
+        if norm in {
+            "cef_resistant", "resistant_cef", "resistant",
+            "resist_cef", "resist_cef_3a_4a", "resist_cef_3a4a",
+            "resist_cef_3a_4a", "resistance", "resist",
+        }:
+            return positive
+        if norm in {
+            "non_cef_resistant", "nonresistant_cef", "non_resistant_cef",
+            "non_resistant", "no_resistance", "negative", "neg",
+        }:
+            return negative
+
+    # Keep unknown multiclass labels readable rather than silently changing them.
+    return str(value).strip()
+
+
+def _canonicalise_array(target_kind: str, values: np.ndarray) -> np.ndarray:
+    return np.asarray(
+        [_canonical_label(target_kind, value) for value in values],
+        dtype=str,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stage discovery
+# ---------------------------------------------------------------------------
+
+STAGE_ORDER = (
+    ("direct", "Direct"),
+    ("level1_sepsis", "Level 1 — Sepsis"),
+    ("level2_etiology", "Level 2 — Etiology"),
+    ("level3_cefalosporina", "Level 3 — Cefalosporin resistance"),
+)
+
+
+def _prediction_files(stage_dir: Path) -> list[Path]:
+    return sorted(stage_dir.glob("predictions*.csv"))
+
+
+def discover_stage_results(run_dir: Path) -> dict[str, dict[str, Any]]:
+    """
+    Discover direct and staged results.
+
+    A stage is retained when summary.json exists OR when predictions*.csv
+    exists, so plotting remains useful even if a summary file is missing.
+    """
+    results: dict[str, dict[str, Any]] = {}
+
+    if (run_dir / "summary.json").is_file() or _prediction_files(run_dir):
+        results["direct"] = {
+            "directory": run_dir,
+            "summary": _load_json(run_dir / "summary.json"),
+        }
+
+    for stage_key, _ in STAGE_ORDER:
+        if stage_key == "direct":
+            continue
+
+        stage_dir = run_dir / stage_key
+        if not stage_dir.is_dir():
+            continue
+
+        summary = _load_json(stage_dir / "summary.json")
+        if summary or _prediction_files(stage_dir):
+            results[stage_key] = {
+                "directory": stage_dir,
+                "summary": summary,
+            }
+
+    return results
+
+
+def discover_run_directories(root: Path) -> list[Path]:
+    root = root.resolve()
+
+    if not root.is_dir():
+        return []
+
+    if root.name.startswith("01-"):
+        return [root]
+
+    return sorted(
+        p for p in root.iterdir()
+        if p.is_dir() and p.name.startswith("01-")
+    )
+
+
+# ---------------------------------------------------------------------------
+# Classification reports
+# ---------------------------------------------------------------------------
+
+def _extract_classification_report(text: str) -> pd.DataFrame | None:
+    """
+    Parse a sklearn classification_report table.
+
+    Expected rows:
+        class_name precision recall f1-score support
+    """
+    rows: list[dict[str, Any]] = []
+
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        parts = re.split(r"\s+", stripped)
+        if len(parts) < 5:
+            continue
+
+        numeric = parts[-4:]
+        if not all(
+            re.fullmatch(r"-?(?:\d+(?:\.\d*)?|\.\d+)", x)
+            for x in numeric
+        ):
+            continue
+
+        label = " ".join(parts[:-4]).strip()
+        if not label:
+            continue
+
+        if label.lower() in {
+            "accuracy",
+            "macro avg",
+            "weighted avg",
+            "micro avg",
+            "samples avg",
+        }:
+            continue
+
+        try:
+            precision, recall, f1, support = map(float, numeric)
+        except ValueError:
+            continue
+
+        rows.append({
+            "class": label,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "support": support,
+        })
+
+    if not rows:
+        return None
+
+    return pd.DataFrame(rows)
+
+
+def discover_reports(stage_dir: Path) -> list[tuple[Path, pd.DataFrame]]:
+    reports: list[tuple[Path, pd.DataFrame]] = []
+
+    for path in sorted(stage_dir.glob("report_*.txt")):
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+
+        report = _extract_classification_report(text)
+        if report is not None and not report.empty:
+            reports.append((path, report))
+
+    return reports
+
+
+def _report_target_kind(
+    stage_key: str,
+    report_path: Path,
+    run_dir: Path,
+) -> str:
+    """Use report filename semantics when they are more specific."""
+    stem = report_path.stem.lower()
+
+    if "gate" in stem or "infected_yes_no" in stem:
+        return (
+            "resistance_gate"
+            if stage_key == "level3_cefalosporina"
+            else "culture_gate"
         )
+
+    if any(x in stem for x in (
+        "gnball",
+        "resultado_inf",
+        "subtype",
+    )):
+        return "gnb"
+
+    if any(x in stem for x in (
+        "resistente_cefalosporina",
+        "resistance",
+        "cef",
+    )):
+        return "cef_resistance"
+
+    # Fall back to the prediction-stage semantics.
+    dummy_prediction = Path(stem + ".csv")
+    return _target_kind(stage_key, dummy_prediction, run_dir)
+
+
+# ---------------------------------------------------------------------------
+# Prediction CSV parsing
+# ---------------------------------------------------------------------------
+
+_ACTUAL_COLUMNS = (
+    "y_true",
+    "true",
+    "actual",
+    "target",
+    "label",
+    "y",
+    "true_label",
+    "ground_truth",
+    "groundtruth",
+    "observed",
+)
+
+_PRED_COLUMNS = (
+    "y_pred",
+    "predicted",
+    "prediction",
+    "pred",
+    "prediction_label",
+    "predicted_label",
+    "class_pred",
+    "yhat",
+)
+
+_SCORE_COLUMNS = (
+    "y_proba",
+    "probability",
+    "probabilities",
+    "proba",
+    "score",
+    "y_score",
+    "decision",
+    "confidence",
+    "positive_probability",
+    "prob_positive",
+    "prob_1",
+    "probability_1",
+    "class_1_probability",
+    "p1",
+)
+
+
+def _find_column(df: pd.DataFrame, candidates: tuple[str, ...]) -> str | None:
+    lowered = {str(c).strip().lower(): c for c in df.columns}
+    for candidate in candidates:
+        if candidate.lower() in lowered:
+            return lowered[candidate.lower()]
+    return None
+
+
+def _coerce_probability_mapping(value: Any) -> dict[str, float] | None:
+    mapping: Any = value
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            mapping = json.loads(text)
+        except Exception:
+            try:
+                mapping = ast.literal_eval(text)
+            except Exception:
+                return None
+
+    if not isinstance(mapping, dict):
+        return None
+
+    # Unwrap {"multiclass": {...}}-style containers.
+    while len(mapping) == 1:
+        only_value = next(iter(mapping.values()))
+        if isinstance(only_value, dict):
+            mapping = only_value
+        else:
+            break
+
+    if not isinstance(mapping, dict):
+        return None
+
+    parsed: dict[str, float] = {}
+    for key, raw_value in mapping.items():
+        try:
+            parsed[str(key)] = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+
+    return parsed or None
+
+
+def _find_probability_column(df: pd.DataFrame, class_name: str) -> str | None:
+    normalized = str(class_name).strip().lower()
+
+    candidates = (
+        normalized,
+        f"proba_{normalized}",
+        f"probability_{normalized}",
+        f"prob_{normalized}",
+        f"score_{normalized}",
+        f"p_{normalized}",
+    )
+
+    lowered = {str(c).strip().lower(): c for c in df.columns}
+    for candidate in candidates:
+        if candidate in lowered:
+            return lowered[candidate]
+
+    return None
+
+
+def _summary_class_names(summary: dict[str, Any]) -> list[str]:
+    for key in (
+        "classes",
+        "class_names",
+        "label_encoder_classes",
+        "target_names",
+    ):
+        value = summary.get(key)
+        if isinstance(value, (list, tuple)) and value:
+            return [str(x) for x in value]
+
+    negative = summary.get("negative_label")
+    positive = summary.get("positive_label")
+    if negative is not None and positive is not None:
+        return [str(negative), str(positive)]
+
+    return []
+
+
+def _probability_matrix(
+    df: pd.DataFrame,
+    valid: pd.Series,
+    classes: list[str],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if not classes:
+        return None
+
+    # Case 1: one probability column per class.
+    per_class_cols: list[str] = []
+    for class_name in classes:
+        col = _find_probability_column(df, class_name)
+        if col is None:
+            per_class_cols = []
+            break
+        per_class_cols.append(col)
+
+    if per_class_cols:
+        scores = (
+            df.loc[valid, per_class_cols]
+            .apply(pd.to_numeric, errors="coerce")
+            .to_numpy(dtype=float)
+        )
+        good = np.isfinite(scores).all(axis=1)
+        if good.any():
+            return scores[good], good
+
+    # Case 2: serialized probability dictionary.
+    lower_columns = {str(c).strip().lower(): c for c in df.columns}
+    for candidate in ("proba", "probability", "probabilities"):
+        column = lower_columns.get(candidate)
+        if column is None:
+            continue
+
+        parsed_rows: list[list[float]] = []
+        keep: list[bool] = []
+
+        for raw_value in df.loc[valid, column]:
+            mapping = _coerce_probability_mapping(raw_value)
+            if mapping is None:
+                keep.append(False)
+                parsed_rows.append([np.nan] * len(classes))
+                continue
+
+            row: list[float] = []
+            ok = True
+
+            for class_name in classes:
+                value = None
+                for key in (
+                    class_name,
+                    class_name.strip(),
+                    class_name.strip().lower(),
+                ):
+                    if key in mapping:
+                        value = mapping[key]
+                        break
+
+                if value is None:
+                    ok = False
+                    row.append(np.nan)
+                else:
+                    row.append(float(value))
+
+            keep.append(ok)
+            parsed_rows.append(row)
+
+        if parsed_rows:
+            scores = np.asarray(parsed_rows, dtype=float)
+            good = np.asarray(keep, dtype=bool)
+            if good.any():
+                return scores[good], good
+
+    # Case 3: one or more scalar score columns.
+    score_cols: list[str] = []
+    score_names = {x.lower() for x in _SCORE_COLUMNS}
+
+    for col in df.columns:
+        lc = str(col).strip().lower()
+        if lc in score_names:
+            score_cols.append(col)
+
+    if not score_cols:
+        for col in df.columns:
+            lc = str(col).strip().lower()
+            if re.search(r"(?:proba|probability|score|prob)[_.-]?", lc):
+                score_cols.append(col)
+
+    if not score_cols:
+        return None
+
+    scores = (
+        df.loc[valid, score_cols]
+        .apply(pd.to_numeric, errors="coerce")
+        .to_numpy(dtype=float)
+    )
+
+    if scores.ndim == 1:
+        scores = scores[:, None]
+
+    good = np.isfinite(scores).all(axis=1)
+    if not good.any():
+        return None
+
+    return scores[good], good
+
+
+def _prediction_arrays(
+    df: pd.DataFrame,
+    summary: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, list[str]] | None:
+    actual_col = _find_column(df, _ACTUAL_COLUMNS)
+    pred_col = _find_column(df, _PRED_COLUMNS)
+
+    if actual_col is None:
+        for col in df.columns:
+            lc = str(col).lower()
+            if any(x in lc for x in ("true", "actual", "target")) and "prob" not in lc:
+                actual_col = col
+                break
+
+    if pred_col is None:
+        for col in df.columns:
+            lc = str(col).lower()
+            if any(x in lc for x in ("pred", "prediction")) and "prob" not in lc:
+                pred_col = col
+                break
+
+    if actual_col is None:
+        return None
+
+    y_true_raw = df[actual_col]
+    valid = y_true_raw.notna()
+    y_true_raw = y_true_raw[valid]
+
+    if y_true_raw.empty:
+        return None
+
+    y_pred = None
+    if pred_col is not None:
+        y_pred = df.loc[valid, pred_col].to_numpy()
+
+    classes = _summary_class_names(summary)
+
+    if not classes:
+        classes = list(pd.unique(y_true_raw))
+        if y_pred is not None:
+            classes = list(dict.fromkeys([*classes, *pd.unique(y_pred)]))
+
+    classes = [str(x) for x in classes]
+
+    score_payload = _probability_matrix(df, valid, classes)
+    scores = None
+
+    if score_payload is not None:
+        scores, good = score_payload
+        y_true_raw = y_true_raw.iloc[np.flatnonzero(good)]
+
+        if y_pred is not None:
+            y_pred = y_pred[good]
+
+    return (
+        y_true_raw.to_numpy(),
+        None if y_pred is None else np.asarray(y_pred),
+        scores,
+        classes,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Curves / confusion matrix
+# ---------------------------------------------------------------------------
+
+def _positive_score(
+    scores: np.ndarray | None,
+    classes: list[str],
+) -> np.ndarray | None:
+    if scores is None or scores.size == 0:
+        return None
+
+    if scores.ndim != 2 or scores.shape[0] == 0:
+        return None
+
+    if scores.shape[1] == 1:
+        return scores[:, 0]
+
+    if len(classes) >= 2:
+        # The second class is the positive class under the modelling convention.
+        return scores[:, 1]
+
+    return None
+
+
+def _curve_data(
+    target_kind: str,
+    y_true_raw: np.ndarray,
+    scores: np.ndarray | None,
+    classes: list[str],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float, str] | None:
+    if scores is None or scores.size == 0:
+        return None
+
+    y_true = _labels_from_classes(target_kind, y_true_raw, classes)
+
+    # All requested MEPRAM endpoints are binary. Keep a safe multiclass fallback
+    # for unexpected direct models rather than failing.
+    if len(classes) == 2 or scores.shape[1] in {1, 2}:
+        positive_score = _positive_score(scores, classes)
+        if positive_score is None:
+            return None
+
+        # The modelling convention uses the second exported class as the
+        # positive class. Preserve its biological label in the plots.
+        positive_label = (
+            str(classes[1])
+            if len(classes) >= 2
+            else TARGET_LABELS[target_kind][1]
+        )
+        y_bin = (y_true == positive_label).astype(int)
+
+        if len(np.unique(y_bin)) != 2:
+            # If canonicalisation did not recognise the source labels, use
+            # the modelling class order.
+            y_bin = (y_true_raw.astype(str) == str(classes[1])).astype(int)
+
+        if len(np.unique(y_bin)) != 2:
+            return None
+
+        fpr, tpr, _ = roc_curve(y_bin, positive_score)
+        precision, recall, _ = precision_recall_curve(y_bin, positive_score)
+
+        roc_auc = roc_auc_score(y_bin, positive_score)
+        pr_auc = average_precision_score(y_bin, positive_score)
+        positive_rate = float(np.mean(y_bin))
+
+        return (
+            fpr,
+            tpr,
+            precision,
+            recall,
+            float(roc_auc),
+            float(pr_auc),
+            positive_rate,
+            positive_label,
+        )
+
+    return None
+
+
+def _make_confusion_matrix(
+    target_kind: str,
+    y_true_raw: np.ndarray,
+    y_pred_raw: np.ndarray,
+    classes: list[str],
+) -> tuple[np.ndarray, list[str]]:
+    y_true = _labels_from_classes(target_kind, y_true_raw, classes)
+    y_pred = _labels_from_classes(target_kind, y_pred_raw, classes)
+
+    labels = list(dict.fromkeys([
+        *[str(value) for value in classes],
+        *pd.unique(y_true),
+        *pd.unique(y_pred),
+    ]))
+
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    return cm, labels
+
+
+def _plot_confusion(
+    target_kind: str,
+    target_title: str,
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    classes: list[str],
+    output_dir: Path,
+    dpi: int,
+    fmt: str,
+) -> list[str]:
+    cm, labels = _make_confusion_matrix(
+        target_kind, y_true, y_pred, classes
+    )
+
+    size = 5.4 if len(labels) <= 2 else max(5.4, 4.6 + 0.65 * len(labels))
+    fig, ax = plt.subplots(figsize=(size, size * 0.9))
+
+    image = ax.imshow(cm, cmap=CMAP_CONFUSION)
+    cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.tick_params(labelsize=8)
+
+    ticks = np.arange(len(labels))
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+    ax.set_xticklabels(labels, rotation=0 if len(labels) <= 2 else 30, ha="right" if len(labels) > 2 else "center")
+    ax.set_yticklabels(labels)
+
+    ax.set_xlabel("Predicted")
+    ax.set_ylabel("Actual")
+    ax.set_title(f"{target_title}\nConfusion matrix", pad=10)
+
+    threshold = cm.max() / 2 if cm.size else 0
+    for i in range(cm.shape[0]):
+        for j in range(cm.shape[1]):
+            value = int(cm[i, j])
+            ax.text(
+                j,
+                i,
+                f"{value:,}",
+                ha="center",
+                va="center",
+                color="white" if cm[i, j] > threshold else "black",
+                fontsize=10,
+            )
+
+    ax.spines[["top", "right"]].set_visible(False)
+    fig.tight_layout()
+
+    return _save(
+        fig,
+        output_dir / "performance" / f"{_safe_name(target_kind)}_confusion_matrix",
+        dpi,
+        fmt,
+    )
+
+
+def _plot_curves(
+    target_kind: str,
+    target_title: str,
+    curve: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float, str],
+    output_dir: Path,
+    dpi: int,
+    fmt: str,
+) -> list[str]:
+    fpr, tpr, precision, recall, roc_auc, pr_auc, positive_rate, positive_label = curve
+    written: list[str] = []
+
+    # ROC
+    fig, ax = plt.subplots(figsize=(6.4, 5.6))
+    ax.plot(
+        fpr,
+        tpr,
+        color=CURVE_COLOR,
+        lw=2.4,
+        label=f"ROC-AUC = {roc_auc:.3f}",
+    )
+    ax.plot(
+        [0, 1],
+        [0, 1],
+        linestyle="--",
+        linewidth=1.0,
+        color=CHANCE_COLOR,
+        label="Chance",
+    )
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("False positive rate")
+    ax.set_ylabel("True positive rate")
+    ax.set_title(f"{target_title}\nROC curve", pad=10)
+    ax.legend(frameon=False, loc="lower right")
+    ax.grid(alpha=0.16, linewidth=0.7)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    written.extend(_save(
+        fig,
+        output_dir / "performance" / f"{_safe_name(target_kind)}_roc_curve",
+        dpi,
+        fmt,
+    ))
+
+    # Precision-recall
+    fig, ax = plt.subplots(figsize=(6.4, 5.6))
+    ax.plot(
+        recall,
+        precision,
+        color=CURVE_COLOR,
+        lw=2.4,
+        label=f"PR-AUC = {pr_auc:.3f}",
+    )
+
+    # Baseline: precision expected for a random classifier equals positive prevalence
+    ax.hlines(
+        y=positive_rate,
+        xmin=0,
+        xmax=1,
+        linestyle="--",
+        linewidth=1.0,
+        color=CHANCE_COLOR,
+        label=f"Baseline = {positive_rate:.3f}",
+    )
+
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1.02)
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title(f"{target_title}\nPrecision–recall curve", pad=10)
+    ax.legend(frameon=False, loc="lower left")
+    ax.grid(alpha=0.16, linewidth=0.7)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    written.extend(_save(
+        fig,
+        output_dir / "performance" / f"{_safe_name(target_kind)}_pr_curve",
+        dpi,
+        fmt,
+    ))
+
+    return written
+
+
+# ---------------------------------------------------------------------------
+# Per-category Precision / Recall / F1
+# ---------------------------------------------------------------------------
+
+def _plot_class_metrics(
+    target_kind: str,
+    target_title: str,
+    report_path: Path,
+    report: pd.DataFrame,
+    output_dir: Path,
+    dpi: int,
+    fmt: str,
+) -> list[str]:
+    # The classification report already contains the model's biological class
+    # labels. Keep them verbatim, including every multiclass category.
+    classes = [str(value).strip() for value in report["class"].tolist()]
+
+    # Remove duplicate class labels while preserving report order.
+    keep = ~pd.Series(classes).duplicated()
+    report = report.loc[keep.to_numpy()].copy()
+    classes = [classes[i] for i, flag in enumerate(keep.to_numpy()) if flag]
+
+    x = np.arange(len(classes))
+    width = 0.23
+
+    fig_width = max(6.8, 1.35 * len(classes) + 2.0)
+    fig, ax = plt.subplots(figsize=(fig_width, 5.4))
+
+    for j, metric in enumerate(("precision", "recall", "f1")):
+        values = pd.to_numeric(
+            report[metric],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        bars = ax.bar(
+            x + (j - 1) * width,
+            values,
+            width,
+            label=METRIC_LABELS[metric],
+            edgecolor="black",
+            linewidth=0.4,
+        )
+
+        for bar, value in zip(bars, values):
+            if not np.isfinite(value):
+                continue
+            ax.text(
+                bar.get_x() + bar.get_width() / 2,
+                min(1.045, value + 0.025),
+                f"{value:.2f}",
+                ha="center",
+                va="bottom",
+                fontsize=8,
+            )
+
+    ax.set_ylim(0, 1.10)
+    ax.set_ylabel("Score")
+    ax.set_xlabel("Predicted category")
+    ax.set_xticks(x)
+    ax.set_xticklabels(
+        classes,
+        rotation=0 if len(classes) <= 2 else 25,
+        ha="center" if len(classes) <= 2 else "right",
+    )
+
+    ax.set_title(
+        f"{target_title}\nPrecision, Recall and F1 by category",
+        pad=10,
+    )
+
+    ax.legend(
+        frameon=False,
+        ncol=3,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.02),
+    )
+    ax.grid(axis="y", alpha=0.16, linewidth=0.7)
+    ax.spines[["top", "right"]].set_visible(False)
+
+    fig.subplots_adjust(
+        top=0.82,
+        bottom=0.20 if len(classes) > 2 else 0.14,
+        left=0.11,
+        right=0.98,
+    )
+
+    return _save(
+        fig,
+        output_dir / "performance" / (
+            f"{_safe_name(target_kind)}_"
+            f"{_safe_name(report_path.stem)}_metrics"
+        ),
+        dpi,
+        fmt,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Processing plots (imputed / nan / correlation / rfecv / iqr)
+# ---------------------------------------------------------------------------
+
+
+def _safe_read_csv(path: Path) -> pd.DataFrame | None:
+    try:
+        return pd.read_csv(path)
+    except Exception:
+        return None
+
+
+def _plot_rfecv_history(csv_path: Path, out_path: Path, dpi: int, fmt: str) -> list[str]:
+    df = _safe_read_csv(csv_path)
+    if df is None or df.empty:
+        return []
+
+    # Ensure n_features numeric
+    if "n_features" not in df.columns:
+        return []
+    df = df.copy()
+    df["n_features"] = pd.to_numeric(df["n_features"], errors="coerce")
+    df = df.dropna(subset=["n_features"]).sort_values("n_features")
+    if df.empty:
+        return []
+
+    # Only plot PR_AUC and ROC_AUC for publication clarity (omit F1 curve)
+    metrics = [c for c in ("pr_auc", "roc_auc") if c in df.columns]
+    if not metrics:
+        return []
+
+    fig, ax = plt.subplots(figsize=(6.4, 5.6))
+    for m in metrics:
+        # PR curve should be orange for visibility; ROC uses CURVE_COLOR
+        color = "#E69F00" if m == "pr_auc" else CURVE_COLOR
+        ax.plot(
+            df["n_features"],
+            pd.to_numeric(df[m], errors="coerce"),
+            marker="o",
+            markersize=4,
+            linewidth=1.2,
+            label=m.replace("_", " ").upper(),
+            color=color,
+        )
+
+    # Primary metric preference: PR_AUC if present, else ROC_AUC
+    primary = "pr_auc" if "pr_auc" in df.columns else "roc_auc"
+    scores = pd.to_numeric(df[primary], errors="coerce")
+    if scores.empty or scores.isna().all():
+        return []
+
+    # Best scoring point (max primary metric)
+    # Mark maximum features (initial full set) first as a subtle grey cap line.
+    try:
+        max_n = int(pd.to_numeric(df["n_features"], errors="coerce").max())
+        ax.axvline(max_n, linestyle=":", color=CHANCE_COLOR, linewidth=1.0, label=f"Max: {max_n}")
+    except Exception:
+        max_n = None
+
+    # Best scoring point (max primary metric) — highlight in light green.
+    best_pos = scores.idxmax()
+    try:
+        best_n = int(df.loc[best_pos, "n_features"])
+        best_score = float(df.loc[best_pos, primary])
+        # vertical dashed line at best_n and a star marker at the best point
+        best_color = "#90EE90"  # lightgreen
+        ax.axvline(best_n, linestyle="--", color=best_color, linewidth=1.2, label=f"Best: {best_n}")
+        ax.scatter([best_n], [best_score], marker="*", s=140, color=best_color, zorder=6, edgecolor="black", linewidth=0.6)
+    except Exception:
+        best_n = None
+
+    ax.set_xlabel("Number of features")
+    ax.set_ylabel("CV metric")
+    ax.set_title(f"RFECV history: {csv_path.stem}")
+    ax.legend(frameon=False)
+    ax.grid(alpha=0.12)
+
+    return _save(fig, out_path, dpi, fmt)
+
+
+def _plot_top_counts(csv_path: Path, out_path: Path, dpi: int, fmt: str, top_n: int = 40, title: str | None = None) -> list[str]:
+    df = _safe_read_csv(csv_path)
+    if df is None or df.empty:
+        return []
+
+    # Try to find a label column and a numeric count column
+    label_col = None
+    count_col = None
+    for c in df.columns:
+        lc = str(c).lower()
+        if any(x in lc for x in ("table", "feature", "name")):
+            label_col = c
+            break
+    numeric_cols = [c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]
+    if numeric_cols:
+        # prefer explicit count-like names
+        for c in numeric_cols:
+            if any(x in str(c).lower() for x in ("count", "n_", "n", "imput", "nan", "outlier")):
+                count_col = c
+                break
+        if count_col is None:
+            count_col = numeric_cols[0]
+
+    if label_col is None and len(numeric_cols) == 1:
+        # single column of features: count entries
+        ser = df.iloc[:, 0].dropna().astype(str)
+        counts = ser.value_counts().nlargest(top_n)
+        labels = counts.index.tolist()
+        values = counts.values
+    elif label_col is not None and count_col is not None:
+        # If the numeric column is an index (row_index) or otherwise not a
+        # true pre-aggregated count, compute counts per label instead of
+        # plotting the numeric values directly. This avoids repeated
+        # features caused by per-row listings (e.g. IQR outliers).
+        lc_name = str(count_col).strip().lower()
+        if lc_name in {"row_index", "index"} or lc_name.startswith("unnamed"):
+            counts = df[label_col].dropna().astype(str).value_counts().nlargest(top_n)
+            labels = counts.index.tolist()
+            values = counts.values
+        else:
+            plot_df = df[[label_col, count_col]].dropna()
+            plot_df[count_col] = pd.to_numeric(plot_df[count_col], errors="coerce").fillna(0)
+            plot_df = plot_df.sort_values(count_col, ascending=False).head(top_n)
+            labels = plot_df[label_col].astype(str).tolist()
+            values = plot_df[count_col].to_list()
+    else:
+        return []
+
+    fig, ax = plt.subplots(figsize=(max(6.4, 0.3 * len(labels) + 4), 6))
+    y = list(range(len(labels)))
+    ax.barh(y, values, color=CURVE_COLOR)
+    ax.set_yticks(y)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.invert_yaxis()
+    # Adjust x-axis label for percentage-like columns (e.g. nan percentage).
+    xlabel = "Count"
+    try:
+        # If the original CSV had a percentage-like numeric column name, prefer percent label.
+        if count_col is not None and ("percent" in str(count_col).lower() or "percentage" in str(count_col).lower() or "nan" in str(count_col).lower() and max(values) <= 100):
+            xlabel = "Percent (%)"
+    except Exception:
+        pass
+    ax.set_xlabel(xlabel)
+    ax.set_title(title or f"{csv_path.stem}")
+    # Annotate values: format as percentage when the xlabel indicates percent.
+    for i, v in enumerate(values):
+        if xlabel.startswith("Percent"):
+            try:
+                txt = f"{float(v):.1f}%"
+            except Exception:
+                txt = str(v)
+        else:
+            try:
+                txt = f"{int(v):,}"
+            except Exception:
+                txt = str(v)
+        ax.text(v if v >= 0 else 0, i, f" {txt}", va="center", fontsize=8)
+    fig.tight_layout()
+
+    return _save(fig, out_path, dpi, fmt)
+
+
+def _plot_processing_artifacts(run_dir: Path, output_dir: Path, dpi: int, fmt: str) -> list[str]:
+    written: list[str] = []
+    processing_dir = run_dir / "processing"
+    plots_dir = output_dir / "processing"
+
+    if not processing_dir.exists():
+        return []
+
+    # Discover every stage-specific RFECV history. A fixed filename list used
+    # to omit, among others, l2_direct_rfecv_features.csv and
+    # l3_resistance_gate_rfecv_features.csv.
+    for path in sorted(processing_dir.glob("*_rfecv_features.csv")):
+        out_name = f"processing_{_safe_name(path.stem)}_performance"
+        written.extend(
+            _plot_rfecv_history(
+                path,
+                plots_dir / out_name,
+                dpi,
+                fmt,
+            )
+        )
+
+    # Top-count style plots
+    count_files = [
+        ("imputed_features.csv", "processing_imputed_features", "Imputed features"),
+        ("nan_dropped_features.csv", "processing_nan_dropped_features", "NaN-dropped features"),
+        ("correlation_dropped_features.csv", "processing_correlation_dropped_features", "Correlation-dropped features"),
+        ("iqr_outliers_train.csv", "processing_iqr_outliers_train", "IQR outliers (train)"),
+        ("iqr_outliers_test.csv", "processing_iqr_outliers_test", "IQR outliers (test)"),
+    ]
+
+    for fname, out_name, title in count_files:
+        path = processing_dir / fname
+        if path.is_file():
+            written.extend(_plot_top_counts(path, plots_dir / out_name, dpi, fmt, title=title))
+
+    return written
+
+
+def _safe_load_npz(path: Path) -> dict[str, np.ndarray] | None:
+    try:
+        with np.load(path) as data:
+            return {k: data[k] for k in data.files}
+    except Exception:
+        return None
+
+
+def _plot_shap_importance(csv_path: Path, out_path: Path, dpi: int, fmt: str, top_n: int = 30) -> list[str]:
+    df = _safe_read_csv(csv_path)
+    if df is None or df.empty:
+        return []
+    # df expected columns: stage, output, feature, mean_abs_shap
+    df = df.copy()
+    if "mean_abs_shap" not in df.columns or "feature" not in df.columns:
+        return []
+    df = df.groupby("feature")["mean_abs_shap"].mean().sort_values(ascending=False).head(top_n)
+    fig, ax = plt.subplots(figsize=(6.4, max(4, 0.25 * len(df) + 2)))
+    y = list(range(len(df)))
+    ax.barh(y, df.values, color="#4C72B0")
+    ax.set_yticks(y)
+    ax.set_yticklabels(df.index.tolist(), fontsize=8)
+    ax.invert_yaxis()
+    ax.set_xlabel("Mean |SHAP|")
+    ax.set_title(f"SHAP importance: {csv_path.stem}")
+    fig.tight_layout()
+    return _save(fig, out_path, dpi, fmt)
+
+
+def _plot_shap_beeswarm(npz_path: Path, X_csv: Path, out_path: Path, dpi: int, fmt: str, max_features: int = 50) -> list[str]:
+    arrays = _safe_load_npz(npz_path)
+    if arrays is None:
+        return []
+    # pick first output key
+    key = next(iter(arrays))
+    values = arrays[key]
+    if values.ndim != 2:
+        return []
+    dfX = _safe_read_csv(X_csv)
+    if dfX is None:
+        return []
+    # Exclude index-like columns such as 'row_index' from feature names.
+    index_like = {"row_index", "index"}
+    feature_names = [c for c in dfX.columns if str(c).strip().lower() not in index_like]
+
+    # Align SHAP values columns with filtered feature names.
+    # Typical cases:
+    #  - values.shape[1] == len(feature_names): already aligned
+    #  - values.shape[1] == dfX.shape[1]: values include index column(s) -> remove them
+    #  - otherwise: try best-effort alignment by trimming or warning.
+    if values.shape[1] == len(feature_names):
+        pass
+    elif values.shape[1] == dfX.shape[1]:
+        # find index-like positions in dfX and remove corresponding cols from values
+        idxs = [i for i, c in enumerate(dfX.columns) if str(c).strip().lower() in index_like]
+        if idxs:
+            try:
+                values = np.delete(values, idxs, axis=1)
+            except Exception:
+                pass
+    else:
+        # best-effort: if values has fewer columns than names, trim names; if more, trim values
+        if values.shape[1] < len(feature_names):
+            feature_names = feature_names[: values.shape[1]]
+        elif values.shape[1] > len(feature_names):
+            values = values[:, : len(feature_names)]
+    n_features = min(values.shape[1], max_features)
+
+    # Compute mean absolute effect and order
+    mean_abs = np.mean(np.abs(values), axis=0)
+    order = np.argsort(mean_abs)[::-1][:n_features]
+    selected_features = [feature_names[i] for i in order if i < len(feature_names)]
+
+    # create a compact beeswarm-like horizontal strip for the top features
+    fig, axes = plt.subplots(n_features, 1, figsize=(6.4, 0.28 * n_features + 2), sharex=True)
+    if n_features == 1:
+        axes = [axes]
+    for ax, idx, fname in zip(axes, order, selected_features):
+        vals = values[:, idx]
+        # jitter along x for visibility
+        y = np.random.normal(0, 0.04, size=len(vals))
+        ax.scatter(vals, y, s=6, alpha=0.65, cmap=plt.get_cmap("coolwarm"), c=vals, edgecolors="none")
+        ax.set_yticks([])
+        ax.set_ylabel(fname, rotation=0, labelpad=80, va="center", fontsize=8)
+        ax.spines["left"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+    axes[-1].set_xlabel("SHAP value")
+    fig.subplots_adjust(hspace=0.1, left=0.3)
+    return _save(fig, out_path, dpi, fmt)
+
+
+def _plot_shap_artifacts(run_dir: Path, output_dir: Path, dpi: int, fmt: str) -> list[str]:
+    written: list[str] = []
+    out_shap_dir = output_dir / "shap"
+    out_shap_dir.mkdir(parents=True, exist_ok=True)
+
+    # Search recursively for shap artifact files under the run directory.
+    # Artifacts are commonly stored in stage subfolders like
+    # <run>/levelX_stage/shap/*.npz / *_shap_importance.csv / *_shap_X.csv
+    importance_files = list(run_dir.rglob("*_shap_importance.csv"))
+    value_files = list(run_dir.rglob("*_shap_values.npz"))
+
+    for csv in sorted(importance_files):
+        # derive a stable base name from the containing stage folder + file stem
+        stage = csv.parent.name
+        base = csv.stem.replace("_shap_importance", "")
+        out_name = f"{stage}_{base}_importance"
+        written.extend(_plot_shap_importance(csv, out_shap_dir / out_name, dpi, fmt))
+
+    for npz in sorted(value_files):
+        stage = npz.parent.name
+        base = npz.stem.replace("_shap_values", "")
+        xcsv = npz.parent / f"{base}_shap_X.csv"
+        out_name = f"{stage}_{base}_beeswarm"
+        if xcsv.is_file():
+            written.extend(_plot_shap_beeswarm(npz, xcsv, out_shap_dir / out_name, dpi, fmt))
+
+    return written
+
+
+# ---------------------------------------------------------------------------
+# Main plotting logic
+# ---------------------------------------------------------------------------
+
+def _prediction_title(
+    target_kind: str,
+    stage_key: str,
+    prediction_path: Path,
+) -> str:
+    target_name = {
+        "sepsis": "Sepsis",
+        "culture_gate": "Blood-culture gate",
+        "resistance_gate": "Resistance gate",
+        "gnb": "Etiology",
+        "cef_resistance": "Cefalosporin resistance",
+    }[target_kind]
+
+    stage_name = {
+        "direct": "Direct model",
+        "level1_sepsis": "Level 1",
+        "level2_etiology": "Level 2",
+        "level3_cefalosporina": "Level 3",
+    }.get(stage_key, stage_key)
+
+    stem = prediction_path.stem
+    suffix = re.sub(r"^predictions?_?", "", stem, flags=re.IGNORECASE)
+    suffix = re.sub(r"[_-]+", " ", suffix).strip()
+
+    if suffix:
+        return f"{stage_name} — {target_name} ({suffix})"
+
+    return f"{stage_name} — {target_name}"
+
+
+def process_prediction_file(
+    stage_key: str,
+    stage_dir: Path,
+    prediction_path: Path,
+    summary: dict[str, Any],
+    run_dir: Path,
+    output_dir: Path,
+    dpi: int,
+    fmt: str,
+) -> list[str]:
+    try:
+        df = pd.read_csv(prediction_path)
+    except Exception as exc:
+        print(f"WARNING: could not read {prediction_path}: {exc}", file=sys.stderr)
+        return []
+
+    if df.empty:
+        return []
+
+    parsed = _prediction_arrays(df, summary)
+    if parsed is None:
+        print(
+            f"WARNING: no usable y_true/y_pred data in {prediction_path}",
+            file=sys.stderr,
+        )
+        return []
+
+    y_true, y_pred, scores, classes = parsed
+    target_kind = _target_kind(stage_key, prediction_path, run_dir)
+    target_title = _prediction_title(target_kind, stage_key, prediction_path)
+
+    written: list[str] = []
+
+    if y_pred is not None:
+        written.extend(
+            _plot_confusion(
+                target_kind,
+                target_title,
+                y_true,
+                y_pred,
+                classes,
+                output_dir,
+                dpi,
+                fmt,
+            )
+        )
+
+    curve = _curve_data(
+        target_kind,
+        y_true,
+        scores,
+        classes,
+    )
+
+    if curve is not None:
+        written.extend(
+            _plot_curves(
+                target_kind,
+                target_title,
+                curve,
+                output_dir,
+                dpi,
+                fmt,
+            )
+        )
+    else:
+        print(
+            f"WARNING: no usable probability scores for ROC/PR: "
+            f"{prediction_path}",
+            file=sys.stderr,
+        )
+
+    return written
+
+
+def process_run(
+    run_dir: Path,
+    output_dir: Path,
+    args: argparse.Namespace,
+) -> int:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    stage_results = discover_stage_results(run_dir)
+
+    print("=" * 72)
+    print("MEPRAM RESULT PLOTTING")
+    print("=" * 72)
+    print(f"Run directory : {run_dir}")
+    print(f"Output        : {output_dir}")
+    print(
+        "Stages found  : "
+        + (", ".join(stage_results) if stage_results else "none")
+    )
+
+    written: list[str] = []
+
+    for stage_key, _stage_label in STAGE_ORDER:
+        if stage_key not in stage_results:
+            continue
+
+        stage_data = stage_results[stage_key]
+        summary = stage_data["summary"]
+        stage_dir = stage_data["directory"]
+
+        if summary.get("skipped", False):
+            print(f"Skipping stage: {stage_key}")
+            continue
+
+        prediction_files = _prediction_files(stage_dir)
+
+        for prediction_path in prediction_files:
+            print(f"Plotting: {prediction_path.name}")
+            written.extend(
+                process_prediction_file(
+                    stage_key=stage_key,
+                    stage_dir=stage_dir,
+                    prediction_path=prediction_path,
+                    summary=summary,
+                    run_dir=run_dir,
+                    output_dir=output_dir,
+                    dpi=args.dpi,
+                    fmt=args.fmt,
+                )
+            )
+
+        # Classification reports are the authoritative source for
+        # per-category Precision/Recall/F1.
+        for report_path, report in discover_reports(stage_dir):
+            target_kind = _report_target_kind(
+                stage_key,
+                report_path,
+                run_dir,
+            )
+            target_title = _prediction_title(
+                target_kind,
+                stage_key,
+                Path(report_path.stem.replace("report_", "predictions_") + ".csv"),
+            )
+
+            print(f"Plotting report: {report_path.name}")
+            written.extend(
+                _plot_class_metrics(
+                    target_kind,
+                    target_title,
+                    report_path,
+                    report,
+                    output_dir,
+                    args.dpi,
+                    args.fmt,
+                )
+            )
+
+    # Manifest: deliberately compact and reproducible.
+    manifest = {
+        "run_directory": str(run_dir.resolve()),
+        "plots_directory": str(output_dir.resolve()),
+        "n_plots": len(written),
+        "plots": sorted(written),
+        "stages_found": list(stage_results),
+        "plot_types": [
+            "confusion_matrix",
+            "roc_curve",
+            "pr_curve",
+            "per_category_precision_recall_f1",
+        ],
+        "class_labels": TARGET_LABELS,
+    }
+
+    (output_dir / "plot_manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n"
+    )
+
+    yaml_lines = [
+        f"run_directory: {json.dumps(manifest['run_directory'])}",
+        f"plots_directory: {json.dumps(manifest['plots_directory'])}",
+        f"n_plots: {manifest['n_plots']}",
+        "stages_found:",
+    ]
+    yaml_lines.extend(f"  - {stage}" for stage in manifest["stages_found"])
+    yaml_lines.append("plot_types:")
+    yaml_lines.extend(f"  - {kind}" for kind in manifest["plot_types"])
+    yaml_lines.append("plots:")
+    yaml_lines.extend(f"  - {json.dumps(plot)}" for plot in manifest["plots"])
+
+    (output_dir / "plot_manifest.yaml").write_text(
+        "\n".join(yaml_lines) + "\n"
+    )
+
+    # Processing plots: attempt to generate processing charts if processing
+    # artifacts are present under <run_dir>/processing. These are optional
+    # and best-effort: missing or unexpected CSVs are skipped with a warning.
+    try:
+        written_proc = _plot_processing_artifacts(run_dir, output_dir, args.dpi, args.fmt)
+        written.extend(written_proc)
+    except Exception as exc:
+        print(f"WARNING: could not produce processing plots: {exc}", file=sys.stderr)
+    try:
+        written_shap = _plot_shap_artifacts(run_dir, output_dir, args.dpi, args.fmt)
+        written.extend(written_shap)
+    except Exception as exc:
+        print(f"WARNING: could not produce SHAP plots: {exc}", file=sys.stderr)
+
+    print("-" * 72)
+    print(f"Created {len(written)} plot file(s).")
+    print(f"Manifest: {output_dir / 'plot_manifest.yaml'}")
+    print(f"Finished: {run_dir.name}")
+    print()
+
+    return len(written)
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+    args = parse_args()
+    root = args.run_dir.resolve()
+
+    if not root.is_dir():
+        print(f"ERROR: directory does not exist: {root}", file=sys.stderr)
+        return 2
+
+    run_dirs = discover_run_directories(root)
+
+    print(f"Discovered {len(run_dirs)} modelling run(s) under: {root}")
+
+    if not run_dirs:
+        print(
+            "ERROR: no 01-* result directories were found.\n"
+            "Expected a scope directory such as 03-SEPSIS containing "
+            "01-* folders, or a single 01-* run directory.",
+            file=sys.stderr,
+        )
+        return 2
+
+    total_plots = 0
+
+    for run_dir in run_dirs:
+        if args.output_dir is not None:
+            if len(run_dirs) == 1:
+                output_dir = args.output_dir.resolve()
+            else:
+                output_dir = args.output_dir.resolve() / run_dir.name
+        else:
+            output_dir = run_dir / "plots"
+
+        total_plots += process_run(
+            run_dir,
+            output_dir,
+            args,
+        )
+
+    print("=" * 72)
+    print("ALL RUNS COMPLETED")
+    print(f"Scope directory : {root}")
+    print(f"Runs processed  : {len(run_dirs)}")
+    print(f"Total plots     : {total_plots}")
+    print("=" * 72)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

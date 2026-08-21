@@ -18,7 +18,7 @@
 data:
   # Analytical table used by the benchmark. This should already be the filtered
   # preprocessing output, not raw source tables.
-  path: playground/preprocessing/20260514_gnb_targets/20260514_gnb_targets_full_filtered.csv
+  path: /data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C/ANALYSIS/01-PREPROCESS/20260520_otros/20260520_otros_filtered.csv
 
   # Optional row weight column. If present, it is removed from X and passed as
   # sample_weight to estimators that accept it.
@@ -57,7 +57,7 @@ data:
 
 # Root output directory. Jobs are written to output_dir/jobs/<job_slug>/.
 # Aggregate and target-level reports are written to output_dir/reports/.
-output_dir: playground/ml_benchmark/
+output_dir: /data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C/ANALYSIS/02-ML_BENCHMARK/01-ml_benchmark_output
 
 # Split controls.
 #
@@ -72,12 +72,12 @@ split:
   # Number of validation folds within the training subset.
   cv_splits: 5
   # Fraction held out as final test set.
-  test_size: 0.20
+  test_size: 0.35
   # Reserved for future explicit train/validation/test splits. Empty means not
   # used by the current cross_validation strategy.
   validation_size:
   # Reproducibility seed for train/test split, CV splitters, and model defaults.
-  random_state: 99
+  random_state: 42
   # If true, stratify train/test and CV splits by y where possible.
   stratify: true
 
@@ -123,7 +123,7 @@ row_filters:
     # A row is dropped if the selected feature subset has missingness above
     # max_missing_fraction.
     mode: max_fraction
-    max_missing_fraction: 0.10
+    max_missing_fraction: 0.20
     # Glob-style feature include patterns. "*" means all feature columns after
     # target removal and feature-view selection.
     include_patterns:
@@ -141,29 +141,71 @@ targets:
     # Binary examples: roc_auc, average_precision, f1_macro, log_loss.
     main_metric: roc_auc
 
+  - name: resultado_hemo
+    type: multiclass
+    main_metric: log_loss
+
   - name: resultado_hemo_grouped
     type: multiclass
     main_metric: log_loss
 
-  - name: resultado_hemo_gnb_selected
-    type: multiclass
-    main_metric: log_loss
+  - name: resultado_hemo_gnbselected_binary
+    type: binary
+    columns:
+      - resultado_hemo_gnb_selected
+    positive_label: GNBSelected
+    binary_positive_values:
+      - GNBSelected
+    binary_negative_label: nonGNBSelected
+    main_metric: average_precision
 
-  - name: resultado_hemo_gnb_all
-    type: multiclass
-    main_metric: log_loss
+  - name: resultado_hemo_gnball_binary
+    type: binary
+    columns:
+      - resultado_hemo_gnb_all
+    positive_label: GNBAll
+    binary_positive_values:
+      - GNBAll
+    binary_negative_label: nonGNBall
+    main_metric: average_precision
+
+  - name: infected_yes_no
+    type: binary
+    main_metric: roc_auc
 
   - name: infected_yes_no_wother_cultures
     type: binary
     main_metric: roc_auc
 
-  - name: resultado_inf_gnbselected
-    type: multiclass
-    main_metric: log_loss
+  - name: resultado_inf_gnbselected_binary
+    type: binary
+    columns:
+      - resultado_inf_gnbselected
+    positive_label: GNBSelected
+    binary_positive_values:
+      - GNBSelected
+    binary_negative_label: nonGNBSelected
+    main_metric: average_precision
 
-  - name: resultado_inf_gnball
-    type: multiclass
-    main_metric: log_loss
+  - name: resultado_inf_gnball_binary
+    type: binary
+    columns:
+      - resultado_inf_gnball
+    positive_label: GNBAll
+    binary_positive_values:
+      - GNBAll
+    binary_negative_label: nonGNBall
+    main_metric: average_precision
+
+  - name: resultado_hemo_coco_vs_gram_binary
+    type: binary
+    columns:
+      - resultado_hemo_grouped
+    positive_label: Coco gram+
+    binary_positive_values:
+      - Coco gram+
+    binary_negative_label: nonCocoGram
+    main_metric: average_precision
 
   - name: resistente_cefalosporina
     type: binary
@@ -175,10 +217,10 @@ targets:
 # Active models here are intentionally reduced to keep the matrix manageable.
 # Commented models can be re-enabled later.
 models:
-  #- name: dummy_uniform
-  #   feature_policy: tree_default
-  # - name: dummy_stratified
-  #   feature_policy: tree_default
+  - name: dummy_uniform
+    feature_policy: tree_default
+  - name: dummy_stratified
+    feature_policy: tree_default
   - name: dummy_prior
     feature_policy: tree_default
   - name: logistic
@@ -187,8 +229,8 @@ models:
     feature_policy: logistic_qcut_only
   - name: logistic_calibrated
     feature_policy: logistic_calibrated
-  # - name: random_forest
-  #   feature_policy: tree_default
+  - name: random_forest
+    feature_policy: tree_default
   - name: catboost
     feature_policy: catboost_default
   - name: catboost_calibrated
@@ -199,8 +241,8 @@ models:
     feature_policy: tree_qcut_only
   - name: lightgbm_calibrated
     feature_policy: tree_calibrated
-  # - name: xgboost
-  #   feature_policy: tree_default
+  - name: xgboost
+    feature_policy: tree_default
 
 # Model preprocessing policies.
 #
@@ -268,10 +310,10 @@ feature_policies:
     qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: true
-      threshold: 0.90
+      threshold: 0.99
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -289,10 +331,10 @@ feature_policies:
     qcut_numeric: replace
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: true
-      threshold: 0.80
+      threshold: 0.99
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -309,10 +351,10 @@ feature_policies:
     qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: true
-      threshold: 0.80
+      threshold: 0.99
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -332,10 +374,10 @@ feature_policies:
     qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: false
-      threshold: 0.90
+      threshold: 0.99
       mode: report_only
       manual_groups_first: true
     calibration:
@@ -352,10 +394,10 @@ feature_policies:
     qcut_numeric: replace
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: false
-      threshold: 0.90
+      threshold: 0.99
       mode: report_only
       manual_groups_first: true
     calibration:
@@ -371,10 +413,10 @@ feature_policies:
     qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: false
-      threshold: 0.90
+      threshold: 0.99
       mode: report_only
       manual_groups_first: true
     calibration:
@@ -394,10 +436,10 @@ feature_policies:
     qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: false
-      threshold: 0.90
+      threshold: 0.99
       mode: report_only
       manual_groups_first: true
     calibration:
@@ -413,10 +455,10 @@ feature_policies:
     qcut_numeric: none
     qcut_bins: 4
     iqr_outlier_handling: train_fit
-    iqr_multiplier: 3.0
+    iqr_multiplier: 5.0
     correlation_filter:
       enabled: false
-      threshold: 0.90
+      threshold: 0.99
       mode: report_only
       manual_groups_first: true
     calibration:
@@ -698,6 +740,11 @@ feature_views:
       symptoms: category
       previous_antibiotic_families: binary_flags
 
+  - name: all_views
+    description: Include every candidate feature without manual group overrides.
+    include_patterns:
+      - "*"
+
 # Feature sets define the feature-selection layer applied after preprocessing
 # and correlation filtering.
 #
@@ -806,13 +853,14 @@ compute:
 # Slurm script rendering options. These are used when printing a Slurm script
 # from ml_benchmark/run_benchmark.py; they do not affect local execution directly.
 slurm:
+  python_bin: /data/ucct/bi/pipelines/micromamba/envs/mepram-modelling/bin/python
   script_path: ml_benchmark/run_benchmark.py
   job_name: ml_benchmark
   # Passed to Slurm and read back by the runner to set n_jobs.
   cpus_per_task: 8
-  # Caps simultaneous array tasks. With 8 CPUs per task, 16 concurrent tasks
-  # request at most 128 CPUs, matching four 32-CPU nodes.
-  max_parallel_tasks: 16
+  # Caps simultaneous array tasks. Leave empty for clusters that reject array
+  # concurrency suffixes or when you want Slurm to schedule the full array.
+  max_parallel_tasks:
   partition: long_idx
   # Optional comma-separated node list, for example: node001,node002,node003,node004.
   # Leave empty to let Slurm choose nodes from the partition.

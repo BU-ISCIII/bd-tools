@@ -1,0 +1,238 @@
+{
+  "runtime_defaults": {
+    "paths": {
+      "default_database_rel": "/data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C/ANALYSIS/01-PREPROCESS/20260520_otros/20260520_otros_filtered.csv",
+      "default_output_rel": ""
+    },
+    "targets": {
+      "sepsis_target": "sepsis",
+      "hemo_target": "resultado_hemo_gnb_selected",
+      "hemo_gate_target": "infected_yes_no",
+      "hemo_gate_negative_label": "NEGATIVE",
+      "resistance_gate_target": "infected_yes_no",
+      "resistance_gate_negative_label": "NEGATIVE",
+      "cef_target": "resistente_cefalosporina",
+      "weight_column": "sample_weight"
+    },
+    "training": {
+      "model_type": "catb",
+      "binary_trials": 10,
+      "cv_splits": 5,
+      "test_size": 0.35,
+      "random_state": 42,
+      "na_perc_limit": 0.2,
+      "max_features": 200,
+      "max_corr": 0.99,
+      "l3_min_positive": 30,
+      "impute_missing": true,
+      "optuna_storage": "",
+      "optuna_study_prefix": "three_level_catb",
+      "optuna_load_if_exists": true,
+      "skip_rfecv": false,
+      "skip_optuna": false,
+      "skip_level1": false,
+      "skip_level2": false,
+      "skip_level3": false,
+      "skip_l2_gate": false,
+      "l2_gate_proba_as_feature": false,
+      "level2_focuses": [],
+      "set_gate_recall": null,
+      "set_resistance_gate_recall": null,
+      "hemo_stage2_mode": "auto"
+    },
+    "categorical_for_dummies": [
+      "foco",
+      "ultimo_antib"
+    ]
+  },
+  "data_processing": {
+    "focus_map": {
+      "1": "pulmonar",
+      "2": "intraabdominal",
+      "3": "biliar",
+      "4": "urinario",
+      "5": "cardiovascular",
+      "6": "piel",
+      "7": "sistema nervioso central",
+      "8": "cateter venoso",
+      "9": "vías altas respiratorias",
+      "10": "osteoarticular",
+      "11": "genital",
+      "12": "desconocido"
+    },
+    "focus_to_exclude": [
+      "piel",
+      "osteoarticular",
+      "biliar",
+      "genital",
+      "sistema nervioso central",
+      "cateter venoso",
+      "vías altas respiratorias",
+      "cardiovascular"
+    ],
+    "target_remove": [
+      "sepsis",
+      "resultado_hemo",
+      "resultado_hemo_grouped",
+      "resultado_hemo_mo",
+      "resultado_hemo_multilabel",
+      "resultado_hemo_gnb_selected",
+      "resultado_hemo_gnb_all",
+      "dominant_all_cult_org",
+      "infected_yes_no",
+      "infected_yes_no_wother_cultures",
+      "resultado_inf_gnbselected",
+      "resultado_inf_gnball",
+      "resultado_inf_mo",
+      "bmr_etiologia",
+      "fenotipo_resistencia",
+      "fenotipo_resistencia_individual",
+      "resistente_cefalosporina",
+      "resistente_cefalosporina_multi"
+    ],
+    "metadata_columns": [
+      "person_id",
+      "fecha_ingreso_urgencias"
+    ],
+    "delete_columns": [],
+    "missing_indicator_threshold": 0.1,
+    "knn_imputer": {
+      "n_neighbors": 10,
+      "weights": "distance"
+    },
+    "drop_helper_columns": [],
+    "gate_recall": 0.9,
+    "iqr_multiplier": 5.0
+  },
+  "algorithm_params": {
+    "xgb": {
+      "binary": {
+        "objective": "binary:logistic",
+        "eval_metric": "logloss"
+      },
+      "multiclass": {
+        "objective": "multi:softprob"
+      }
+    },
+    "lgbm": {
+      "binary": {
+        "objective": "binary"
+      },
+      "multiclass": {
+        "objective": "multiclass"
+      }
+    },
+    "rf": {
+      "binary": {
+        "criterion": "gini"
+      },
+      "multiclass": {
+        "criterion": "gini"
+      }
+    },
+    "catb": {
+      "binary": {
+        "loss_function": "Logloss"
+      },
+      "multiclass": {
+        "loss_function": "MultiClass"
+      }
+    }
+  },
+  "optuna_search_spaces": {
+    "rf": {
+      "binary": {
+        "n_estimators": {"type": "int", "low": 100, "high": 1000},
+        "criterion": {"type": "categorical", "choices": ["gini", "entropy"]},
+        "max_depth": {"type": "int", "low": 3, "high": 30},
+        "min_samples_split": {"type": "int", "low": 2, "high": 20},
+        "min_samples_leaf": {"type": "int", "low": 1, "high": 20},
+        "max_features": {"type": "categorical", "choices": ["sqrt", "log2", null]},
+        "bootstrap": {"type": "categorical", "choices": [true, false]}
+      },
+      "multiclass": {
+        "n_estimators": {"type": "int", "low": 100, "high": 1000},
+        "max_depth": {"type": "int", "low": 3, "high": 20},
+        "min_samples_split": {"type": "int", "low": 2, "high": 20},
+        "min_samples_leaf": {"type": "int", "low": 1, "high": 20},
+        "max_features": {"type": "categorical", "choices": ["sqrt", "log2", null]}
+      }
+    },
+    "xgb": {
+      "binary": {
+        "n_estimators": {"type": "int", "low": 300, "high": 3000},
+        "learning_rate": {"type": "float", "low": 0.001, "high": 0.3, "log": true},
+        "max_depth": {"type": "int", "low": 3, "high": 12},
+        "min_child_weight": {"type": "float", "low": 0.001, "high": 10.0, "log": true},
+        "gamma": {"type": "float", "low": 0.0, "high": 5.0},
+        "subsample": {"type": "float", "low": 0.6, "high": 1.0},
+        "colsample_bytree": {"type": "float", "low": 0.6, "high": 1.0},
+        "reg_alpha": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "reg_lambda": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "scale_pos_weight": {"type": "float", "low": 1.0, "high": 20.0}
+      },
+      "multiclass": {
+        "n_estimators": {"type": "int", "low": 300, "high": 2000},
+        "learning_rate": {"type": "float", "low": 0.001, "high": 0.3, "log": true},
+        "max_depth": {"type": "int", "low": 3, "high": 12},
+        "min_child_weight": {"type": "float", "low": 0.001, "high": 10.0, "log": true},
+        "subsample": {"type": "float", "low": 0.6, "high": 1.0},
+        "colsample_bytree": {"type": "float", "low": 0.6, "high": 1.0},
+        "reg_alpha": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "reg_lambda": {"type": "float", "low": 1e-08, "high": 10.0, "log": true}
+      }
+    },
+    "lgbm": {
+      "binary": {
+        "n_estimators": {"type": "int", "low": 300, "high": 4000},
+        "learning_rate": {"type": "float", "low": 0.001, "high": 0.3, "log": true},
+        "num_leaves": {"type": "int", "low": 16, "high": 512},
+        "max_depth": {"type": "int", "low": 3, "high": 16},
+        "min_data_in_leaf": {"type": "int", "low": 5, "high": 200},
+        "lambda_l1": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "lambda_l2": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "feature_fraction": {"type": "float", "low": 0.6, "high": 1.0},
+        "bagging_fraction": {"type": "float", "low": 0.6, "high": 1.0},
+        "bagging_freq": {"type": "int", "low": 1, "high": 10}
+      },
+      "multiclass": {
+        "n_estimators": {"type": "int", "low": 300, "high": 3000},
+        "learning_rate": {"type": "float", "low": 0.001, "high": 0.3, "log": true},
+        "num_leaves": {"type": "int", "low": 16, "high": 256},
+        "max_depth": {"type": "int", "low": 3, "high": 14},
+        "min_data_in_leaf": {"type": "int", "low": 5, "high": 150},
+        "lambda_l1": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "lambda_l2": {"type": "float", "low": 1e-08, "high": 10.0, "log": true},
+        "feature_fraction": {"type": "float", "low": 0.6, "high": 1.0},
+        "bagging_fraction": {"type": "float", "low": 0.6, "high": 1.0},
+        "bagging_freq": {"type": "int", "low": 1, "high": 10}
+      }
+    },
+    "catb": {
+      "binary": {
+        "iterations": {"type": "int", "low": 300, "high": 2000},
+        "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": true},
+        "depth": {"type": "int", "low": 3, "high": 10},
+        "l2_leaf_reg": {"type": "float", "low": 0.001, "high": 10.0, "log": true},
+        "bagging_temperature": {"type": "float", "low": 0.0, "high": 1.0},
+        "border_count": {"type": "int", "low": 32, "high": 255},
+        "random_strength": {"type": "float", "low": 0.0, "high": 2.0}
+      },
+      "multiclass": {
+        "iterations": {"type": "int", "low": 300, "high": 2000},
+        "learning_rate": {"type": "float", "low": 0.01, "high": 0.3, "log": true},
+        "depth": {"type": "int", "low": 3, "high": 10},
+        "l2_leaf_reg": {"type": "float", "low": 0.001, "high": 10.0, "log": true},
+        "bagging_temperature": {"type": "float", "low": 0.0, "high": 1.0},
+        "border_count": {"type": "int", "low": 32, "high": 255},
+        "random_strength": {"type": "float", "low": 0.0, "high": 2.0}
+      }
+    }
+  },
+  "feature_views": {
+    "level1_sepsis": "all",
+    "level2_gate": "all",
+    "level2_etiology": "all",
+    "level3_resistance": "all"
+  }
+}

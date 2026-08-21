@@ -16,7 +16,7 @@ infrastructure should live in `ml_benchmark/` instead.
 - `config/preprocess_columns_to_drop.txt`: legacy compatibility drop list mirrored in `config/preprocess_feature_approach.yml`.
 - `config/preprocess_feature_approach.yml`: feature-approach selection configuration used by preprocessing.
 - `config/model_filters.yml`: MEPRAM cohort/model row filters.
-- `config/benchmark_mepram.yml`: MEPRAM benchmark matrix configuration.
+- `config/ml_benchmark.yml`: MEPRAM benchmark matrix configuration.
 - `preprocessing_report/`: checked-in preprocessing report artifacts.
 
 Reusable preprocessing report code lives in `../preprocess_report/`. This
@@ -61,5 +61,4 @@ The output depends on `--feature-approach`:
 - `clinical`: the default cleaned filtered output using the YAML feature view.
 - `none`: the legacy drop-list output from `preprocess_columns_to_drop.txt` plus the YAML legacy-drop section.
 - `raw`, `binary`, `categorical`: the other feature views defined in `config/preprocess_feature_approach.yml`.
-
 

@@ -16,6 +16,8 @@ class TargetSpec:
     task_type: TaskType
     columns: List[str] = field(default_factory=list)
     positive_label: Optional[Any] = None
+    binary_positive_values: List[Any] = field(default_factory=list)
+    binary_negative_label: Optional[Any] = None
     main_metric: Optional[str] = None
 
 

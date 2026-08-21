@@ -40,6 +40,8 @@ def _load_targets(config: Dict[str, Any]) -> List[TargetSpec]:
                 task_type=item["type"],
                 columns=list(item.get("columns", [])),
                 positive_label=item.get("positive_label"),
+                binary_positive_values=list(item.get("binary_positive_values", [])),
+                binary_negative_label=item.get("binary_negative_label"),
                 main_metric=item.get("main_metric"),
             )
         )

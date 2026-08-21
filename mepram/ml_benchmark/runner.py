@@ -27,7 +27,13 @@ from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 from .feature_views import resolve_feature_view
 from .reporting import job_output_dir, write_diagnostics_manifest, write_job_summary
 from .resources import configure_resources
-from .types import BenchmarkConfig, BenchmarkJob, DiagnosticResult, PipelineBuildResult
+from .types import (
+    BenchmarkConfig,
+    BenchmarkJob,
+    DiagnosticResult,
+    PipelineBuildResult,
+    TargetSpec,
+)
 
 
 SUPPORTED_TRAINING_MODELS = {
@@ -39,14 +45,51 @@ SUPPORTED_TRAINING_MODELS = {
     "logistic_qcut_only",
     "catboost",
     "catboost_calibrated",
+    "random_forest",
     "lightgbm",
     "lightgbm_calibrated",
     "lightgbm_qcut_only",
+    "xgboost",
 }
 
 
 def get_output_dir(config: BenchmarkConfig) -> Path:
     return Path(config.raw.get("output_dir", "outputs/ml_benchmark"))
+
+
+def _resolve_existing_config_path(config: BenchmarkConfig, raw_path: str | Path) -> Path:
+    """Resolve a relative config path against likely project roots.
+
+    The benchmark configs are often loaded through analysis-folder symlinks, so
+    the original config location and the current working directory can differ.
+    This helper tries a few sensible bases before failing with a clear error.
+    """
+
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+
+    resolved_config = config.path.resolve()
+    candidates = []
+    for base in (
+        Path.cwd(),
+        config.path.parent,
+        resolved_config.parent,
+        *resolved_config.parents,
+    ):
+        candidate = (base / path).resolve()
+        if candidate not in candidates:
+            candidates.append(candidate)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    tried = "\n".join(str(candidate) for candidate in candidates)
+    raise FileNotFoundError(
+        "Could not resolve benchmark path "
+        f"'{raw_path}' from config '{config.path}'. Tried:\n{tried}"
+    )
 
 
 def _feature_selection_cache_dir(config: BenchmarkConfig) -> str:
@@ -640,13 +683,10 @@ def _split_train_test(
 
 
 def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, Any]:
-    data_path = Path(config.raw.get("data", {}).get("path", ""))
-    if not data_path:
+    raw_data_path = config.raw.get("data", {}).get("path", "")
+    if not raw_data_path:
         raise ValueError("Benchmark config must define data.path.")
-    if not data_path.is_absolute():
-        data_path = config.path.parent / data_path
-        if not data_path.exists():
-            data_path = Path(config.raw.get("data", {}).get("path", ""))
+    data_path = _resolve_existing_config_path(config, raw_data_path)
     df = pd.read_csv(data_path)
     original_rows = len(df)
     original_columns = list(df.columns)
@@ -683,6 +723,7 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
     y = y.loc[X.index]
     if sample_weight is not None:
         sample_weight = sample_weight.loc[X.index]
+    y = _transform_target_series(y, job.target)
     if X.empty:
         raise ValueError(
             f"Feature view '{job.feature_view.name}' produced no columns for job "
@@ -708,6 +749,35 @@ def _prepare_job_data(config: BenchmarkConfig, job: BenchmarkJob) -> Dict[str, A
         "target_removed_columns": target_removed_columns,
         "candidate_features_after_target_removal": len(candidate_columns),
     }
+
+
+def _transform_target_series(
+    y: pd.Series,
+    target: TargetSpec,
+) -> pd.Series:
+    if target.task_type != "binary":
+        return y
+    positive_values = list(target.binary_positive_values or [])
+    if not positive_values:
+        return y
+
+    positive_label = target.positive_label
+    if positive_label is None:
+        positive_label = positive_values[0]
+    negative_label = target.binary_negative_label
+    if negative_label is None:
+        negative_label = f"non{positive_label}"
+
+    positive_values_set = set(positive_values)
+    transformed = y.map(
+        lambda value: positive_label if value in positive_values_set else negative_label
+    )
+    if transformed.nunique(dropna=True) < 2:
+        raise ValueError(
+            f"Binary target '{target.name}' did not produce two classes after "
+            f"mapping from {target.columns!r}."
+        )
+    return transformed
 
 
 def _apply_cohort_row_filters(
@@ -903,10 +973,7 @@ def _all_target_columns(config: BenchmarkConfig) -> list[str]:
 
 
 def _data_columns(config: BenchmarkConfig) -> list[str]:
-    data_path = Path(config.raw.get("data", {}).get("path", ""))
-    if not data_path.is_absolute():
-        candidate = config.path.parent / data_path
-        data_path = candidate if candidate.exists() else data_path
+    data_path = _resolve_existing_config_path(config, config.raw.get("data", {}).get("path", ""))
     return pd.read_csv(data_path, nrows=0).columns.tolist()
 
 

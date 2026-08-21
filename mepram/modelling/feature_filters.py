@@ -371,7 +371,7 @@ def remove_correlated_features(
 def fit_iqr_bounds(
     X: pd.DataFrame,
     columns: Optional[List[str]] = None,
-    iqr_multiplier: float = 3.0,
+    iqr_multiplier: float = 5.0,
 ) -> Dict[str, Dict[str, float]]:
     """
     Fit IQR outlier bounds on training data.

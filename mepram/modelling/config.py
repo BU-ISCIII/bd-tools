@@ -1,12 +1,10 @@
-"""Centralized config loading for three-level modelling package."""
+"""Centralized config loading for the modelling package."""
 
-from __future__ import annotations
-
-import json
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict
 
+import json
 import yaml
 
 
@@ -15,14 +13,10 @@ PROJECT_DIR = PACKAGE_DIR.parent
 
 MODELLING_CONFIG_DIR = PACKAGE_DIR / "config"
 PREPROCESS_CONFIG_DIR = PROJECT_DIR / "preprocess" / "config"
+MODELLING_CONFIG_FILE = MODELLING_CONFIG_DIR / "modelling_config.json"
 
 
-def _load_json(
-    name: str,
-    *,
-    config_dir: Path = MODELLING_CONFIG_DIR,
-) -> Dict[str, Any]:
-    path = config_dir / name
+def _load_json(path: Path) -> Dict[str, Any]:
 
     if not path.is_file():
         raise FileNotFoundError(f"Configuration file not found: {path}")
@@ -65,13 +59,32 @@ def _load_yaml(
 
 
 @lru_cache(maxsize=1)
+def _load_modelling_config() -> Dict[str, Any]:
+    if not MODELLING_CONFIG_FILE.is_file():
+        raise FileNotFoundError(
+            f"Configuration file not found: {MODELLING_CONFIG_FILE}"
+        )
+    return _load_json(MODELLING_CONFIG_FILE)
+
+
+def _load_section(name: str) -> Dict[str, Any]:
+    config = _load_modelling_config()
+    section = config.get(name)
+    if not isinstance(section, dict):
+        raise ValueError(
+            f"{MODELLING_CONFIG_FILE.name} must contain a mapping named '{name}'."
+        )
+    return section
+
+
+@lru_cache(maxsize=1)
 def runtime_defaults() -> Dict[str, Any]:
-    return _load_json("runtime_defaults.json")
+    return _load_section("runtime_defaults")
 
 
 @lru_cache(maxsize=1)
 def data_processing_config() -> Dict[str, Any]:
-    config = _load_json("data_processing.json")
+    config = _load_section("data_processing")
 
     if "focus_map" in config:
         config["focus_map"] = {
@@ -84,12 +97,12 @@ def data_processing_config() -> Dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def algorithm_params() -> Dict[str, Any]:
-    return _load_json("algorithm_params.json")
+    return _load_section("algorithm_params")
 
 
 @lru_cache(maxsize=1)
 def optuna_search_spaces() -> Dict[str, Any]:
-    return _load_json("optuna_search_spaces.json")
+    return _load_section("optuna_search_spaces")
 
 
 @lru_cache(maxsize=1)
@@ -129,19 +142,13 @@ def modelling_feature_views() -> Dict[str, str]:
     Load the feature-view assignment for every modelling stage.
 
     Expected location:
-        <project>/modelling/config/model_feature_views.yml
+        <project>/modelling/config/modelling_config.json
     """
-    config = _load_yaml(
-        "model_feature_views.yml",
-        config_dir=MODELLING_CONFIG_DIR,
-    )
-
-    assignments = config.get("feature_views")
+    assignments = _load_section("feature_views")
 
     if not isinstance(assignments, dict):
         raise ValueError(
-            "model_feature_views.yml must contain a mapping "
-            "named 'feature_views'."
+            "modelling_config.json must contain a mapping named 'feature_views'."
         )
 
     required_stages = {

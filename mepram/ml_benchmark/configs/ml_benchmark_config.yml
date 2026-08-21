@@ -1,0 +1,858 @@
+# MEPRAM predictive benchmark configuration.
+#
+# This file is intentionally both executable configuration and documentation.
+# The benchmark expands jobs as:
+#
+#   target x model x feature_view x feature_set
+#
+# Example:
+#
+#   sepsis x logistic x raw_vitals x all_features
+#
+# The runner keeps leakage-sensitive work inside sklearn-style pipelines:
+# imputation, qcut bin learning, IQR bounds, scaling, one-hot categories,
+# correlation drops, feature selection, calibration, and estimator fitting are
+# fitted on training rows only and then applied to validation/test rows.
+
+# Data source and target leakage controls.
+data:
+  # Analytical table used by the benchmark. This should already be the filtered
+  # preprocessing output, not raw source tables.
+  path: /data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C/ANALYSIS/01-PREPROCESS/20260702_base_corrected/20260702_base_corrected_filtered.csv
+
+  # Optional row weight column. If present, it is removed from X and passed as
+  # sample_weight to estimators that accept it.
+  weight_column: sample_weight
+
+  # Columns that represent outcomes or target-like information. The active
+  # target is removed automatically, and all columns listed here are also
+  # removed from X to avoid leakage when a different target is being modeled.
+  target_like_columns:
+    - sepsis
+    - resultado_hemo
+    - resultado_hemo_mo
+    - resultado_inf_mo
+    - resultado_hemo_grouped
+    - resultado_hemo_gnb_selected
+    - resultado_hemo_gnb_all
+    - resultado_inf_gnbselected
+    - resultado_inf_gnball
+    - resultado_hemo_multilabel
+    - all_cult_org
+    - dominant_all_cult_org
+    - infected_yes_no
+    - infected_yes_no_wother_cultures
+    - bmr_etiologia
+    - fenotipo_resistencia
+    - fenotipo_resistencia_individual
+    - fenotipo_resistencia_grouped
+    - resistente_cefalosporina
+    - resistente_cefalosporina_multi
+
+# Root output directory. Jobs are written to output_dir/jobs/<job_slug>/.
+# Aggregate and target-level reports are written to output_dir/reports/.
+output_dir: /data/ucct/bi/research/20260330_MEPRAM-RESULTS_CNM_C/ANALYSIS/02-ML_BENCHMARK/ml_benchmark_results_analysis44
+
+# Split controls.
+#
+# Current implemented strategy:
+# - cross_validation: first creates a held-out test split using test_size, then
+#   runs CV folds only inside the remaining training subset.
+#
+# test_size is never used in feature selection/tuning/training until final test
+# evaluation.
+split:
+  strategy: cross_validation
+  # Number of validation folds within the training subset.
+  cv_splits: 5
+  # Fraction held out as final test set.
+  test_size: 0.20
+  # Reserved for future explicit train/validation/test splits. Empty means not
+  # used by the current cross_validation strategy.
+  validation_size:
+  # Reproducibility seed for train/test split, CV splitters, and model defaults.
+  random_state: 99
+  # If true, stratify train/test and CV splits by y where possible.
+  stratify: true
+
+# Row filtering happens before train/test splitting because it changes the
+# cohort definition. Keep filters disabled until the cohort rule is clinically
+# agreed.
+row_filters:
+  # Cohort filters can exclude exact values or keep values above a frequency
+  # threshold. Every enabled rule is logged in the benchmark audit.
+  cohort_filters:
+    # type: exclude_values
+    # Drops rows where column is equal to one of values.
+    - name: exclude_minor_foci
+      type: exclude_values
+      enabled: false
+      column: foco
+      values:
+        - catéter venoso
+        - vías altas respiratorias
+        - cardiovascular
+        - osteoarticular
+        - sistema nervioso central
+        - genital
+
+    # type: min_frequency
+    # Keeps rows where the value in column has enough support in the current
+    # dataset. Use min_count, min_fraction, or both. Empty min_count means it is
+    # ignored. drop_missing controls whether missing values are dropped.
+    - name: keep_common_foci
+      type: min_frequency
+      enabled: false
+      column: foco
+      min_count:
+      min_fraction: 0.04
+      drop_missing: false
+
+  # Optional row filter based on missing feature values. This is separate from
+  # imputation: it removes rows before splitting, while imputation fills values
+  # inside the model pipeline.
+  feature_na_filter:
+    enabled: true
+    # Supported mode currently used by the runner: max_fraction.
+    # A row is dropped if the selected feature subset has missingness above
+    # max_missing_fraction.
+    mode: max_fraction
+    max_missing_fraction: 0.10
+    # Glob-style feature include patterns. "*" means all feature columns after
+    # target removal and feature-view selection.
+    include_patterns:
+      - "*"
+    # Exact columns to exclude from the NA-row filter even if matched above.
+    exclude_columns: []
+
+# Prediction targets. Each target creates one set of jobs for every configured
+# model, feature_view, and feature_set.
+targets:
+  - name: sepsis
+    # Accepted task types currently used by the runner: binary, multiclass.
+    type: binary
+    # Main metric used for ranking and default Optuna objective when tuning.
+    # Binary examples: roc_auc, average_precision, f1_macro, log_loss.
+    main_metric: roc_auc
+
+  - name: resultado_hemo
+    type: multiclass
+    main_metric: log_loss
+
+  - name: resultado_hemo_grouped
+    type: multiclass
+    main_metric: log_loss
+
+  - name: resultado_hemo_gnbselected_binary
+    type: binary
+    columns:
+      - resultado_hemo_gnb_selected
+    positive_label: GNBSelected
+    binary_positive_values:
+      - GNBSelected
+    binary_negative_label: nonGNBSelected
+    main_metric: average_precision
+
+  - name: resultado_hemo_gnball_binary
+    type: binary
+    columns:
+      - resultado_hemo_gnb_all
+    positive_label: GNBAll
+    binary_positive_values:
+      - GNBAll
+    binary_negative_label: nonGNBall
+    main_metric: average_precision
+
+  - name: resultado_hemo_coco_vs_gram_binary
+    type: binary
+    columns:
+      - resultado_hemo_grouped
+    positive_label: Coco gram+
+    binary_positive_values:
+      - Coco gram+
+    binary_negative_label: nonCocoGram
+    main_metric: average_precision
+
+  - name: resultado_inf_gnbselected_binary
+    type: binary
+    columns:
+      - resultado_inf_gnbselected
+    positive_label: GNBSelected
+    binary_positive_values:
+      - GNBSelected
+    binary_negative_label: nonGNBSelected
+    main_metric: average_precision
+
+  - name: resultado_inf_gnball_binary
+    type: binary
+    columns:
+      - resultado_inf_gnball
+    positive_label: GNBAll
+    binary_positive_values:
+      - GNBAll
+    binary_negative_label: nonGNBall
+    main_metric: average_precision
+
+  - name: resistente_cefalosporina
+    type: binary
+    main_metric: average_precision
+
+# Model matrix. Each entry must exist in the model registry. feature_policy
+# points to a policy under feature_policies below.
+#
+# Active models here are intentionally reduced to keep the matrix manageable.
+# Commented models can be re-enabled later.
+models:
+  #- name: dummy_uniform
+  #   feature_policy: tree_default
+  # - name: dummy_stratified
+  #   feature_policy: tree_default
+  - name: dummy_prior
+    feature_policy: tree_default
+  - name: logistic
+    feature_policy: logistic_default
+  - name: logistic_qcut_only
+    feature_policy: logistic_qcut_only
+  - name: logistic_calibrated
+    feature_policy: logistic_calibrated
+  # - name: random_forest
+  #   feature_policy: tree_default
+  - name: catboost
+    feature_policy: catboost_default
+  - name: catboost_calibrated
+    feature_policy: catboost_calibrated
+  - name: lightgbm
+    feature_policy: tree_default
+  - name: lightgbm_qcut_only
+    feature_policy: tree_qcut_only
+  - name: lightgbm_calibrated
+    feature_policy: tree_calibrated
+  # - name: xgboost
+  #   feature_policy: tree_default
+
+# Model preprocessing policies.
+#
+# Policies define transformations applied inside each CV fold/train split.
+# Common parameters:
+#
+# require_numeric:
+#   true  -> final matrix must be numeric after preprocessing.
+#   false -> native categoricals may remain for estimators that support them.
+#
+# categorical_handling:
+#   one_hot      -> impute categoricals, then OneHotEncoder(handle_unknown).
+#   native       -> impute categoricals and keep strings for CatBoost.
+#   preprocessed -> expect no categorical columns; mostly a legacy mode.
+#
+# scale:
+#   none, standard, minmax, robust.
+#   Scaling affects numeric columns only. Usually use standard for logistic
+#   regression and none for tree models.
+#
+# impute_numeric:
+#   Any SimpleImputer strategy supported by sklearn in this environment; current
+#   intended value is median.
+#
+# impute_categorical:
+#   Any SimpleImputer strategy supported by sklearn; current intended value is
+#   most_frequent.
+#
+# qcut_numeric:
+#   none    -> keep raw numeric columns only.
+#   append  -> keep raw numeric columns and add <column>_qcut when qcut is
+#              possible.
+#   replace -> add <column>_qcut and remove the raw source when qcut is possible.
+#              Low-cardinality numeric columns, such as 0/1 flags, remain raw.
+#
+# iqr_outlier_handling:
+#   none      -> no IQR handling.
+#   train_fit -> learn IQR bounds on training rows and set out-of-bounds values
+#                to missing before imputation.
+#
+# correlation_filter:
+#   enabled: compute high-correlation pairs when true.
+#   threshold: absolute Spearman threshold; pair is reported when > threshold.
+#   mode:
+#     report_only      -> report pairs, keep all features.
+#     report_then_drop -> report pairs and drop redundant features.
+#     auto_drop        -> same drop behavior as report_then_drop.
+#     disabled         -> skip computation/drop.
+#   manual_groups_first: feature_views are resolved before correlation filter.
+#
+# calibration:
+#   enabled: wraps final estimator in sklearn CalibratedClassifierCV.
+#   method: sigmoid or isotonic. Sigmoid is safer with smaller data.
+#   cv: internal calibration folds inside the training split.
+#   ensemble: passed to CalibratedClassifierCV where supported.
+feature_policies:
+  # Main logistic regression policy: raw numeric values, one-hot categoricals,
+  # standard scaling, and correlation dropping for more stable coefficients.
+  logistic_default:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: true
+      threshold: 0.90
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  # Logistic sensitivity policy: replace continuous numeric variables with
+  # train-fitted qcut bins where possible. This tests threshold-like effects
+  # without carrying raw + binned duplicate signal.
+  logistic_qcut_only:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: replace
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  # Same representation as logistic_default, but wraps the final estimator with
+  # CalibratedClassifierCV. Use this to compare probability calibration.
+  logistic_calibrated:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: standard
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: true
+      threshold: 0.80
+      mode: report_then_drop
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
+
+  # Default numeric tree policy for LightGBM/XGBoost-style estimators:
+  # one-hot categoricals, no scaling, raw numeric values, no correlation drops.
+  tree_default:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  # Tree sensitivity policy: qcut-only numeric representation. Tree models can
+  # already learn thresholds from raw values, so this is not the default.
+  tree_qcut_only:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: replace
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  # Same representation as tree_default, but with final probability calibration.
+  tree_calibrated:
+    require_numeric: true
+    categorical_handling: one_hot
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
+
+  # CatBoost default: keep native categorical columns as strings and avoid
+  # scaling/qcut because CatBoost handles splits and categorical encoding.
+  catboost_default:
+    require_numeric: false
+    categorical_handling: native
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: false
+
+  # CatBoost with final probability calibration.
+  catboost_calibrated:
+    require_numeric: false
+    categorical_handling: native
+    scale: none
+    impute_numeric: median
+    impute_categorical: most_frequent
+    qcut_numeric: none
+    qcut_bins: 4
+    iqr_outlier_handling: train_fit
+    iqr_multiplier: 3.0
+    correlation_filter:
+      enabled: false
+      threshold: 0.90
+      mode: report_only
+      manual_groups_first: true
+    calibration:
+      enabled: true
+      method: sigmoid
+      cv: 3
+      ensemble: true
+
+# Feature groups define alternative codifications of the same clinical concept.
+#
+# The runner starts from feature_view.include_patterns, then for each group in a
+# feature view:
+# - includes columns/patterns from the selected alternative;
+# - excludes columns/patterns from that same alternative.
+#
+# This prevents comparing models that accidentally include multiple encodings of
+# the same concept unless we intentionally choose to do so.
+#
+# Note about qcut:
+# qcut columns are created later inside model preprocessing. They are not present
+# in preprocess_test_filtered.csv. The qcut_source alternatives document which
+# raw source columns can become <source>_qcut under a qcut policy.
+feature_groups:
+  temperature:
+    description: Alternative temperature/fever representations, including sources that can generate temperatura_qcut.
+    alternatives:
+      raw:
+        include:
+          - temperatura
+        exclude:
+          - temperatura_qcut
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+          - sintoma_fiebre_categorico
+
+      binary_flags:
+        include:
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+        exclude:
+          - temperatura
+          - temperatura_qcut
+          - sintoma_fiebre_categorico
+
+      category:
+        include:
+          - sintoma_fiebre_categorico
+        exclude:
+          - temperatura
+          - temperatura_qcut
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+
+      qcut_source:
+        include:
+          - temperatura
+        exclude:
+          - hipotermia_hipertermia
+          - sintoma_fiebre
+          - sintoma_fiebre_categorico
+
+  # Raw heart rate versus tachycardia flag.
+  heart_rate:
+    description: Alternative heart-rate representations, including sources that can generate frec_cardiaca_qcut.
+    alternatives:
+      raw:
+        include:
+          - frec_cardiaca
+        exclude:
+          - frec_cardiaca_qcut
+          - taquicardia
+      binary_flags:
+        include:
+          - taquicardia
+        exclude:
+          - frec_cardiaca
+          - frec_cardiaca_qcut
+      qcut_source:
+        include:
+          - frec_cardiaca
+        exclude:
+          - taquicardia
+
+  respiratory_rate:
+    description: Alternative respiratory-rate representations, including sources that can generate frec_respiratoria_qcut.
+    alternatives:
+      raw:
+        include:
+          - frec_respiratoria
+        exclude:
+          - frec_respiratoria_qcut
+          - taquipnea
+      binary_flags:
+        include:
+          - taquipnea
+        exclude:
+          - frec_respiratoria
+          - frec_respiratoria_qcut
+      qcut_source:
+        include:
+          - frec_respiratoria
+        exclude:
+          - taquipnea
+
+  oxygen_saturation:
+    description: Alternative oxygen-saturation representations, including sources that can generate saturacion_o2_qcut.
+    alternatives:
+      raw:
+        include:
+          - saturacion_o2
+        exclude:
+          - saturacion_o2_qcut
+          - hipoxemia
+      binary_flags:
+        include:
+          - hipoxemia
+        exclude:
+          - saturacion_o2
+          - saturacion_o2_qcut
+      qcut_source:
+        include:
+          - saturacion_o2
+        exclude:
+          - hipoxemia
+
+  lactate:
+    description: Lactate source variable that can generate lactato_serico_qcut in model preprocessing.
+    alternatives:
+      raw:
+        include:
+          - lactato_serico
+        exclude:
+          - lactato_serico_qcut
+      qcut_source:
+        include:
+          - lactato_serico
+
+  blood_pressure:
+    description: Blood-pressure source variable that can generate tension_arterial_qcut in model preprocessing.
+    alternatives:
+      raw:
+        include:
+          - tension_arterial
+        exclude:
+          - tension_arterial_qcut
+      qcut_source:
+        include:
+          - tension_arterial
+
+  inflammatory_markers:
+    description: Continuous analytical markers that can generate model-fitted qcut variables.
+    alternatives:
+      raw:
+        include:
+          - proteina_c_reactiva
+          - bilirrubina
+          - plaquetas
+          - creatinina
+        exclude:
+          - proteina_c_reactiva_qcut
+          - bilirrubina_qcut
+          - plaquetas_qcut
+          - creatinina_qcut
+      qcut_source:
+        include:
+          - proteina_c_reactiva
+          - bilirrubina
+          - plaquetas
+          - creatinina
+
+  symptoms:
+    description: Symptom alternatives where preprocessing keeps both binary and categorical codifications.
+    alternatives:
+      binary_flags:
+        # Include all symptom columns, then remove categorical variants.
+        include_patterns:
+          - "sintoma_*"
+        exclude_patterns:
+          - "sintoma_*_categorico"
+      category:
+        # Use categorical variants and explicitly exclude the base binary
+        # symptom flags. A broad exclude_pattern would also remove the
+        # categorical columns, so exact excludes are used here.
+        include_patterns:
+          - "sintoma_*_categorico"
+        exclude:
+          - sintoma_abdominal
+          - sintoma_articular
+          - sintoma_cefalea
+          - sintoma_costal
+          - sintoma_diarrea
+          - sintoma_disuria
+          - sintoma_fiebre
+          - sintoma_mucosa
+          - sintoma_náuseas
+          - sintoma_piel
+          - sintoma_polaquiuria
+          - sintoma_recto
+          - sintoma_renal
+          - sintoma_respirar
+          - sintoma_tos
+          - sintoma_vómitos
+
+  previous_antibiotic_families:
+    description: Previous-antibiotic family alternatives with count and binary codifications.
+    alternatives:
+      counts:
+        # Count variables preserve repeated exposure intensity.
+        include_patterns:
+          - "antib_previo_*_counts"
+        exclude_patterns:
+          - "antib_previo_*_binary"
+      binary_flags:
+        # Binary variables represent any prior exposure by family.
+        include_patterns:
+          - "antib_previo_*_binary"
+        exclude_patterns:
+          - "antib_previo_*_counts"
+
+# Feature views define which alternative representation is used for each group.
+# They do not select features by importance; they only define the candidate
+# columns that are allowed into a model before model-specific preprocessing.
+#
+# include_patterns accepts shell-style globs, for example:
+#   "*"                -> all columns still available after target removal.
+#   "sintoma_*"        -> all symptom columns.
+#   "antib_*_binary"   -> matching binary antibiotic variables.
+#
+# groups maps feature_groups.<group_name> to one alternative name in that group.
+feature_views:
+  - name: raw_vitals
+    # Prefer continuous/raw clinical variables when they exist. Symptoms remain
+    # as binary flags and previous-antibiotic families use counts.
+    description: Prefer raw continuous vital-sign representations.
+    include_patterns:
+      - "*"
+    groups:
+      temperature: raw
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      lactate: raw
+      blood_pressure: raw
+      inflammatory_markers: raw
+      symptoms: category
+      previous_antibiotic_families: counts
+
+  - name: binary_vitals
+    # Prefer clinically thresholded flags where they exist. Labs without a
+    # binary clinical flag remain raw. Antibiotic families use binary flags.
+    description: Prefer clinically thresholded vital-sign flags.
+    include_patterns:
+      - "*"
+    groups:
+      temperature: binary_flags
+      heart_rate: binary_flags
+      respiratory_rate: binary_flags
+      oxygen_saturation: binary_flags
+      lactate: raw
+      blood_pressure: raw
+      inflammatory_markers: raw
+      symptoms: binary_flags
+      previous_antibiotic_families: binary_flags
+
+  - name: categorical_vitals
+    # Prefer categorical symptom codifications. Most vitals/labs stay raw
+    # because no non-qcut categorical version exists in the filtered CSV.
+    description: Prefer ordinal/categorical vital-sign representations.
+    include_patterns:
+      - "*"
+    groups:
+      temperature: category
+      heart_rate: raw
+      respiratory_rate: raw
+      oxygen_saturation: raw
+      lactate: raw
+      blood_pressure: raw
+      inflammatory_markers: raw
+      symptoms: category
+      previous_antibiotic_families: binary_flags
+
+  - name: all_views
+    description: Include every candidate feature (no group overrides). Useful for full-feature comparisons.
+    include_patterns:
+      - "*"
+
+# Feature sets define the feature-selection layer applied after preprocessing
+# and correlation filtering.
+#
+# strategy:
+#   none       -> use every candidate feature after preprocessing/filtering.
+#   shap_rfecv -> run cached SHAP-RFECV ranking, optionally capped by
+#                 max_features.
+#
+# max_features:
+#   empty/null -> use the full selected SHAP-RFECV ranking.
+#   integer    -> keep the top N features from the cached ranking.
+feature_sets:
+  - name: all_features
+    strategy: none
+
+  - name: shap_rfecv_uncapped
+    strategy: shap_rfecv
+    max_features:
+
+  - name: shap_rfecv_top_20
+    strategy: shap_rfecv
+    # Caps to top 20 features from the cached SHAP-RFECV ranking.
+    max_features: 20
+
+# SHAP-RFECV global settings.
+#
+# Cached rankings are shared across feature_set caps when the target/model/view
+# and transformed data are the same. This avoids rerunning the expensive ranking
+# for top-N variants.
+feature_selection:
+  # true -> write/read ranking JSON files under output_dir/feature_selection_cache.
+  cache_enabled: true
+  shap_rfecv:
+    # Internal selector CV folds inside the training split.
+    cv_splits: 2
+    # Fraction of remaining features removed each RFECV round.
+    step_fraction: 0.50
+    # Stop removing features once this floor is reached.
+    min_features_to_select: 20
+    # Max rows sampled for SHAP explanation per round.
+    max_shap_rows: 1000
+    # Optional max rows sampled for selector training. Empty would use all rows.
+    max_selector_rows: 2500
+    # Model-specific caps/overrides used only for the selector estimator. These
+    # keep feature selection cheaper than final model training.
+    selector_estimator_params:
+      logistic:
+        max_iter: 1000
+      lightgbm:
+        n_estimators: 80
+        learning_rate: 0.05
+        num_leaves: 31
+      catboost:
+        iterations: 80
+        depth: 6
+      random_forest:
+        n_estimators: 100
+      xgboost:
+        n_estimators: 100
+
+# Optional Optuna hyperparameter tuning.
+#
+# When enabled, tuning runs per job using only the training subset. The held-out
+# test set remains untouched until final evaluation. Study DBs, best params,
+# trial tables, and Optuna HTML plots are written inside each job folder.
+tuning:
+  # false -> use model defaults/configured params; true -> run Optuna.
+  enabled: true
+  # Desired completed trials per job. If reuse_existing is true and a study
+  # already has completed trials, only missing trials are run.
+  n_trials: 25
+  # Optional wall-clock timeout per job. Empty means no timeout.
+  timeout_seconds:
+  # Tuning CV folds inside the training subset.
+  cv_splits: 3
+  # Empty means use target.main_metric. Set explicitly to override per config.
+  metric:
+  # Accepted values: auto, maximize, minimize. auto minimizes log_loss and
+  # maximizes other metrics.
+  direction: auto
+  # true -> reuse existing best_params.json and optuna_study.db when present.
+  reuse_existing: true
+  # Current supported value: sqlite.
+  storage: sqlite
+  # Restricts tuning to these model names. Empty means tune every model that has
+  # a registered Optuna search space.
+  models:
+    - logistic
+    - logistic_qcut_only
+    - logistic_calibrated
+    - catboost
+    - catboost_calibrated
+    - lightgbm
+    - lightgbm_qcut_only
+    - lightgbm_calibrated
+
+# Local compute/runtime controls.
+compute:
+  # Default parallel workers passed to estimators when SLURM_CPUS_PER_TASK is
+  # not available. Slurm can override this at runtime.
+  default_n_jobs: 1
+  # true -> skip completed job folders. Useful for Slurm arrays/restarts.
+  skip_existing: true
+  # Row cap for heavy diagnostics/plots where implemented.
+  max_diagnostic_rows: 1000
+
+
+# Slurm script rendering options. These are used when printing a Slurm script
+# from ml_benchmark/run_benchmark.py; they do not affect local execution directly.
+slurm:
+    script_path: ml_benchmark/run_benchmark.py
+    job_name: ml_benchmark
+    # Passed to Slurm and read back by the runner to set n_jobs.
+    cpus_per_task: 8
+    # Caps simultaneous array tasks. With 8 CPUs per task, 16 concurrent tasks
+    # request at most 128 CPUs, matching four 32-CPU nodes.
+    max_parallel_tasks: 16
+    partition: long_idx
+    # Optional comma-separated node list, for example: node001,node002,node003,node004.
+    # Leave empty to let Slurm choose nodes from the partition.
+    nodelist:
+    mem: 32G
+    time: "08:00:00"
+    # %A is Slurm job ID, %a is array task ID.
+    output: logs/benchmark_%A_%a.out

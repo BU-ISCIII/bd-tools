@@ -21,6 +21,7 @@ from ml_benchmark.jobs import (
     format_job_matrix,
     format_slurm_array,
     get_job_by_index,
+    load_job_matrix_file,
 )
 from ml_benchmark.reporting import build_aggregate_report
 from ml_benchmark.runner import get_output_dir, run_job
@@ -31,10 +32,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Predictive ML benchmark runner.")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--array-index", type=int)
+    parser.add_argument(
+        "--array-offset",
+        type=int,
+        default=0,
+        help="Offset added to SLURM array index when selecting a benchmark job.",
+    )
     parser.add_argument("--target")
     parser.add_argument("--model")
     parser.add_argument("--feature-view")
     parser.add_argument("--feature-set")
+    parser.add_argument("--job-matrix-file", type=Path)
     parser.add_argument("--print-job-matrix", action="store_true")
     parser.add_argument("--print-slurm-array", action="store_true")
     parser.add_argument("--print-slurm-script", action="store_true")
@@ -46,54 +54,87 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 def select_jobs(args: argparse.Namespace, jobs):
     selected = jobs
+
     if args.array_index is not None:
-        return [get_job_by_index(jobs, args.array_index)]
+        actual_index = args.array_index + args.array_offset
+        return [get_job_by_index(jobs, actual_index)]
+
     if args.target:
         selected = [job for job in selected if job.target.name == args.target]
+
     if args.model:
         selected = [job for job in selected if job.model_name == args.model]
+
     if args.feature_view:
         selected = [
             job for job in selected if job.feature_view.name == args.feature_view
         ]
+
     if args.feature_set:
         selected = [job for job in selected if job.feature_set.name == args.feature_set]
+
     return selected
 
 
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
+
     config = load_config(args.config)
-    jobs = build_job_matrix(config)
+
+    jobs = (
+        load_job_matrix_file(config, args.job_matrix_file)
+        if args.job_matrix_file
+        else build_job_matrix(config)
+    )
+
     selected = select_jobs(args, jobs)
+
     if not selected:
         raise ValueError("No benchmark jobs matched the requested filters.")
 
     if args.print_job_matrix:
         print(format_job_matrix(selected))
         return
+
     if args.print_slurm_array:
         print(format_slurm_array(selected))
         return
+
     if args.print_slurm_script:
-        print(render_slurm_script(config, selected, invoked_script_path=sys.argv[0]))
+        print(
+            render_slurm_script(
+                config,
+                selected,
+                invoked_script_path=sys.argv[0],
+                dense_array=bool(args.job_matrix_file),
+                job_matrix_file=args.job_matrix_file,
+            )
+        )
         return
+
     if args.write_slurm_script:
         path = write_slurm_script(
             config,
             selected,
             args.write_slurm_script,
             invoked_script_path=sys.argv[0],
+            dense_array=bool(args.job_matrix_file),
+            job_matrix_file=args.job_matrix_file,
         )
         print(path)
         return
+
     if args.build_report:
         report = build_aggregate_report(get_output_dir(config))
         print(json.dumps(report, indent=2))
         return
 
-    results = [run_job(config, job, dry_run=args.dry_run) for job in selected]
+    results = [
+        run_job(config, job, dry_run=args.dry_run)
+        for job in selected
+    ]
+
     print(json.dumps(results, indent=2))
 
 

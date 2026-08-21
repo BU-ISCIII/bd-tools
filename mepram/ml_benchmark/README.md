@@ -66,7 +66,7 @@ Print the job matrix:
 
 ```bash
 python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
+  --config mepram/config/ml_benchmark.yml \
   --print-job-matrix
 ```
 
@@ -74,7 +74,7 @@ Print the Slurm array line:
 
 ```bash
 python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
+  --config mepram/config/ml_benchmark.yml \
   --print-slurm-array
 ```
 
@@ -82,7 +82,7 @@ Print a full Slurm script:
 
 ```bash
 python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
+  --config mepram/config/ml_benchmark.yml \
   --print-slurm-script
 ```
 
@@ -90,7 +90,7 @@ Run one matrix entry in dry-run mode:
 
 ```bash
 python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
+  --config mepram/config/ml_benchmark.yml \
   --array-index 15 \
   --dry-run
 ```
@@ -99,7 +99,7 @@ Run one train/evaluate job:
 
 ```bash
 python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
+  --config mepram/config/ml_benchmark.yml \
   --target sepsis \
   --model logistic \
   --feature-view raw_vitals \
@@ -110,7 +110,7 @@ Build aggregate comparison reports after jobs have completed:
 
 ```bash
 python ml_benchmark/run_benchmark.py \
-  --config mepram/config/benchmark_mepram.yml \
+  --config mepram/config/ml_benchmark.yml \
   --build-report
 ```
 
@@ -454,7 +454,7 @@ feature_policies:
     iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: true
-      threshold: 0.80
+      threshold: 0.99
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -470,7 +470,7 @@ feature_policies:
     iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: true
-      threshold: 0.80
+      threshold: 0.99
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -485,7 +485,7 @@ feature_policies:
     iqr_outlier_handling: train_fit
     correlation_filter:
       enabled: true
-      threshold: 0.80
+      threshold: 0.99
       mode: report_then_drop
       manual_groups_first: true
     calibration:
@@ -551,9 +551,9 @@ cross-validation tuning now and train/validation/test evaluation later:
 split:
   strategy: cross_validation
   cv_splits: 5
-  test_size: 0.20
+  test_size: 0.35
   validation_size:
-  random_state: 99
+  random_state: 42
   stratify: true
 ```
 
