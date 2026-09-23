@@ -1,0 +1,24 @@
+category: evolucion
+prompts:
+- name: comienzo_sintomas
+  title: Comienzo de los síntomas
+  source: evolucion
+  output_type: text
+  system_prompt: Dime a partir de los textos cuándo comenzaron los sintomas del paciente (como fiebre, tos, dolores,
+    tenesmo, nauseas, vomitos, lesiones en la piel o mucosas, cefalea...). No confundir con días de ingreso o cualquier
+    otro suceso, sólo centrarse en los síntomas. Tu respuesta ha de ser unicamente cuándo comenzaron los sintomas,
+    sin dar ninguna explicación adicional. Si no se da información acerca de cuándo comenzaron los sintomas, responde
+    con un 'NA'.
+- name: nivel_conciencia
+  title: Nivel de conciencia
+  source: evolucion
+  output_type: text
+  system_prompt: Mira en los textos si el paciente tiene somnolencia, estupor o coma. Si el paciente tiene alguno
+    de estos tres síntomas, devuélveme la frase de texto donde aparezca, sin dar ninguna explicación adicional.
+    Si no se da información acerca de esto, responde con un 'NA'.
+- name: tiempo_en_UCI_actual
+  title: Tiempo que el paciente lleva en UCI
+  source: evolucion
+  output_type: text
+  system_prompt: Mira en los textos si el paciente está en UCI. En caso afirmativo, dime el mínimo trozo de texto
+    donde se indique esta información. En caso negativo, devuelve 'NA'.

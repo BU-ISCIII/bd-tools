@@ -1,0 +1,68 @@
+category: anamnesis
+prompts:
+- name: paciente_residencia
+  title: Residencia en CSS
+  source: personales
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente vive en una residencia/centro sociosanitario o está
+    institucionalizado. Tu respuesta ha de ser un '0' si no vive en una residencia y un '1' si vive en una residencia,
+    sin dar ninguna explicación adicional. Si no se da información acerca de vivir en residencia o si el texto aparece
+    vacío, responde con un '0'.
+- name: puntaje_child_pugh
+  title: Puntaje de Child-Pugh
+  source: personales
+  output_type: text
+  system_prompt: Mira en los textos si aparece el puntaje Child-Pugh para el paciente. A veces aparece como Child-Pugh
+    y otras veces como Child. Tu respuesta ha de ser únicamente el valor de dicho puntaje. Si no se da información
+    acerca del puntaje Child-Pugh o si el texto aparece vacío, responde con un 'NA'.
+- name: fecha_TOS
+  title: Fecha del trasplante de órgano sólido
+  source: personales
+  output_type: text
+  system_prompt: Mira en los textos si el paciente ha tenido trasplante de organo solido y en caso afirmativo, dame
+    la fecha de cuando fue realizado dicho trasplante de órgano sólido. No confundir un trasplante de órgano sólido
+    con un trasplante de progenitores hematopoyéticos. Tu respuesta ha de ser unicamente la fecha de trasplante
+    de órgano sólido para cada paciente, sin dar ninguna explicación adicional. Si no se da información acerca de
+    ningun trasplante de órgano sólido o no hay texto, responde con un 'NA', sin dar ninguna explicación adicional.
+- name: fecha_TPH
+  title: Fecha del trasplante de progenitores hematopoyéticos
+  source: personales
+  output_type: text
+  system_prompt: Mira en los textos si el paciente ha tenido trasplante de progenitores hematopoyéticos y en caso
+    afirmativo, dame la fecha de cuando fue realizado dicho trasplante de progenitores hematopoyéticos. No confundir
+    trasplante de progenitores hematopoyéticos con trasplante de cualquier órgano sólido. Tu respuesta ha de ser
+    unicamente la fecha de trasplante de progenitores hematopoyéticos para cada paciente, sin dar ninguna explicación
+    adicional. Si no se da información acerca de ningun trasplante o no hay texto, responde con un 'NA'.
+- name: situacion_funcional_basal
+  title: Situación funcional basal
+  source: personales
+  output_type: text
+  system_prompt: Dime a partir de los textos la situación basal del paciente, es decir, cómo se encuentra respecto
+    a las actividades de la vida cotidiana (ABVD). Devuélveme el trozo de texto donde aparezca esta información,
+    sin dar ninguna explicación adicional. Si no se da información acerca de esto, responde con un 'NA'.
+- name: cirugia_sin_implante
+  title: Cirugía previa sin implantación de material protésico
+  source: personales
+  output_type: text
+  system_prompt: Mira en los textos si el paciente ha tenido alguna intervención quirúrgica (IQ) en el pasado donde
+    NO se haya realizado un implante de material protésico y dime cuales. Además, dame también la fecha en la que
+    se realizó dicha intervención en caso de que aparezca en el texto. Si no se da información acerca de ninguna
+    cirugia sin implante, responde con un '0'. Si el texto aparece vacío, responde con un 'NA'.
+- name: cirugia_con_implante
+  title: Cirugía previa con implantación de material protésico
+  source: personales
+  output_type: text
+  system_prompt: Mira en los textos si el paciente ha tenido alguna intervención quirúrgica (IQ) en el pasado donde
+    SÍ se haya realizado un implante de material protésico (por ejemplo, prótesis, stents, marcapasos, válvulas,
+    mallas u otros implantes) y dime cuales. Además, dame también la fecha en la que se realizó dicha intervención
+    en caso de que aparezca en el texto. Si no se da información acerca de ninguna cirugia con implante o se da
+    información de otro tipo de cirugía que no conlleve implante, responde con un '0'. Si el texto aparece vacío,
+    responde con un 'NA'.
+- name: asistencia_sanitaria_prev
+  title: Asistencia sanitaria previa con procedimientos invasivos sin ingreso hospitalario
+  source: personales
+  output_type: text
+  system_prompt: Mira en los textos si el paciente ha tenido alguna asistencia sanitaria previa con procedimientos
+    invasivos que no necesite ingreso hospitalario y dime cuales. Además, dame también la fecha en la que se realizó
+    dicha asistencia en caso de que aparezca en el texto. Si no se da información acerca de ninguna asistencia sanitaria
+    sin ingreso, responde con un '0'. Si el texto aparece vacío, responde con un 'NA'.

@@ -3,13 +3,171 @@
 # Prediction unit:
 #   One row per record_id + fecha_ingreso + selected fecha_hemocultivo.
 #
+# Current hemoculture organism/resistance results are available at prediction time.
+# Mortality outcome windows reference admission dates.
+#
 # Intended staged modelling:
 #   Stage 1: any mortality.
 #   Stage 2: early mortality among mortality-positive patients, using either 14 or 30 days.
 
 metadata:
   config_name: bacthecom_mortality_episode_level
-  config_version: "0.2.0"
+  config_version: "0.8.0"
+
+merged_csv:
+  episode_keys: [hospital, record_id, fecha_ingreso, fecha_hemocultivo]
+  missing_tokens: ["", "NA", "N/A", "NaN", "nan", "NULL", "null", "None"]
+  drop_columns_file: null
+  categorical_columns: [foco, puntaje_child_pugh]
+  numeric_columns: [creatinina]
+  # Preserve raw missingness; do not impute absent values during preprocessing.
+  missing_as_zero_columns: []
+  history_windows_days: [30, 90]
+  # No prior admission dates: month is a 30-day proxy; 90d is partially known.
+  admission_history:
+    month_column: hospit_mes_previo
+    year_column: hospit_ano_previo
+  nonnegative_columns: [edad, leucocitos, neutrofilos, linfocitos, hemoglobina, plaquetas, ast, alt, fosfatasa_alcalina, ldh, bilirrubina_total, bilirrubina_directa, creatinina, lactato_serico, proteina_c_reactiva]
+  exclude_predictors:
+    - codigo_postal
+    - area_hosp
+    - admission_id
+    - antibiograma*
+    - control_foco
+    - days_hemoculture_from_admission
+    - episodio_uci_n_rows
+    - blood_culture_episode_count
+    - dominant_microorganismo
+    - hospital
+    - record_id
+    - id_*
+    - fecha_*
+    - episode_*
+    - diff_days_hemocultivo
+    - duracion_hospitalizacion
+    - duracion_uci
+    - dias_hemocultivo_*
+    - mortalidad*
+    - microorganismo
+    - hemo_positivo_si_no
+    - fenotipo_resistencia*
+    - resultado_antibiograma_*
+    - '*_previo_[1-9]*'
+    - '*_previa_[1-9]*'
+    - '*_prev_[1-9]*'
+    - id_otros_cultivos_*
+    - microorganismo_otros_cult_*
+    - area_hosp_otros_*
+    - especimen_*
+    - antimicrobiano_previo_*
+    - dias_trat_antimicrobiano_*
+    - foco_controlado
+    - foco_controlable
+    - situacion_funcional_basal
+    - organo_aparato
+
+  # Include mapped current hemoculture organisms and resistance in predictors.
+  # Other-culture results remain audit-only.
+  microbiology:
+    include_current_results: true
+    # All flags encode recorded evidence: zero is not confirmed absence.
+    organism_patterns:
+      Ecoli: '(?:^|_)(?:escherichia|e)_coli(?:_|$)'
+      Kpneumoniae: '(?:^|_)(?:klebsiella|k)_pneumoniae(?:_|$)'
+      Paeruginosa: '(?:^|_)(?:pseudomonas|p)_aeruginosa(?:_|$)'
+      Saureus: '(?:^|_)(?:staphylococcus|s)_aureus(?:_|$)'
+      Enterococcus_faecium: '(?:^|_)(?:enterococcus|e)_faecium(?:_|$)'
+      Acinetobacter_baumannii: '(?:^|_)(?:acinetobacter|a)_baumannii(?:_|$)'
+      Enterobacter: '(?:^|_)enterobacter(?:_|$)'
+    # Fixed E. coli + ESKAPE vocabulary. Everything else maps to Other.
+    # Mixed cultures can activate multiple indicators; never fit groups by frequency.
+    phenotype_patterns:
+      BLEE: 'blee'
+      AMPC: 'ampc|cefamicinasa'
+      CARB: 'carbapenemasa|(?:^|_)(?:carb|kpc|vim|ndm|imp|oxacbp)(?:_|$)|oxa_?48'
+      MRSA: 'mrsa|sarm|meticilina|clxr'
+      MDR: '(?:^|_)(?:mr|mdr|xdr)(?:_|$)|multirresistente|multi_r'
+
+  # Output prefix: foco_prev_; source fields: especimen_previo_*.
+  previous_sources:
+    urinaria: 'orin|urin'
+    respiratoria: 'esput|respirat|bronq|bronch|traque|pulmon|pleur|bal(?:_|$)'
+    sanguinea: 'sang|blood|hemocult'
+    abdominal_biliar: 'abdom|bili|periton|ascit|vesicul|hepat'
+    cateter: 'cateter|catheter'
+    piel_tejidos_blandos: 'piel|tejido|herida|cutan|ulcer|absces|exud|pus'
+
+  # Configurable research indicators; continuous originals remain in X.
+  clinical_features:
+    device_columns: [cateter_venoso, sonda_urinaria, sonda_nasogastrica, derivacion_ventriculoper, valvula_prot_cardiaca, portador_otros_disposit]
+    binary_rules:
+      taquicardia: {column: frec_cardiaca, gt: 100}
+      taquipnea: {column: frecuencia_respiratoria, ge: 22}
+      hipotension: {column: tension_arterial_sist, le: 100}
+      hipoxemia: {column: saturacion_po2, lt: 90}
+      hipotermia_hipertermia: {column: temperatura, lt: 36, gt: 38}
+
+  # Project-level pooled groups, not a replacement for the detailed drug taxonomy.
+  antibiotic_family_groups:
+    Penicilinas: Penicilinas
+    Cefalosporinas 1 gen: Cefalosporinas
+    Cefalosporinas 2 gen: Cefalosporinas
+    Cefalosporinas 3/4 gen: Cefalosporinas
+    Carbapenemas: Carbapenemas
+    Aminoglucosidos: Aminoglucosidos
+    Quinolonas: Quinolonas
+    Glicopéptidos: Glicopeptidos_lipopeptidos
+    Lipopeptidos: Glicopeptidos_lipopeptidos
+    Macrolidos: Macrolidos_lincosamidas
+    Lincosamidas: Macrolidos_lincosamidas
+    Tetraciclinas: Tetraciclinas
+    Tigeciclina: Tetraciclinas
+    Azoles: Antifungicos
+    Equinocandinas: Antifungicos
+    Polienos: Antifungicos
+    AntiTuberculoso: Antituberculosos
+    Monobactamicos: Otros_antibacterianos
+    Fosfomicina: Otros_antibacterianos
+    Metronidazol: Otros_antibacterianos
+    Nitrofurantoina: Otros_antibacterianos
+    Polimixinas: Otros_antibacterianos
+    Sulfonamidas: Otros_antibacterianos
+    Otros_no_clasificados: Otros_no_clasificados
+
+  antibiotic_aliases:
+    amoxiclavulanico: amoxicilina_acido_clavulanico
+    amoxicilina_acid_clavulanic: amoxicilina_acido_clavulanico
+    amoxicilina_clavulanico: amoxicilina_acido_clavulanico
+    ampicilin: ampicilina
+    ampicilina: ampicilina
+    piperacilina_tazobactam: piperacilina_tazobactam
+    trimetoprim_sulfametoxazol: trimetoprim_sulfametoxazol
+    cotrimoxazol: trimetoprim_sulfametoxazol
+    sulfametoxazol_trimetoprima: trimetoprim_sulfametoxazol
+    ciprofloxacino: ciprofloxacina
+    norfloxacino: norfloxacina
+    voriconazole: voriconazol
+    amoxicilina_trihidrato: amoxicilina
+    amikacina_sulfato: amikacina
+    cefotaxima_sodica: cefotaxima
+    cefuroxima_axetilo: cefuroxima
+    cefuroxima_sodica: cefuroxima
+    cloxacilina_sodica: cloxacilina
+    fosfomicina_trometamol: fosfomicina
+  antibiotic_atc_names:
+    J01CA01: ampicilina
+    J01CA04: amoxicilina
+    J01CR02: amoxicilina_acido_clavulanico
+    J01CR05: piperacilina_tazobactam
+    J01EE01: trimetoprim_sulfametoxazol
+    J01DB04: cefazolina
+    J01DC02: cefuroxima
+    J01DD04: ceftriaxona
+    J01DH02: meropenem
+    J01DH03: ertapenem
+    J01MA02: ciprofloxacina
+    J01GB03: gentamicina
+    J01XA01: vancomicina
 
 episode_definition:
   base_admission_keys:
@@ -34,25 +192,19 @@ targets:
       - 14
       - 30
 
-    # Both reference definitions are generated to avoid ambiguity.
-    # For prediction at blood-culture time, prefer the hemoculture-referenced targets.
+    # Early mortality windows are measured from admission.
     reference_dates:
       - fecha_ingreso
-      - fecha_hemocultivo
-    default_reference_date: fecha_hemocultivo
+    default_reference_date: fecha_ingreso
 
     columns:
       admission_14: mortalidad_14_dias
       admission_30: mortalidad_30_dias
-      hemoculture_14: mortalidad_14_dias_desde_hemocultivo
-      hemoculture_30: mortalidad_30_dias_desde_hemocultivo
 
   required_final_targets:
     - mortalidad_any
     - mortalidad_14_dias
     - mortalidad_30_dias
-    - mortalidad_14_dias_desde_hemocultivo
-    - mortalidad_30_dias_desde_hemocultivo
 
 features:
   laboratory:
@@ -91,12 +243,10 @@ filtering:
     - record_id
     - fecha_ingreso
     - fecha_hemocultivo
-    - centro 
+    - centro
     - mortalidad_any
     - mortalidad_14_dias
     - mortalidad_30_dias
-    - mortalidad_14_dias_desde_hemocultivo
-    - mortalidad_30_dias_desde_hemocultivo
 
   # Explicit leakage / non-modelling / non-machine-readable columns.
   drop_columns:
@@ -161,3 +311,254 @@ validation:
   require_unique_admission_keys: true
   validate_binary_targets: true
   log_target_prevalence: true
+
+# Domain mappings are snapshotted with each run; no external Python config required.
+domain:
+  config_name: bacthecom_merged_domain_config
+  config_version: 0.1.0
+  family_source: domain.antimicrobial_groups (copied from MEPRAM; maintained in this
+    YAML)
+  antimicrobial_groups:
+  - - AMIKACINA
+    - Aminoglucosidos
+    - amikacin
+  - - AMOXICILINA
+    - Penicilinas
+    - amoxicillin
+  - - AMOXICILINA / CLAVULANICO
+    - Penicilinas
+    - amoxicillin and beta-lactamase inhibitor
+  - - AMPICILINA
+    - Penicilinas
+    - ampicillin
+  - - AZITROMICINA
+    - Macrolidos
+    - azithromycin
+  - - AZTREONAM
+    - Monobactamicos
+    - aztreonam
+  - - BENCILPENICILINA
+    - Penicilinas
+    - null
+  - - BENCILPENICILINA-BENZATINA
+    - Penicilinas
+    - null
+  - - CEFADROXILO MONOHIDRATO
+    - Cefalosporinas 1 gen
+    - cefadroxil
+  - - CEFAZOLINA
+    - Cefalosporinas 1 gen
+    - cefazolin
+  - - CEFEPIMA
+    - Cefalosporinas 3/4 gen
+    - cefepime
+  - - CEFIDEROCOL
+    - Cefalosporinas 3/4 gen
+    - null
+  - - CEFIXIMA
+    - Cefalosporinas 3/4 gen
+    - cefixime
+  - - CEFOTAXIMA
+    - Cefalosporinas 3/4 gen
+    - cefotaxime
+  - - CEFTAROLINA FOSAMILO
+    - Cefalosporinas 2 gen
+    - ceftaroline fosamil
+  - - CEFTAZIDIMA
+    - Cefalosporinas 3/4 gen
+    - ceftazidime
+  - - CEFTAZIDIMA / AVIBACTAM
+    - Cefalosporinas 3/4 gen
+    - ceftazidime and beta-lactamase inhibitor
+  - - CEFTOLOZANO / TAZOBACTAM
+    - Cefalosporinas 3/4 gen
+    - ceftolozane and beta-lactamase inhibitor
+  - - CEFTRIAXONA
+    - Cefalosporinas 3/4 gen
+    - ceftriaxone
+  - - CEFUROXIMA
+    - Cefalosporinas 2 gen
+    - cefuroxime
+  - - CIPROFLOXACINO
+    - Quinolonas
+    - ciprofloxacin
+  - - CLARITROMICINA
+    - Macrolidos
+    - clarithromycin
+  - - CLINDAMICINA
+    - Lincosamidas
+    - clindamycin
+  - - CLOXACILINA
+    - Penicilinas
+    - cloxacillin
+  - - COLISTIMETATO DE SODIO
+    - Polimixinas
+    - null
+  - - DALBAVANCINA
+    - Glicopéptidos
+    - dalbavancin
+  - - DAPTOMICINA
+    - Lipopeptidos
+    - daptomycin
+  - - DOXICICLINA
+    - Tetraciclinas
+    - doxycycline
+  - - ERITROMICINA
+    - Macrolidos
+    - erythromycin
+  - - ERTAPENEM
+    - Carbapenemas
+    - ertapenem
+  - - FIDAXOMICINA
+    - Macrolidos
+    - null
+  - - FOSFOMICINA
+    - Fosfomicina
+    - fosfomycin
+  - - FOSFOMICINA-TROMETAMOL
+    - Fosfomicina
+    - fosfomycin
+  - - GENTAMICINA
+    - Aminoglucosidos
+    - gentamicin
+  - - IMIPENEM
+    - Carbapenemas
+    - imipenem and cilastatin
+  - - IMIPENEM/RELEBACTAM
+    - Carbapenemas
+    - null
+  - - LEVOFLOXACINO
+    - Quinolonas
+    - levofloxacin
+  - - LINEZOLID
+    - Lincosamidas
+    - linezolid
+  - - MEROPENEM
+    - Carbapenemas
+    - meropenem
+  - - METRONIDAZOL
+    - Metronidazol
+    - metronidazole
+  - - MINOCICLINA
+    - Minociclina
+    - null
+  - - MOXIFLOXACINO
+    - Quinolonas
+    - moxifloxacin
+  - - NITROFURANTOINA
+    - Nitrofurantoina
+    - nitrofurantoin
+  - - NORFLOXACINO
+    - Quinolonas
+    - norfloxacin
+  - - PIPERACILINA / TAZOBACTAM
+    - Penicilinas
+    - piperacillin and beta-lactamase inhibitor
+  - - POSACONAZOL
+    - Azoles
+    - posaconazole
+  - - SULFADIAZINA
+    - Sulfonamidas
+    - sulfadiazine
+  - - SULFAMETOXAZOL / TRIMETOPRIMA
+    - Sulfonamidas
+    - sulfamethoxazole and trimethoprim
+  - - TRIMETOPRIMA
+    - Sulfonamidas
+    - trimethoprim
+  - - TEICOPLANINA
+    - Glicopéptidos
+    - teicoplanin
+  - - TIGECICLINA
+    - Tigeciclina
+    - tigecycline
+  - - TOBRAMICINA
+    - Aminoglucosidos
+    - tobramycin
+  - - VANCOMICINA
+    - Glicopéptidos
+    - vancomycin
+  - - A
+    - Tetraciclinas
+    - tetracycline
+  - - A
+    - Cefalosporinas 3/4 gen
+    - cefditoren
+  - - A
+    - Carbapenemas
+    - meropenem and vaborbactam
+  - - A
+    - Cefalosporinas 1 gen
+    - cefalexin
+  - - A
+    - Cefalosporinas 2 gen
+    - cefoxitin
+  - - A
+    - AntiTuberculoso
+    - rifampicin
+  - - A
+    - AntiTuberculoso
+    - rifabutin
+  - - A
+    - AntiTuberculoso
+    - isoniazid
+  - - A
+    - AntiTuberculoso
+    - pyrazinamide
+  - - A
+    - AntiTuberculoso
+    - ethambutol
+  - - B
+    - Azoles
+    - isavuconazole
+  - - B
+    - Azoles
+    - fluconazole
+  - - B
+    - Azoles
+    - itraconazole
+  - - B
+    - Azoles
+    - voriconazole
+  - - B
+    - Equinocandinas
+    - caspofungin
+  - - B
+    - Equinocandinas
+    - micafungin
+  - - B
+    - Equinocandinas
+    - anidulafungin
+  antimicrobial_family_extensions:
+    cefalexina: Cefalosporinas 1 gen
+    cefoxitina: Cefalosporinas 2 gen
+    ceftarolina_fosamil: Cefalosporinas 2 gen
+    imipenem_cilastatina: Carbapenemas
+    meropenem_vaborbactam: Carbapenemas
+    penicilina_g_benzatina: Penicilinas
+    penicilina_g_sodica: Penicilinas
+    penicilina_v: Penicilinas
+    colistina: Polimixinas
+    eritromicina_etilsuccinat: Macrolidos
+    eritromicina_lactobionat: Macrolidos
+    tetraciclina: Tetraciclinas
+    rifampicina: AntiTuberculoso
+    isoniazida: AntiTuberculoso
+    pirazinamida: AntiTuberculoso
+    etambutol: AntiTuberculoso
+    isavuconazol: Azoles
+    fluconazol: Azoles
+    itraconazol: Azoles
+    voriconazol: Azoles
+    ketoconazol: Azoles
+    caspofungina: Equinocandinas
+    micafungina: Equinocandinas
+    anidulafungina: Equinocandinas
+    amfotericina_b: Polienos
+    amfotericina_b_desoxicolat: Polienos
+    amfotericina_b_liposomica: Polienos
+    anfotericina_b: Polienos
+  child_pugh_levels:
+  - a
+  - b
+  - c

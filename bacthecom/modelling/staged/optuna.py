@@ -25,9 +25,10 @@ def get_param_space(
     seed: int,
     n_cpus: int,
     fast_search: bool = False,
+    class_weighting: bool = True,
 ) -> dict[str, Any]:
     if algorithm == "catb":
-        pos_w = trial.suggest_float("pos_weight", max(0.1, imbalance_ratio * 0.75), max(0.2, imbalance_ratio * 1.25))
+        pos_w = trial.suggest_float("pos_weight", max(0.1, imbalance_ratio * 0.75), max(0.2, imbalance_ratio * 1.25)) if class_weighting else 1.0
         if fast_search:
             iterations_low, iterations_high = 250, 700
             depth_low, depth_high = 4, 7
@@ -54,7 +55,7 @@ def get_param_space(
             "allow_writing_files": False,
         }
     if algorithm == "lgbm":
-        pos_w = trial.suggest_float("scale_pos_weight", max(0.1, imbalance_ratio * 0.75), max(0.2, imbalance_ratio * 1.25))
+        pos_w = trial.suggest_float("scale_pos_weight", max(0.1, imbalance_ratio * 0.75), max(0.2, imbalance_ratio * 1.25)) if class_weighting else 1.0
         return {
             "n_estimators": trial.suggest_int("n_estimators", 250 if fast_search else 400, 700 if fast_search else 1200),
             "learning_rate": trial.suggest_float("learning_rate", 0.01 if fast_search else 0.005, 0.1, log=True),
@@ -70,7 +71,7 @@ def get_param_space(
             "verbose": -1,
         }
     if algorithm == "xgb":
-        pos_w = trial.suggest_float("scale_pos_weight", max(0.1, imbalance_ratio * 0.75), max(0.2, imbalance_ratio * 1.25))
+        pos_w = trial.suggest_float("scale_pos_weight", max(0.1, imbalance_ratio * 0.75), max(0.2, imbalance_ratio * 1.25)) if class_weighting else 1.0
         return {
             "n_estimators": trial.suggest_int("n_estimators", 250 if fast_search else 400, 700 if fast_search else 1200),
             "learning_rate": trial.suggest_float("learning_rate", 0.01 if fast_search else 0.005, 0.1, log=True),

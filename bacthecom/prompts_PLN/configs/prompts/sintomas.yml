@@ -1,0 +1,127 @@
+category: sintomas
+prompts:
+- name: fiebre
+  title: Fiebre
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene fiebre o febricula o hipertermia. Tu respuesta
+    ha de ser un '0' si no tiene fiebre o es afebril y un '1' si tiene fiebre, sin dar ninguna explicación adicional.
+    Si no se da información acerca de la fiebre o si el texto aparece vacío o si es 'afebril', responde con un '0'.
+- name: tos
+  title: Tos
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene tos. Tu respuesta ha de ser un '0' si no tiene
+    tos y un '1' si tiene tos, sin dar ninguna explicación adicional. Si no se da información acerca de la tos o
+    si el texto aparece vacío, responde con un '0'.
+- name: dificultad_resp
+  title: Dificultad para respirar
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene dificultad para respirar o disnea. Tu respuesta
+    ha de ser un '0' si no tiene dificultad para respirar o disnea y un '1' si tiene dificultad para respirar o
+    disnea, sin dar ninguna explicación adicional. Si no se da información acerca de la dificultad para respirar
+    o disnea o si el texto aparece vacío, responde con un '0'.
+- name: dolor_costal
+  title: Dolor costal
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene dolor costal o intercostal. Tu respuesta ha de
+    ser un '0' si no tiene dolor costal y un '1' si tiene dolor costal o intercostal, sin dar ninguna explicación
+    adicional. Si no se da información acerca del dolor costal o si el texto aparece vacío, responde con un '0'.
+- name: disuria
+  title: Disuria
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene disuria. Tu respuesta ha de ser un '0' si no tiene
+    disuria y un '1' si tiene disuria, sin dar ninguna explicación adicional. Si no se da información acerca de
+    la disuria o si el texto aparece vacío, responde con un '0'.
+- name: polaquiuria
+  title: Polaquiuria
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene polaquiuria. Tu respuesta ha de ser un '0' si
+    no tiene polaquiuria y un '1' si tiene polaquiuria, sin dar ninguna explicación adicional. Si no se da información
+    acerca de la polaquiuria o si el texto aparece vacío, responde con un '0'.
+- name: tenesmo_vejiga
+  title: Tenesmo de vejiga urinaria
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene tenesmo de vejiga urinaria. Tu respuesta ha de
+    ser un '0' si no tiene tenesmo de vejiga urinaria y un '1' si tiene tenesmo de vejiga urinaria, sin dar ninguna
+    explicación adicional. Si no se da información acerca de la tenesmo de vejiga urinaria o si el texto aparece
+    vacío, responde con un '0'.
+- name: tenesmo_ano_recto
+  title: Tenesmo de ano/recto
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene tenesmo de ano o recto. Tu respuesta ha de ser
+    un '0' si no tiene tenesmo de ano o recto y un '1' si tiene tenesmo de ano o recto, sin dar ninguna explicación
+    adicional. Si no se da información acerca del tenesmo de ano o recto o si el texto aparece vacío, responde con
+    un '0'.
+- name: dolor_fosa_renal
+  title: Dolor en fosa renal
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene dolor en fosa renal. Tu respuesta ha de ser un
+    '0' si no tiene dolor en fosa renal y un '1' si tiene dolor en fosa renal, sin dar ninguna explicación adicional.
+    Si no se da información acerca del dolor en fosa renal o si el texto aparece vacío, responde con un '0'.
+- name: nauseas
+  title: Náuseas
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene nauseas. Tu respuesta ha de ser un '0' si no tiene
+    nauseas y un '1' si tiene nauseas, sin dar ninguna explicación adicional. Si no se da información acerca de
+    las nauseas o si el texto aparece vacío, responde con un '0'.
+- name: vomitos
+  title: Vómitos
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene vomitos. Tu respuesta ha de ser un '0' si no tiene
+    vomitos y un '1' si tiene vomitos, sin dar ninguna explicación adicional. Si no se da información acerca de
+    las vomitos o si el texto aparece vacío, responde con un '0'.
+- name: dolor_abdominal
+  title: Dolor abdominal
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene dolor abdominal. Tu respuesta ha de ser un '0'
+    si no tiene dolor abdominal y un '1' si tiene dolor abdominal, sin dar ninguna explicación adicional. Si no
+    se da información acerca del dolor abdominal o si el texto aparece vacío, responde con un '0'.
+- name: diarrea
+  title: Diarrea
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene diarrea. Tu respuesta ha de ser un '0' si no tiene
+    diarrea y un '1' si tiene diarrea, sin dar ninguna explicación adicional. Si no se da información acerca de
+    la diarrea o si el texto aparece vacío, responde con un '0'.
+- name: lesiones_piel
+  title: Lesiones en la piel
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene cualquier tipo de lesion en la piel como afectaciones
+    cutáneas, dermatosis, eritemas. Tu respuesta ha de ser un '0' si no tiene lesiones en la piel y un '1' si tiene
+    lesiones en la piel, sin dar ninguna explicación adicional. Si no se da información acerca de las lesiones en
+    la piel o si el texto aparece vacío, responde con un '0'.
+- name: lesiones_mucosas
+  title: Lesiones en las mucosas
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene lesiones en las mucosas. Tu respuesta ha de ser
+    un '0' si no tiene lesiones en las mucosas y un '1' si tiene lesiones en las mucosas, sin dar ninguna explicación
+    adicional. Si no se da información acerca de las lesiones en las mucosas o si el texto aparece vacío, responde
+    con un '0'.
+- name: cefalea
+  title: Cefalea
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene cefalea. Tu respuesta ha de ser un '0' si no tiene
+    cefalea y un '1' si tiene cefalea, sin dar ninguna explicación adicional. Si no se da información acerca de
+    la cefalea o si el texto aparece vacío, responde con un '0'.
+- name: dolores_articulares
+  title: Dolores articulares
+  source: exploracion
+  output_type: binary
+  system_prompt: Dime a partir de los textos si el paciente tiene dolores en las articulaciones. Tu respuesta ha
+    de ser un '0' si no tiene dolores en las articulaciones y un '1' si tiene dolores en las articulaciones, sin
+    dar ninguna explicación adicional. Si no se da información acerca de los dolores en las articulaciones o si
+    el texto aparece vacío, responde con un '0'.

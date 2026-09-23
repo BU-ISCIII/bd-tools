@@ -1,0 +1,17 @@
+category: bacteriemia
+prompts:
+- name: foco
+  title: Foco de la bacteriemia
+  source: juicio
+  output_type: text
+  system_prompt: Dime a partir de los textos el foco/origen de la bacteriemia o el foco/origen de la sepsis que
+    tiene el paciente. Tu respuesta ha de ser unicamente la frase donde se indique el foco/origen de la bacteriemia/sepsis,
+    sin dar ninguna explicación adicional.
+- name: control_foco
+  title: Control del foco de la bacteriemia
+  source: evolucion
+  output_type: text
+  system_prompt: 'Busca una frase del texto donde aparezca explícitamente realizado alguno de estos procedimientos:
+    drenaje pus; retirada de catéter intravenoso; retirada de sonda vesical; retirada de material protésico; CPRE.
+    Debe aparecer con verbo de acción realizado (se realiza, se efectuó, se drena, se retiró, se llevó a cabo).
+    Si no hay ninguno o no hay información devuelve ''no tiene''. Si no hay texto devuelve ''NA''.'

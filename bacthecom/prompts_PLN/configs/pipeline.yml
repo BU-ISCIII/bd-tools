@@ -1,0 +1,21 @@
+ollama:
+  endpoint_env: OLLAMA_ENDPOINT
+  model_env: OLLAMA_MODEL
+  default_model: llama3.2:3b
+  temperature: 0.2
+  timeout_seconds: 60
+  max_retries: 3
+  retry_backoff_seconds: 2.0
+inputs:
+  anamnesis:
+    path: hoja_anamnesis.xlsx
+    columns:
+      personales: PERSONALES
+  evolucion:
+    path: hoja_evolucion.xlsx
+    columns:
+      exploracion: EXPLORACION
+      evolucion: EVOLUCION
+      juicio: VALORACION
+output:
+  directory: results

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import ast
+import fnmatch
+import math
 import json
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -50,8 +52,8 @@ DEFAULT_REPORT_CONFIG = {
         "The pipeline creates one row per admission and selected first hemoculture, "
         "identified by record_id, fecha_ingreso, and fecha_hemocultivo. "
         "The modelling workflow is staged: first predicting any mortality, then "
-        "predicting early mortality using either 14-day or 30-day mortality, preferably "
-        "referenced to the selected hemoculture date."
+        "predicting early mortality using either 14-day or 30-day mortality, "
+        "referenced to the admission date."
     ),
     "exclude_plot_stages": ["_pipeline_run"],
     "domain_by_stage": {
@@ -75,33 +77,9 @@ DEFAULT_REPORT_CONFIG = {
             "class_labels": {0: "Alive", 1: "Dead", "0": "Alive", "1": "Dead"},
         },
         {
-            "model": "Candidate Stage 2 - Early mortality, 14 days from hemoculture",
-            "target_column": "mortalidad_14_dias_desde_hemocultivo",
-            "notes": "Preferred 14-day early mortality target for models whose prediction time is the selected hemoculture date.",
-            "subset": {"column": "mortalidad_any", "include_values": [1, "1"]},
-            "class_labels": {
-                0: "Death after 14 days or not early",
-                1: "Death within 14 days",
-                "0": "Death after 14 days or not early",
-                "1": "Death within 14 days",
-            },
-        },
-        {
-            "model": "Candidate Stage 2 - Early mortality, 30 days from hemoculture",
-            "target_column": "mortalidad_30_dias_desde_hemocultivo",
-            "notes": "Preferred 30-day early mortality target for models whose prediction time is the selected hemoculture date.",
-            "subset": {"column": "mortalidad_any", "include_values": [1, "1"]},
-            "class_labels": {
-                0: "Death after 30 days or not early",
-                1: "Death within 30 days",
-                "0": "Death after 30 days or not early",
-                "1": "Death within 30 days",
-            },
-        },
-        {
-            "model": "Sensitivity target - 14 days from admission",
+            "model": "Early mortality - 14 days from admission",
             "target_column": "mortalidad_14_dias",
-            "notes": "Admission-referenced 14-day mortality. Use mainly for sensitivity analyses or comparison with admission-time models.",
+            "notes": "Admission-referenced 14-day mortality.",
             "class_labels": {
                 0: "No 14-day mortality",
                 1: "14-day mortality",
@@ -110,9 +88,9 @@ DEFAULT_REPORT_CONFIG = {
             },
         },
         {
-            "model": "Sensitivity target - 30 days from admission",
+            "model": "Early mortality - 30 days from admission",
             "target_column": "mortalidad_30_dias",
-            "notes": "Admission-referenced 30-day mortality. Use mainly for sensitivity analyses or comparison with admission-time models.",
+            "notes": "Admission-referenced 30-day mortality.",
             "class_labels": {
                 0: "No 30-day mortality",
                 1: "30-day mortality",
@@ -138,27 +116,13 @@ DEFAULT_REPORT_CONFIG = {
         },
         {
             "domain": "Early mortality",
-            "target_version": "14 days from hemoculture",
-            "target_columns": ["mortalidad_14_dias_desde_hemocultivo"],
-            "count_mode": "single",
-            "notes": "Preferred 14-day Stage-2 target because the selected hemoculture is the modelling index date.",
-        },
-        {
-            "domain": "Early mortality",
-            "target_version": "30 days from hemoculture",
-            "target_columns": ["mortalidad_30_dias_desde_hemocultivo"],
-            "count_mode": "single",
-            "notes": "Preferred 30-day Stage-2 target because the selected hemoculture is the modelling index date.",
-        },
-        {
-            "domain": "Sensitivity",
             "target_version": "14 days from admission",
             "target_columns": ["mortalidad_14_dias"],
             "count_mode": "single",
             "notes": "Admission-referenced 14-day mortality target.",
         },
         {
-            "domain": "Sensitivity",
+            "domain": "Early mortality",
             "target_version": "30 days from admission",
             "target_columns": ["mortalidad_30_dias"],
             "count_mode": "single",
@@ -173,30 +137,8 @@ DEFAULT_REPORT_CONFIG = {
             "class_labels": {0: "Alive", 1: "Dead", "0": "Alive", "1": "Dead"},
         },
         {
-            "section": "Stage 2 - Early mortality 14 days from hemoculture",
-            "description": "Candidate staged target for early mortality among mortality-positive patients. This is the preferred 14-day target when prediction time is the selected hemoculture date.",
-            "target_column": "mortalidad_14_dias_desde_hemocultivo",
-            "class_labels": {
-                0: "Not within 14 days",
-                1: "Within 14 days",
-                "0": "Not within 14 days",
-                "1": "Within 14 days",
-            },
-        },
-        {
-            "section": "Stage 2 - Early mortality 30 days from hemoculture",
-            "description": "Candidate staged target for early mortality among mortality-positive patients. This is the preferred 30-day target when prediction time is the selected hemoculture date.",
-            "target_column": "mortalidad_30_dias_desde_hemocultivo",
-            "class_labels": {
-                0: "Not within 30 days",
-                1: "Within 30 days",
-                "0": "Not within 30 days",
-                "1": "Within 30 days",
-            },
-        },
-        {
-            "section": "Sensitivity - 14 days from admission",
-            "description": "Admission-referenced 14-day mortality target for sensitivity analysis.",
+            "section": "Early mortality - 14 days from admission",
+            "description": "Admission-referenced 14-day mortality target.",
             "target_column": "mortalidad_14_dias",
             "class_labels": {
                 0: "No 14-day mortality",
@@ -206,8 +148,8 @@ DEFAULT_REPORT_CONFIG = {
             },
         },
         {
-            "section": "Sensitivity - 30 days from admission",
-            "description": "Admission-referenced 30-day mortality target for sensitivity analysis.",
+            "section": "Early mortality - 30 days from admission",
+            "description": "Admission-referenced 30-day mortality target.",
             "target_column": "mortalidad_30_dias",
             "class_labels": {
                 0: "No 30-day mortality",
@@ -385,40 +327,69 @@ def write_stacked_change_chart_png(
     plt.close(fig)
 
 
-def write_missingness_chart_png(
-    df: pd.DataFrame,
-    *,
-    output_path: Path,
-    colors: dict[str, str],
-) -> None:
-    missing_percent = df.isna().mean().mul(100).sort_values(ascending=False)
-    plot_df = missing_percent.reset_index()
-    plot_df.columns = ["column", "missing_percent"]
-    width = max(22, 0.13 * len(plot_df))
-    fig, ax = plt.subplots(figsize=(width, 9.5))
-    ax.bar(
-        range(len(plot_df)),
-        plot_df["missing_percent"],
-        color=colors["input"],
-        width=0.85,
-    )
-    ax.set_title("Missing Values in Filtered Dataset", fontsize=24, pad=18)
-    ax.set_ylabel("Missing values (%)", fontsize=20)
-    ax.set_xlabel(
-        f"Filtered variables (n={len(plot_df):,})",
-        fontsize=20,
-        labelpad=16,
-    )
-    ax.set_ylim(0, 100)
-    ax.set_xlim(-0.5, len(plot_df) - 0.5)
-    ax.margins(x=0)
-    ax.set_xticks(range(len(plot_df)))
-    ax.set_xticklabels(plot_df["column"], rotation=90, ha="center", fontsize=11)
-    ax.tick_params(axis="y", labelsize=15)
-    ax.grid(axis="y", alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
+def save_clinical_figure(fig, output_path):
+    fig.savefig(output_path, dpi=200, bbox_inches="tight", facecolor="white")
+    fig.savefig(output_path.with_suffix(".svg"), bbox_inches="tight", facecolor="white")
     plt.close(fig)
+
+
+def feature_categories(columns, rules, detailed_logs, domain_by_stage):
+    stages = first_stage_by_column(columns, detailed_logs)
+    result = {}
+    for column in columns:
+        matched = next((label for label, rule in rules.items()
+                        if any(fnmatch.fnmatchcase(column.lower(), pattern.lower())
+                               for pattern in rule.get("patterns", []))), None)
+        result[column] = matched or infer_source_domain(stages.get(column), domain_by_stage)
+    return result
+
+
+def write_missingness_chart_png(df, *, output_path, colors, limit=25):
+    missing = df.isna().mean().mul(100).sort_values(ascending=False)
+    plot = missing[missing.gt(0)].head(limit).sort_values()
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.31 * len(plot) + 1.5)), layout="constrained")
+    if len(plot):
+        bars = ax.barh(plot.index, plot.values, color=colors["input"], height=0.7)
+        ax.bar_label(bars, labels=["<0.1%" if 0 < v < 0.1 else f"{v:.1f}%" for v in plot], padding=4, fontsize=9)
+    else:
+        ax.text(0.5, 0.5, "No missing predictor values", transform=ax.transAxes, ha="center")
+    ax.set(title=f"Predictors with most missing data · top {len(plot)} of {len(df.columns)}",
+           xlabel="Missing episodes (%)", xlim=(0, 112))
+    ax.set_xticks([0, 25, 50, 75, 100])
+    ax.grid(axis="x", alpha=0.2)
+    ax.set_axisbelow(True)
+    ax.spines[["top", "right"]].set_visible(False)
+    save_clinical_figure(fig, output_path)
+
+
+def write_category_missingness_panels(df, mapping, labels, output_path, limit=6):
+    groups = [(label, [c for c in df if mapping[c] == label]) for label in labels]
+    groups = [(label, cols) for label, cols in groups if cols]
+    if not groups:
+        return
+    fig, axes = plt.subplots(math.ceil(len(groups) / 2), 2, squeeze=False,
+                             figsize=(18, 3.0 * math.ceil(len(groups) / 2)), layout="constrained")
+    for ax, (label, columns) in zip(axes.flat, groups):
+        missing = df[columns].isna().mean().mul(100).sort_values(ascending=False)
+        plot = missing[missing.gt(0)].head(limit).sort_values(ascending=False)
+        if len(plot):
+            bars = ax.barh(plot.index, plot.values, color="#3B7EA1", height=0.65)
+            ax.bar_label(bars, labels=["<0.1%" if 0 < v < 0.1 else f"{v:.1f}%" for v in plot], padding=3, fontsize=8)
+        else:
+            ax.text(0.5, 0.5, "All features complete", transform=ax.transAxes, ha="center", color="#26734D")
+            ax.set_yticks([])
+        ax.set(title=f"{label} · {len(columns)} predictors", xlim=(0, 112), xlabel="Missing episodes (%)")
+        if len(plot):
+            ax.set_ylim(max(3, len(plot)) - 0.4, -0.6)
+        ax.set_xticks([0, 25, 50, 75, 100])
+        ax.tick_params(axis="y", labelsize=8)
+        ax.grid(axis="x", alpha=0.18)
+        ax.set_axisbelow(True)
+        ax.spines[["top", "right"]].set_visible(False)
+    for ax in list(axes.flat)[len(groups):]:
+        ax.set_visible(False)
+    fig.suptitle(f"Missingness within clinical categories · up to {limit} features per category", fontsize=16)
+    save_clinical_figure(fig, output_path)
 
 
 def first_stage_by_column(
@@ -478,7 +449,7 @@ def grouped_slide_missingness(
             row
         )
 
-    return pd.DataFrame.from_records(rows)
+    return pd.DataFrame.from_records(rows, columns=["group", "variables", *[label for label, _ in bands], "max_missing_percent"])
 
 
 def write_grouped_missingness_chart_png(
@@ -495,50 +466,25 @@ def write_grouped_missingness_chart_png(
         domain_by_stage,
         variable_group_labels,
     )
-    band_columns = ["0%", ">0-10%", "10-40%", "40-80%", "80-100%"]
-    band_colors = {
-        "0%": "#009E73",
-        ">0-10%": "#56B4E9",
-        "10-40%": "#E69F00",
-        "40-80%": "#D55E00",
-        "80-100%": "#CC79A7",
-    }
-    fig, ax = plt.subplots(figsize=(16, 9))
-    bottom = pd.Series(0, index=plot_df.index, dtype=float)
-    x_positions = range(len(plot_df))
-    for band in band_columns:
-        ax.bar(
-            x_positions,
-            plot_df[band],
-            bottom=bottom,
-            color=band_colors[band],
-            label=band,
-            width=0.78,
-        )
-        bottom = bottom + plot_df[band]
-    ax.set_title("Missingness Bands by Variable Group", fontsize=26, pad=18)
-    ax.set_ylabel("Number of variables", fontsize=20)
-    ax.set_xlabel(
-        f"Filtered variables grouped for slides (n={len(df.columns):,})",
-        fontsize=20,
-        labelpad=16,
-    )
-    ax.set_ylim(0, max(plot_df["variables"].max() * 1.12, 1))
-    ax.set_xlim(-0.5, len(plot_df) - 0.5)
-    ax.margins(x=0)
-    ax.set_xticks(range(len(plot_df)))
-    ax.set_xticklabels(
-        [f"{row.group}\n(n={row.variables})" for row in plot_df.itertuples()],
-        rotation=45,
-        ha="right",
-        fontsize=13,
-    )
-    ax.tick_params(axis="y", labelsize=16)
-    ax.grid(axis="y", alpha=0.25)
-    ax.legend(title="Missingness band", title_fontsize=13, fontsize=12, loc="upper right")
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
-    plt.close(fig)
+    bands = ["0%", ">0-10%", "10-40%", "40-80%", "80-100%"]
+    colors = ["#009E73", "#56B4E9", "#E6AB02", "#D55E00", "#8C3B6A"]
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.48 * len(plot_df) + 2)), layout="constrained")
+    left = pd.Series(0.0, index=plot_df.index)
+    for band, color in zip(bands, colors):
+        values = plot_df[band].div(plot_df["variables"]).mul(100)
+        bars = ax.barh(plot_df["group"], values, left=left, label=band, color=color, height=0.72)
+        for bar, count, width in zip(bars, plot_df[band], values):
+            if width >= 8:
+                ax.text(bar.get_x() + width / 2, bar.get_y() + bar.get_height() / 2,
+                        str(count), ha="center", va="center", fontsize=9, color="white" if band in ["0%", "40-80%", "80-100%"] else "#222222")
+        left += values
+    ax.set_yticks(range(len(plot_df)), [f"{r.group} (n={r.variables})" for r in plot_df.itertuples()])
+    ax.invert_yaxis()
+    ax.set(title="Predictor completeness by clinical category",
+           xlabel="Share of predictors (%) · segment labels are feature counts", xlim=(0, 100))
+    ax.legend(title="Missing values per feature", loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=5, frameon=False)
+    ax.spines[["top", "right", "bottom"]].set_visible(False)
+    save_clinical_figure(fig, output_path)
     return plot_df
 
 
@@ -601,8 +547,9 @@ def variable_distribution_filtered_vs_unfiltered(
     result = full_distribution.rename(columns={"variables": "unfiltered_variables"}).merge(
         filtered_distribution.rename(columns={"variables": "filtered_variables"}),
         on="group",
-        how="left",
+        how="outer",
     )
+    result["unfiltered_variables"] = result["unfiltered_variables"].fillna(0).astype(int)
     result["filtered_variables"] = result["filtered_variables"].fillna(0).astype(int)
     result["removed_by_filter"] = (
         result["unfiltered_variables"] - result["filtered_variables"]
@@ -616,60 +563,22 @@ def write_variable_distribution_chart_png(
     output_path: Path,
     colors: dict[str, str],
 ) -> None:
-    plot_df = distribution.copy()
-    x_positions = list(range(len(plot_df)))
-    bar_width = 0.38
-
-    fig, ax = plt.subplots(figsize=(15, 8.5))
-    ax.bar(
-        [position - bar_width / 2 for position in x_positions],
-        plot_df["unfiltered_variables"],
-        width=bar_width,
-        label=f"Unfiltered (n={int(plot_df['unfiltered_variables'].sum()):,})",
-        color=colors["input"],
-    )
-    ax.bar(
-        [position + bar_width / 2 for position in x_positions],
-        plot_df["filtered_variables"],
-        width=bar_width,
-        label=f"Filtered (n={int(plot_df['filtered_variables'].sum()):,})",
-        color=colors["output"],
-    )
-    ax.set_title("Variable Distribution by Group", fontsize=24, pad=18)
-    ax.set_ylabel("Number of variables", fontsize=18)
-    ax.set_xlabel("Variable group", fontsize=18, labelpad=16)
-    ax.set_xticks(x_positions)
-    ax.set_xticklabels(plot_df["group"], rotation=35, ha="right", fontsize=13)
-    ax.tick_params(axis="y", labelsize=14)
-    ax.grid(axis="y", alpha=0.25)
-    ax.legend(fontsize=13, loc="upper right")
-    max_value = max(
-        plot_df["unfiltered_variables"].max(),
-        plot_df["filtered_variables"].max(),
-        1,
-    )
-    ax.set_ylim(0, max_value * 1.18)
-    label_offset = max_value * 0.015
-    for position, row in zip(x_positions, plot_df.itertuples(index=False)):
-        ax.text(
-            position - bar_width / 2,
-            row.unfiltered_variables + label_offset,
-            f"{int(row.unfiltered_variables)}",
-            ha="center",
-            va="bottom",
-            fontsize=12,
-        )
-        ax.text(
-            position + bar_width / 2,
-            row.filtered_variables + label_offset,
-            f"{int(row.filtered_variables)}",
-            ha="center",
-            va="bottom",
-            fontsize=12,
-        )
-    fig.tight_layout()
-    fig.savefig(output_path, dpi=180, bbox_inches="tight", pad_inches=0.08)
-    plt.close(fig)
+    fig, ax = plt.subplots(figsize=(12, max(4, 0.55 * len(distribution) + 2)), layout="constrained")
+    positions = list(range(len(distribution)))
+    for shift, column, label, color in [(-0.19, "unfiltered_variables", "Audit table", colors["input"]),
+                                       (0.19, "filtered_variables", "Filtered table", colors["output"])]:
+        bars = ax.barh([p + shift for p in positions], distribution[column], height=0.34,
+                       color=color, label=f"{label} (n={int(distribution[column].sum())})")
+        ax.bar_label(bars, padding=3, fontsize=9)
+    ax.set_yticks(positions, distribution["group"])
+    ax.invert_yaxis()
+    ax.set(title="Feature counts by clinical category", xlabel="Number of columns")
+    ax.margins(x=0.15)
+    ax.grid(axis="x", alpha=0.2)
+    ax.set_axisbelow(True)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.10), ncol=2, frameon=False)
+    save_clinical_figure(fig, output_path)
 
 
 def predictive_target_summary(
@@ -1321,6 +1230,38 @@ def build_report(
         else None
     )
 
+    all_columns = list(dict.fromkeys([*(full_df.columns if full_df is not None else []),
+                                     *(filtered_df.columns if filtered_df is not None else [])]))
+    mapping = feature_categories(all_columns, report_config.get("feature_categories", {}), detailed_logs, domain_by_stage)
+    variable_group_labels = list(dict.fromkeys([*report_config.get("feature_categories", {}), *mapping.values()]))
+    clinical_logs = [{"table_name": label, "output_columns": [c for c in all_columns if mapping[c] == label]}
+                     for label in variable_group_labels]
+    clinical_domains = {label: label for label in variable_group_labels}
+    plot_options = report_config.get("clinical_plots", {})
+    predictors = filtered_df
+    predictor_columns = []
+    if filtered_df is not None:
+        schema_path = filtered_dataset_path.with_name(filtered_dataset_path.stem.removesuffix("_filtered") + "_schema.json")
+        if schema_path.exists():
+            predictor_columns = json.loads(schema_path.read_text())["predictor_columns"]
+            missing = set(predictor_columns) - set(filtered_df)
+            if missing:
+                raise ValueError(f"Schema predictors missing from filtered table: {sorted(missing)}")
+        else:
+            targets = {t["target_column"] for t in report_config.get("predictive_targets", [])}
+            excluded = set(plot_options.get("exclude_predictor_categories", []))
+            predictor_columns = [c for c in filtered_df if c not in targets and mapping[c] not in excluded]
+        predictors = filtered_df[predictor_columns]
+    membership = pd.DataFrame([{"feature": c, "category": mapping[c],
+        "in_filtered": filtered_df is not None and c in filtered_df,
+        "is_predictor": c in predictor_columns} for c in all_columns])
+    membership.to_csv(tables_dir / "feature_categories.csv", index=False)
+    if predictors is not None:
+        pd.DataFrame({"feature": predictors.columns,
+                      "category": [mapping[c] for c in predictors],
+                      "missing_percent": predictors.isna().mean().mul(100).values}).to_csv(
+            tables_dir / "predictor_missingness.csv", index=False)
+
     rows_chart = graphs_dir / "rows_by_stage.png"
     columns_chart = graphs_dir / "columns_by_stage.png"
     changes_chart = graphs_dir / "logged_operations_by_stage.png"
@@ -1357,15 +1298,16 @@ def build_report(
     )
     if filtered_df is not None:
         write_missingness_chart_png(
-            filtered_df,
+            predictors,
             output_path=missingness_chart,
             colors=colors,
+            limit=int(plot_options.get("top_missing_features", 25)),
         )
         grouped_missingness = write_grouped_missingness_chart_png(
-            filtered_df,
-            detailed_logs=detailed_logs,
+            predictors,
+            detailed_logs=clinical_logs,
             output_path=grouped_missingness_chart,
-            domain_by_stage=domain_by_stage,
+            domain_by_stage=clinical_domains,
             variable_group_labels=variable_group_labels,
         )
         grouped_missingness.to_csv(
@@ -1376,8 +1318,8 @@ def build_report(
         variable_distribution = variable_distribution_filtered_vs_unfiltered(
             full_df=full_df,
             filtered_df=filtered_df,
-            detailed_logs=detailed_logs,
-            domain_by_stage=domain_by_stage,
+            detailed_logs=clinical_logs,
+            domain_by_stage=clinical_domains,
             variable_group_labels=variable_group_labels,
         )
         write_variable_distribution_chart_png(
@@ -1389,6 +1331,10 @@ def build_report(
             tables_dir / "variable_distribution_filtered_vs_unfiltered.csv",
             index=False,
         )
+    if predictors is not None and len(predictors.columns):
+        write_category_missingness_panels(predictors, mapping, variable_group_labels,
+            graphs_dir / "missingness_by_clinical_category.png",
+            limit=int(plot_options.get("top_missing_per_category", 6)))
     target_summary = None
     target_class_counts = None
     evolution_summary = None
@@ -1454,6 +1400,12 @@ def build_report(
             "variable_distribution": variable_distribution_chart,
         },
     )
+    with (output_dir / "preprocessing_report.md").open("a") as handle:
+        handle.write("\n## Clinical feature categories\n\n"
+                     "Categories follow the first matching YAML rule. Predictor missingness plots exclude targets and metadata using the schema when available.\n\n"
+                     "[Feature-to-category mapping](tables/feature_categories.csv) · [Complete predictor missingness table](tables/predictor_missingness.csv)\n\n"
+                     "![Missingness by clinical category](graphs/missingness_by_clinical_category.png)\n\n"
+                     "Clinical plots are also exported as SVG for resizing. A zero missingness rate does not establish confirmed absence for history flags.\n")
     if build_summary_excel and full_dataset_path and filtered_dataset_path:
         build_summary_excel_file(
             full_dataset_path=full_dataset_path,
@@ -1461,6 +1413,7 @@ def build_report(
             detailed_log_path=detailed_log_path,
             output_path=tables_dir / "summary_excel_file.xlsx",
             domain_by_stage=domain_by_stage,
+            feature_domain_map=mapping,
         )
 
 

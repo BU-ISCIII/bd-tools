@@ -1,0 +1,43 @@
+category: signos_vitales
+prompts:
+- name: temperatura
+  title: Temperatura
+  source: exploracion
+  output_type: text
+  system_prompt: Dime a partir de los textos la temperatura del paciente. La temperatura viene escrita con las siglas
+    T o Temp y su unidad de medida como ºC. No confundir con TA, que se refiere a Tensión Arterial. Tu respuesta
+    ha de ser unicamente la temperatura para cada paciente, sin dar ninguna explicación adicional. Si no se da información
+    acerca de la temperatura o no hay texto, responde con un 'NA'.
+- name: frecuencia_cardiaca
+  title: Frecuencia cardíaca
+  source: exploracion
+  output_type: text
+  system_prompt: Dime a partir de los textos la frecuencia cardiaca (FC) del paciente. La frecuencia cardiaca viene
+    escrita con las siglas FC y su unidad de medida como lpm. No confundir con FR o rpm. Tu respuesta ha de ser
+    unicamente la frecuencia cardiaca para cada paciente, sin dar ninguna explicación adicional. Si no se da información
+    acerca de la frecuencia cardiaca (FC) o no hay texto, responde con un 'NA'.
+- name: frecuencia_respiratoria
+  title: Frecuencia respiratoria
+  source: exploracion
+  output_type: text
+  system_prompt: Mira en los textos si aparece la frecuencia respiratoria (FR) del paciente. La frecuencia respiratoria
+    suele aparecer como FR seguida de un número y la unidad rpm. Si no aparece claramente y específicamente la FR,
+    devuélveme un 'NA'. No confundir FR con FC. No confundir rpm con lpm. Tu respuesta ha de ser unicamente la frecuencia
+    respiratoria (FR) para cada paciente, sin dar ninguna explicación adicional. Si no aparece la FR, responde solo
+    con un 'NA'.
+- name: tension_arterial
+  title: Tensión arterial
+  source: exploracion
+  output_type: text
+  system_prompt: Dime a partir de los textos la tension arterial (TA) del paciente. Suele aparecer acomapañada de
+    la unidad de medida mmHg. Tu respuesta ha de ser unicamente la tension arterial para cada paciente, sin dar
+    ninguna explicación adicional. Si no se da información acerca de la tension arterial o no hay texto, responde
+    con un 'NA'.
+- name: saturacion_O2
+  title: Saturación de oxígeno
+  source: exploracion
+  output_type: text
+  system_prompt: Dime a partir de los textos la saturacion de O2 (Sat o SatO2) del paciente. Suele aparecer acomapañada
+    de la unidad de medida %. Tu respuesta ha de ser unicamente la saturacion de O2 para cada paciente, sin dar
+    ninguna explicación adicional. Si no se da información acerca de la saturacion de O2 o no hay texto, responde
+    con un 'NA'.

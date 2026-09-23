@@ -1,0 +1,64 @@
+{
+  "data": "00-data/cohort_filtered.csv",
+  "schema": "00-data/cohort_schema.json",
+  "identifiers": "00-data/cohort_identifiers.csv",
+  "output_dir": "01-training",
+  "postprocessing": {
+    "missing_percent": 80.0,
+    "iqr_multiplier": 5.0,
+    "max_corr": 0.99,
+    "missing_indicators": true
+  },
+  "training": {
+    "n_trials": 100,
+    "cv_splits": 5,
+    "holdout_folds": 5,
+    "n_cpus": 4,
+    "threshold": 0.5,
+    "class_weighting": false,
+    "full_refit": true,
+    "fast_search": false,
+    "early_stopping_rounds": 50,
+    "pruning": true,
+    "pruning_startup_trials": 5,
+    "pruning_min_folds": 2,
+    "timeout_seconds": null
+  },
+  "runs": [
+    {
+      "name": "target_30_catb_seed42",
+      "mode": "TARGET",
+      "target": "mortalidad_30_dias",
+      "algorithm": "catb",
+      "seed": 42
+    },
+    {
+      "name": "target_14_catb_seed42",
+      "mode": "TARGET",
+      "target": "mortalidad_14_dias",
+      "algorithm": "catb",
+      "seed": 42
+    },
+    {
+      "name": "staged_30_14_catb_seed42",
+      "mode": "STAGED",
+      "target1": "mortalidad_30_dias",
+      "target2": "mortalidad_14_dias",
+      "algorithm": "catb",
+      "seed": 42
+    }
+  ],
+  "explanations": {
+    "enabled": true,
+    "max_samples": 1000,
+    "top_features": 30,
+    "full_refit": true
+  },
+  "feature_exclusion_patterns": [
+    "*mortalidad*",
+    "*mortality*",
+    "dias_hemocultivo_*",
+    "duracion_hospitalizacion",
+    "duracion_uci"
+  ]
+}

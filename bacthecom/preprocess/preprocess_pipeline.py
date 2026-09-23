@@ -78,105 +78,6 @@ class PipelineArtifacts:
     logs: list[TableLog]
 
 
-ANTIMICROBIAL_FAMILY_BY_NORMALIZED_NAME = {
-    "amikacina": "Aminoglucosidos",
-    "gentamicina": "Aminoglucosidos",
-    "kanamicina": "Aminoglucosidos",
-    "netilmicina": "Aminoglucosidos",
-    "tobramicina": "Aminoglucosidos",
-    "amoxicilina": "Penicilinas",
-    "amoxicilina clavulanico": "Penicilinas",
-    "amoxicillin clavulanic acid": "Penicilinas",
-    "ampicilina": "Penicilinas",
-    "ampicilina sulbactam": "Penicilinas",
-    "cloxacilina": "Penicilinas",
-    "cloxacillin": "Penicilinas",
-    "mecillinam": "Penicilinas",
-    "oxacilina": "Penicilinas",
-    "penicilina": "Penicilinas",
-    "piperacilina": "Penicilinas",
-    "piperacilina tazobactam": "Penicilinas",
-    "piperacillin tazobactam": "Penicilinas",
-    "ticarcilina": "Penicilinas",
-    "ticarcilina clavulanico": "Penicilinas",
-    "aztreonam": "Monobactamicos",
-    "cefalexina": "Cefalosporinas 1 gen",
-    "cefalotina": "Cefalosporinas 1 gen",
-    "cefazolina": "Cefalosporinas 1 gen",
-    "cefoxitina": "Cefalosporinas 2 gen",
-    "cefuroxima": "Cefalosporinas 2 gen",
-    "cefepime": "Cefalosporinas 3/4 gen",
-    "cefepima": "Cefalosporinas 3/4 gen",
-    "cefiderocol": "Cefalosporinas 3/4 gen",
-    "cefixime": "Cefalosporinas 3/4 gen",
-    "cefixima": "Cefalosporinas 3/4 gen",
-    "cefotaxima": "Cefalosporinas 3/4 gen",
-    "ceftriaxona": "Cefalosporinas 3/4 gen",
-    "ceftriaxone": "Cefalosporinas 3/4 gen",
-    "ceftazidima": "Cefalosporinas 3/4 gen",
-    "ceftazidima avibactam": "Cefalosporinas 3/4 gen",
-    "ceftazidima clavulanico": "Cefalosporinas 3/4 gen",
-    "ceftolozano tazobactam": "Cefalosporinas 3/4 gen",
-    "ceftarolina": "Cefalosporinas 2 gen",
-    "ceftarolina fosamilo": "Cefalosporinas 2 gen",
-    "doripenem": "Carbapenemas",
-    "ertapenem": "Carbapenemas",
-    "imipenem": "Carbapenemas",
-    "imipenem cilastatina": "Carbapenemas",
-    "imipenen cilastatina": "Carbapenemas",
-    "imipenem cilastatin": "Carbapenemas",
-    "meropenem": "Carbapenemas",
-    "meropenem vaborbactam": "Carbapenemas",
-    "ciprofloxacino": "Quinolonas",
-    "ciprofloxacin": "Quinolonas",
-    "delafloxacina": "Quinolonas",
-    "levofloxacino": "Quinolonas",
-    "levofloxacina": "Quinolonas",
-    "levofloxacin": "Quinolonas",
-    "moxifloxacino": "Quinolonas",
-    "norfloxacino": "Quinolonas",
-    "ofloxacino": "Quinolonas",
-    "acido nalidixico": "Quinolonas",
-    "vancomicina": "Glicopeptidos",
-    "teicoplanina": "Glicopeptidos",
-    "dalbavancina": "Glicopeptidos",
-    "daptomicina": "Lipopeptidos",
-    "daptomycin": "Lipopeptidos",
-    "linezolid": "Oxazolidinonas",
-    "azitromicina": "Macrolidos",
-    "eritromicina": "Macrolidos",
-    "clindamicina": "Lincosamidas",
-    "clindamycin": "Lincosamidas",
-    "colistina": "Polimixinas",
-    "colistimetato de sodio": "Polimixinas",
-    "fosfomicina": "Fosfomicinas",
-    "fosfomicina trometamol": "Fosfomicinas",
-    "nitrofurantoina": "Nitrofuranos",
-    "tetraciclina": "Tetraciclinas",
-    "doxiciclina": "Tetraciclinas",
-    "minociclina": "Tetraciclinas",
-    "tigeciclina": "Tetraciclinas",
-    "trimetoprim": "Sulfamidas",
-    "trimetroprim sulfametoxazol": "Sulfamidas",
-    "sulfametoxazol trimetoprima": "Sulfamidas",
-    "sulfametoxazol trimetoprim": "Sulfamidas",
-    "rifampicina": "Rifamicinas",
-    "metronidazol": "Nitroimidazoles",
-    "cloranfenicol": "Anfenicoles",
-    "acido fusidico": "Otros antibacterianos",
-    "mupirocina": "Otros antibacterianos",
-    "fluconazol": "Antifungicos",
-    "voriconazol": "Antifungicos",
-    "isavuconazol": "Antifungicos",
-    "posaconazol": "Antifungicos",
-    "caspofungin": "Antifungicos",
-    "caspofungina": "Antifungicos",
-    "micafungina sodica": "Antifungicos",
-    "anfotericina b": "Antifungicos",
-    "anfotericina b liposomas": "Antifungicos",
-}
-
-
 def normalize_text(value: Any) -> str:
     if pd.isna(value):
         return ""
@@ -185,12 +86,6 @@ def normalize_text(value: Any) -> str:
     for token in ["/", "+", "(", ")", ",", "-", "_"]:
         text = text.replace(token, " ")
     return " ".join(text.lower().strip().split())
-
-
-def antimicrobial_family(value: Any) -> str:
-    normalized = normalize_text(value)
-    return ANTIMICROBIAL_FAMILY_BY_NORMALIZED_NAME.get(normalized, "Other/Unmapped")
-
 
 
 def classify_microorganism(value: Any) -> str:
@@ -228,10 +123,6 @@ def microorganism_species_label(value: Any) -> str:
     if not text:
         return ""
     return "_".join(text.split()[:2])
-
-
-def safe_set_literal(values: Iterable[Any]) -> str:
-    return repr(sorted({str(v) for v in values if not pd.isna(v) and str(v).strip()}))
 
 
 def add_change(
@@ -309,7 +200,6 @@ def run_metadata(run_label: str) -> dict[str, str]:
         "preprocess_code_dirty": "yes" if dirty else "no",
         "run_label": run_label,
     }
-
 
 
 def deep_update(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
@@ -400,8 +290,6 @@ def default_config() -> dict[str, Any]:
                 "laboratorio_n_rows",
                 "fecha_alta",
                 "fecha_mortalidad",
-                "mortalidad_14_dias_desde_hemocultivo",
-                "mortalidad_30_dias_desde_hemocultivo",
                 "dias_hemocultivo_mortalidad",
                 "duracion_UCI",
                 "dias_hemocultivo_ingresoUCI",
@@ -429,8 +317,6 @@ def default_config() -> dict[str, Any]:
             "forbidden_predictor_columns": [
                 "fecha_alta",
                 "fecha_mortalidad",
-                "mortalidad_14_dias_desde_hemocultivo",
-                "mortalidad_30_dias_desde_hemocultivo",
                 "dias_hemocultivo_mortalidad",
                 "duracion_UCI",
                 "dias_hemocultivo_ingresoUCI",
@@ -509,7 +395,7 @@ def append_target_validation_checks(log: TableLog, df: pd.DataFrame, config: dic
 
 
 def create_mortality_targets(df: pd.DataFrame, config: dict[str, Any]) -> pd.DataFrame:
-    result = df.copy()
+    result = df.drop(columns=df.filter(regex=r"^mortalidad_(?:(?:14|30)_)?dias_desde_.+$").columns).copy()
 
     if "fecha_mortalidad" in result.columns:
         result["fecha_mortalidad"] = pd.to_datetime(result["fecha_mortalidad"], errors="coerce")
@@ -554,7 +440,7 @@ def create_mortality_targets(df: pd.DataFrame, config: dict[str, Any]) -> pd.Dat
         ).astype(int)
 
     # Benchmark labels: recompute from admission date and overwrite any same-name
-    # SQLite columns. Do not create *_desde_hemocultivo columns.
+    # SQLite columns. Only admission-referenced early mortality is generated.
     if 14 in windows:
         result[columns.get("admission_14", "mortalidad_14_dias")] = in_window("fecha_ingreso", 14)
     if 30 in windows:
@@ -678,23 +564,6 @@ def export_logs(
         encoding="utf-8",
     )
     return summary
-
-
-def read_drop_columns(path: Path, columns: list[str]) -> list[str]:
-    if not path.exists():
-        return []
-    selected: list[str] = []
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        entry = raw_line.strip()
-        if not entry or entry.startswith("#"):
-            continue
-        matches = (
-            sorted(fnmatch.filter(columns, entry))
-            if any(char in entry for char in "*?[")
-            else [entry]
-        )
-        selected.extend(column for column in matches if column in columns)
-    return list(dict.fromkeys(selected))
 
 
 def load_tables(db_path: Path) -> dict[str, pd.DataFrame]:
@@ -833,16 +702,6 @@ def normalize_merge_key_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def aggregate_binary_max(df: pd.DataFrame, keys: list[str], columns: list[str]) -> pd.DataFrame:
-    available = [column for column in columns if column in df.columns]
-    if not available:
-        return df[keys].drop_duplicates()
-    values = df[keys + available].copy()
-    for column in available:
-        values[column] = pd.to_numeric(values[column], errors="coerce")
-    return values.groupby(keys, as_index=False).max()
-
-
 def preprocess_paciente(tables: dict[str, pd.DataFrame], metadata: dict[str, str]) -> PreprocessResult:
     source = clean_missing_values(tables["paciente"])
     df = source.copy()
@@ -858,7 +717,6 @@ def preprocess_paciente(tables: dict[str, pd.DataFrame], metadata: dict[str, str
         how="normalize Hombre/Mujer/M/F values to binary sexo: M=1, F=0",
     )
     return validate_result(PreprocessResult(df=df, log=log))
-
 
 
 def preprocess_episodio_ingreso(
@@ -1104,7 +962,6 @@ def preprocess_simple_admission_table(
     return validate_result(PreprocessResult(df=result, log=log))
 
 
-
 def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[str, str], config: dict[str, Any]) -> PreprocessResult:
     """Process symptoms and vital signs using the original notebook recodes."""
     source = clean_missing_values(tables["signos_sintomas"])
@@ -1123,17 +980,6 @@ def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[s
             0,
             np.where(df["somnolencia_estupor_coma"].isna(), np.nan, 1),
         )
-
-    symptom_cols = [
-        "somnolencia_estupor_coma", "fiebre", "tos", "dificultad_respirar",
-        "dolor_costal", "disuria", "polaquiuria", "tenesmo_vejiga", "tenesmo_ano_recto",
-        "dolor_fosa_renal", "nauseas", "vomitos", "dolor_abdominal", "diarrea",
-        "lesiones_piel", "lesiones_mucosas", "cefalea", "dolores_articulares",
-    ]
-    available_symptom_cols = [c for c in symptom_cols if c in df.columns]
-    if available_symptom_cols:
-        df["missing_symptoms"] = df[available_symptom_cols].isna().all(axis=1).astype(int)
-        df[available_symptom_cols] = df[available_symptom_cols].fillna(0).astype(int)
 
     # Vital sign abnormality indicators from original notebook.
     if "temperatura" in df.columns:
@@ -1169,13 +1015,6 @@ def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[s
             np.where(df["saturacion_pO2"] < spo2_threshold, 1, 0),
         )
 
-    signs_cols = ["hipertermia", "hipotermia", "hipotension", "hipertension", "taquipnea", "taquicardia", "hipoxemia"]
-    available_signs_cols = [c for c in signs_cols if c in df.columns]
-    if available_signs_cols:
-        df["missing_signs"] = df[available_signs_cols].isna().all(axis=1).astype(int)
-        # Keep abnormality indicators, but fill missing as 0 after creating the missingness flag.
-        df[available_signs_cols] = df[available_signs_cols].fillna(0).astype(int)
-
     drop_raw_vitals = [
         "barthel_inf_90", "temperatura", "tension_arterial_sist", "tension_arterial_diast",
         "frec_cardiaca", "saturacion_pO2", "frecuencia_respiratoria", "duracion_sintoma",
@@ -1198,8 +1037,8 @@ def preprocess_signos_sintomas(tables: dict[str, pd.DataFrame], metadata: dict[s
         log,
         "created_variables",
         source=["symptoms", "vital_signs"],
-        target=["missing_symptoms", "hipertermia", "hipotermia", "hipotension", "hipertension", "taquipnea", "taquicardia", "hipoxemia", "missing_signs"],
-        how="reproduce original notebook symptom missingness and vital-sign abnormality recodes",
+        target=["hipertermia", "hipotermia", "hipotension", "hipertension", "taquipnea", "taquicardia", "hipoxemia"],
+        how="derive vital-sign abnormalities while preserving missing measurements",
     )
     add_change(
         log,
@@ -1276,7 +1115,6 @@ def preprocess_episodio_uci(tables: dict[str, pd.DataFrame], metadata: dict[str,
         how="collapse ICU rows to admission level and flag admissions with ICU records",
     )
     return validate_result(PreprocessResult(df=result, log=log))
-
 
 
 def preprocess_episodio_infeccion(
@@ -1425,100 +1263,6 @@ def preprocess_episodio_infeccion(
     log.metadata.update({f"infection_hemoculture_selection_{k}": v for k, v in selection_stats.items()})
     return validate_result(PreprocessResult(df=result, log=log))
 
-def preprocess_antibiograma(
-    tables: dict[str, pd.DataFrame], metadata: dict[str, str]
-) -> PreprocessResult:
-    source = clean_missing_values(tables["antibiograma"])
-    infections = tables["episodio_infeccion"][["episode_id", "record_id", "fecha_ingreso", "fecha_cultivo"]].copy()
-    infections["fecha_ingreso"] = pd.to_datetime(infections["fecha_ingreso"], errors="coerce")
-    infections["fecha_hemocultivo"] = pd.to_datetime(infections["fecha_cultivo"], errors="coerce")
-    infections = infections.drop(columns=["fecha_cultivo"])
-    df = source.merge(infections, on="episode_id", how="left")
-    df["family"] = df["antimicrobiano"].map(antimicrobial_family)
-    df["is_resistant"] = df["interpretacion"].eq("R").astype(int)
-    df["is_intermediate"] = df["interpretacion"].eq("I").astype(int)
-    df["is_susceptible"] = df["interpretacion"].eq("S").astype(int)
-    grouped = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False)
-    result = grouped.agg(
-        antibiogram_rows=("episode_id", "size"),
-        antibiogram_episode_count=("episode_id", "nunique"),
-        antibiogram_resistant_rows=("is_resistant", "sum"),
-        antibiogram_intermediate_rows=("is_intermediate", "sum"),
-        antibiogram_susceptible_rows=("is_susceptible", "sum"),
-        antibiogram_resistant_drugs=(
-            "antimicrobiano",
-            lambda values: list_literal(values[df.loc[values.index, "is_resistant"].eq(1)]),
-        ),
-        antibiogram_resistant_families=(
-            "family",
-            lambda values: list_literal(values[df.loc[values.index, "is_resistant"].eq(1)]),
-        ),
-    )
-    result["resistente_cefalosporina"] = result["antibiogram_resistant_families"].map(
-        lambda value: (
-            "RESIST_CEFALOSPORINAS_3a_4a"
-            if "Cefalosporinas 3/4 gen" in value
-            else "NEGATIVE"
-        )
-    )
-    log = finalize_log(table_name="antibiograma", input_df=source, output_df=result, merge_keys=ADMISSION_KEYS)
-    attach_metadata(log, metadata)
-    add_change(
-        log,
-        "created_variables",
-        source=["interpretacion", "antimicrobiano"],
-        target=["antibiogram_resistant_families", "resistente_cefalosporina"],
-        how="join antibiogram rows to infection admissions, map resistant antimicrobials to families, and derive cephalosporin resistance target",
-        variable_type="target",
-    )
-    missing_admission = int(df["record_id"].isna().sum())
-    log.validation_checks.append(f"antibiogram_rows_missing_infection_episode:{missing_admission}")
-    return validate_result(PreprocessResult(df=result, log=log))
-
-
-def preprocess_tto_antimicrobiano(
-    tables: dict[str, pd.DataFrame], metadata: dict[str, str]
-) -> PreprocessResult:
-    source = clean_missing_values(tables["tto_antimicrobiano"])
-    infections = tables["episodio_infeccion"][["episode_id", "record_id", "fecha_ingreso", "fecha_cultivo"]].copy()
-    infections["fecha_ingreso"] = pd.to_datetime(infections["fecha_ingreso"], errors="coerce")
-    infections["fecha_hemocultivo"] = pd.to_datetime(infections["fecha_cultivo"], errors="coerce")
-    infections = infections.drop(columns=["fecha_cultivo"])
-    df = source.merge(infections, on="episode_id", how="left")
-    df["dias_tratamiento"] = pd.to_numeric(df["dias_tratamiento"], errors="coerce")
-    df["treatment_family"] = df["antimicrobiano"].map(antimicrobial_family)
-    df["tratamiento_apropiado"] = pd.to_numeric(df["tratamiento_apropiado"], errors="coerce")
-    grouped = df.groupby(ADMISSION_KEYS, as_index=False, dropna=False)
-    result = grouped.agg(
-        treatment_rows=("episode_id", "size"),
-        treatment_episode_count=("episode_id", "nunique"),
-        treatment_drug_list=("antimicrobiano", lambda values: list_literal(sorted_unique_list(values))),
-        treatment_family_count=("treatment_family", lambda values: len(set(values.dropna()))),
-        treatment_days_max=("dias_tratamiento", "max"),
-        treatment_days_sum=("dias_tratamiento", "sum"),
-        treatment_appropriate_any=("tratamiento_apropiado", "max"),
-    )
-    log = finalize_log(
-        table_name="tto_antimicrobiano",
-        input_df=source,
-        output_df=result,
-        merge_keys=ADMISSION_KEYS,
-    )
-    attach_metadata(log, metadata)
-    add_change(
-        log,
-        "transformed_variables",
-        source=["antimicrobiano", "dias_tratamiento", "tratamiento_apropiado"],
-        target=[column for column in result.columns if column not in ADMISSION_KEYS],
-        how="join treatment rows to infection admissions and aggregate treatment exposure to admission level",
-    )
-    negative_days = int((df["dias_tratamiento"] < 0).sum())
-    long_days = int((df["dias_tratamiento"] > 365).sum())
-    log.warnings.append(
-        f"dias_tratamiento requires review: negative_rows={negative_days}, rows_over_365_days={long_days}"
-    )
-    return validate_result(PreprocessResult(df=result, log=log))
-
 
 def merge_results(results: dict[str, PreprocessResult], metadata: dict[str, str], config: dict[str, Any]) -> PreprocessResult:
     base = normalize_merge_key_dtypes(results["episodio_ingreso"].df.copy())
@@ -1610,7 +1354,9 @@ def export_dataset_outputs(
     df: pd.DataFrame, output_path: Path, config: dict[str, Any]
 ) -> tuple[pd.DataFrame, list[str], Path]:
     serializable = df.copy()
-    config_drops = config_drop_columns(config, serializable.columns.tolist())
+    # Legacy elapsed-to-death fields are outcomes, never model predictors.
+    obsolete = serializable.filter(regex=r"^mortalidad_(?:(?:14|30)_)?dias_desde_.+$").columns.tolist()
+    config_drops = config_drop_columns(config, serializable.columns.tolist()) + obsolete
     serializable = serializable.drop(columns=[c for c in config_drops if c in serializable.columns], errors="ignore")
     append_target_validation_checks(
         TableLog(
@@ -1701,6 +1447,22 @@ def run_pipeline(
     metadata["config_name"] = str(config.get("metadata", {}).get("config_name", metadata.get("config_name", "")))
     metadata["config_version"] = str(config.get("metadata", {}).get("config_version", metadata.get("config_version", "")))
     metadata["config_path"] = str(config_path)
+    if input_path.suffix.lower() == ".csv":
+        from preprocess_merged_csv import preprocess_csv
+
+        raw, full, filtered, audit = preprocess_csv(input_path, output_path, config, config_path)
+        logs = []
+        for name, source, result in [("merged_dataset", raw, full), ("filtered_dataset", full, filtered)]:
+            log = finalize_log(table_name=name, input_df=source, output_df=result, merge_keys=[])
+            attach_metadata(log, metadata)
+            log.metadata["csv_audit"] = audit
+            add_change(log, "transformed_variables", source=source.columns.tolist(), target=result.columns.tolist(),
+                       how="Merged CSV: normalize missing/numeric values, derive mortality targets, encode categories, prior organism/resistance/source summaries, pooled antibiotic history, clinical indicators, and explicit predictor/outcome separation; see audit and schema JSON files")
+            append_target_validation_checks(log, result, config)
+            logs.append(log)
+        export_logs(logs, summary_output_path=output_path.with_name(f"{output_path.stem}_log_summary.csv"),
+                    detailed_output_path=output_path.with_name(f"{output_path.stem}_log_detailed.json"))
+        return PipelineArtifacts(tables={"final": full, "filtered": filtered}, logs=logs)
     tables = load_tables(input_path)
     results: dict[str, PreprocessResult] = {}
     results["episodio_ingreso"] = preprocess_episodio_ingreso(tables, metadata, config)
@@ -1771,7 +1533,7 @@ def run_pipeline(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Preprocess BAcTHECOM SQLite data into a blood-culture episode-level mortality modelling dataset."
+        description="Preprocess BAcTHECOM SQLite or merged CSV data into a mortality modelling dataset."
     )
     parser.add_argument("--input-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--output-path", type=Path, default=DEFAULT_OUTPUT_PATH)

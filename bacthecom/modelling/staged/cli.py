@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -58,6 +58,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    if "--config" in sys.argv:
+        from .full_training import main as configured_main
+        configured_main()
+        return
     start = time.time()
     parser = build_arg_parser()
     args = parser.parse_args()
@@ -66,12 +70,7 @@ def main() -> None:
     from .modelling import run_training
 
     output_folder = Path(args.results_dir)
-    try:
-        run_training(args)
-    except Exception:
-        if output_folder.exists():
-            shutil.rmtree(output_folder)
-        raise
+    run_training(args)
 
     print(f"\nElapsed: {(time.time() - start) / 60:.1f} min")
 

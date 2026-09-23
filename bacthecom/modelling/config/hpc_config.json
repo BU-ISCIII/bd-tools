@@ -1,0 +1,14 @@
+{
+  "executor": "python",
+  "python_bin": "/data/ucct/bi/pipelines/micromamba/envs/bacthecom_env/bin/python",
+  "container_image": "../../../DOC/bacthecom.sif",
+  "modules": [],
+  "environment_script": null,
+  "job_name": "bacthecom_training",
+  "partition": "long_idx",
+  "time": "48:00:00",
+  "memory": "16G",
+  "account": null,
+  "qos": null,
+  "max_parallel_runs": 3
+}

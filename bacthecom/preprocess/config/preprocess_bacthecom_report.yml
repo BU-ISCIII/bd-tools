@@ -2,12 +2,12 @@ report_title: "BACTHECOM Mortality ML Preprocessing Report"
 
 report_description: >
   Preprocessing report for the BACTHECOM mortality prediction workflow.
-  The pipeline creates one row per admission and selected first hemoculture,
-  identified by record_id, fecha_ingreso, and fecha_hemocultivo.
+  CSV preprocessing preserves the supplied merged cohort episodes, identified
+  by hospital, record_id, fecha_ingreso, and fecha_hemocultivo.
+  SQLite preprocessing selects the first eligible hemoculture per admission.
   The modelling workflow is staged: first predicting any mortality over the
   full selected cohort, then predicting early mortality using either 14-day
-  or 30-day mortality. For the staged BACTHECOM model, the preferred early
-  mortality targets are referenced to the selected hemoculture date.
+  or 30-day mortality, referenced to the admission date.
 
 exclude_plot_stages:
   - _pipeline_run
@@ -25,64 +25,70 @@ domain_by_stage:
   merged_dataset: Merged dataset
   filtered_dataset: Model dataset
 
+# First matching category wins. Patterns use shell-style wildcards.
+# Specific history patterns precede current-episode microbiology patterns.
+feature_categories:
+  Demographics:
+    patterns: [edad, sexo, mujer_gestante, paciente_residencia]
+  Comorbidities:
+    patterns: [infarto, insuficiencia_cardiaca, evp, e_cerebrovascular, demencia, e_pulmonar_cronica, ulcera_peptica, colagenopatia, hemiplejia, erc, 'neoplasia*', linfoma, leucemia, sida, 'puntaje_child_pugh*', 'hepatopatia*', 'diabetes*', inmunosupresion, causa_inmunosupresion, tipo_cancer, tipo_hepatopatia, trasplante_organo_solido, tph, gran_quemado, clasificacion_quemadura, indice_de_charlson]
+  Functional status:
+    patterns: [escala_karnofsky, barthel_inf_90, situacion_funcional_basal]
+  Symptoms and signs:
+    patterns: [fiebre, tos, dificultad_respirar, dolor_costal, disuria, polaquiuria, 'tenesmo*', dolor_fosa_renal, nauseas, vomitos, dolor_abdominal, diarrea, 'lesiones*', cefalea, dolores_articulares, temperatura, frec_cardiaca, frecuencia_respiratoria, 'tension_arterial*', saturacion_po2, taquicardia, taquipnea, hipotension, hipoxemia, hipotermia_hipertermia, duracion_sintoma, fecha_inicio_sintoma]
+  Focus and severity:
+    patterns: [foco, 'foco__*', sepsis, shock_septico, qsofa, somnolencia_estupor_coma, organo_aparato]
+  Laboratory:
+    patterns: [leucocitos, neutrofilos, linfocitos, hemoglobina, plaquetas, ast, alt, fosfatasa_alcalina, ldh, bilirrubina_total, bilirrubina_directa, creatinina, lactato_serico, proteina_c_reactiva]
+  Healthcare exposure:
+    patterns: ['hospit_*', 'cirugia_previa*', asistencia_sanitaria_prev, hemodialisis_permanente, dialisis_peritoneal, iras_nosocomial, en_uci_antes_del_hemocultivo]
+  Devices:
+    patterns: [cateter_venoso, sonda_urinaria, sonda_nasogastrica, derivacion_ventriculoper, valvula_prot_cardiaca, portador_otros_disposit, carga_dispositivos]
+  Previous infections:
+    patterns: ['infec_prev*', 'foco_prev_*', num_inf_previas, dias_desde_ultima_infec, 'res_prev_*', 'resistant_prev_*', multiresistant_prev, phenotype_prev_recorded, antibiogram_prev_recorded, 'microorganism_episodio_previo_*', 'feno_resist_infec_prev_*', 'especimen_previo_*', 'cultivo_previo_*', 'area_hosp_infecc_previa_*', 'fecha_episodio_previo_*', 'resultado_antibiograma_infec_previa_*']
+  Previous antibiotics:
+    patterns: ['antib_prev*', 'antibiotic_history_*', dias_desde_ultimo_antib, 'antimicrobiano_previo_*', 'atc_antib_prev_*', 'dias_trat_antimicrobiano_*', 'via_administ_antib_prev_*', 'fecha_inicio_antib_previo_*', 'fecha_fin_antib_previo_*', '*_prev_yes_no']
+  Other cultures:
+    patterns: ['otros_*', 'resistant_otros_*', multiresistant_otros, phenotype_otros_recorded, antibiogram_otros_recorded, 'microorganismo_otros_*', 'fenotipo_resistencia_otros_*', 'resultado_antibiograma_otros_*', 'especimen_otros_*', 'area_hosp_otros_*', 'id_otros_cultivos_*', 'fecha_otros_cultivos_*', 'fecha_ otros_cultivos_*']
+  Current microbiology:
+    patterns: ['infec_*', 'resistant_*', multiresistant, phenotype_recorded, antibiogram_recorded, microorganismo, fenotipo_resistencia, hemo_positivo_si_no, 'resultado_antibiograma_hemocultivo_*', especimen_hemocultivo]
+  Outcomes and post-episode information:
+    patterns: ['mortalidad*', fecha_mortalidad, fecha_alta, 'duracion_uci', duracion_hospitalizacion, 'dias_hemocultivo_*', uci_por_el_episodio, 'fecha_*uci', foco_controlado, foco_controlable, control_foco]
+  Identifiers and administrative fields:
+    patterns: [record_id, 'episode_*', 'hospital', centro, 'id_*', codigo_postal, 'fecha_*', diff_days_hemocultivo, row_number, patient_group, area_hosp]
+
+# Display controls; full missingness and category assignments are exported as CSV.
+clinical_plots:
+  top_missing_features: 25
+  top_missing_per_category: 6
+  exclude_predictor_categories: [Outcomes and post-episode information, Identifiers and administrative fields]
+
 predictive_targets:
   - model: "Stage 1 - Any mortality"
     target_column: mortalidad_any
     notes: >
       Binary mortality prediction over the full selected hemoculture cohort.
-      Derived from fecha_mortalidad and/or the raw SQLite mortalidad column.
+      Derived from fecha_mortalidad and/or the source mortalidad column.
     class_labels:
       0: "Alive"
       1: "Dead"
       "0": "Alive"
       "1": "Dead"
 
-  - model: "Candidate Stage 2 - Early mortality, 14 days from hemoculture"
-    target_column: mortalidad_14_dias_desde_hemocultivo
-    notes: >
-      Preferred 14-day early mortality target when prediction time is the
-      selected hemoculture date. In staged modelling, evaluate this among
-      mortality-positive patients.
-    subset:
-      column: mortalidad_any
-      include_values: [1, "1"]
-    class_labels:
-      0: "Death after 14 days or not early"
-      1: "Death within 14 days"
-      "0": "Death after 14 days or not early"
-      "1": "Death within 14 days"
-
-  - model: "Candidate Stage 2 - Early mortality, 30 days from hemoculture"
-    target_column: mortalidad_30_dias_desde_hemocultivo
-    notes: >
-      Preferred 30-day early mortality target when prediction time is the
-      selected hemoculture date. In staged modelling, evaluate this among
-      mortality-positive patients.
-    subset:
-      column: mortalidad_any
-      include_values: [1, "1"]
-    class_labels:
-      0: "Death after 30 days or not early"
-      1: "Death within 30 days"
-      "0": "Death after 30 days or not early"
-      "1": "Death within 30 days"
-
-  - model: "Sensitivity target - 14 days from admission"
+  - model: "Early mortality - 14 days from admission"
     target_column: mortalidad_14_dias
     notes: >
-      Admission-referenced 14-day mortality. Use mainly for sensitivity
-      analyses or admission-time prediction comparisons.
+      Admission-referenced 14-day mortality.
     class_labels:
       0: "No 14-day mortality"
       1: "14-day mortality"
       "0": "No 14-day mortality"
       "1": "14-day mortality"
 
-  - model: "Sensitivity target - 30 days from admission"
+  - model: "Early mortality - 30 days from admission"
     target_column: mortalidad_30_dias
     notes: >
-      Admission-referenced 30-day mortality. Use mainly for sensitivity
-      analyses or admission-time prediction comparisons.
+      Admission-referenced 30-day mortality.
     class_labels:
       0: "No 30-day mortality"
       1: "30-day mortality"
@@ -103,24 +109,12 @@ target_evolution:
     notes: "Main Stage-1 target for the full selected hemoculture cohort."
 
   - domain: "Early mortality"
-    target_version: "14 days from hemoculture"
-    target_columns: [mortalidad_14_dias_desde_hemocultivo]
-    count_mode: single
-    notes: "Preferred 14-day Stage-2 target because the selected hemoculture is the modelling index date."
-
-  - domain: "Early mortality"
-    target_version: "30 days from hemoculture"
-    target_columns: [mortalidad_30_dias_desde_hemocultivo]
-    count_mode: single
-    notes: "Preferred 30-day Stage-2 target because the selected hemoculture is the modelling index date."
-
-  - domain: "Sensitivity"
     target_version: "14 days from admission"
     target_columns: [mortalidad_14_dias]
     count_mode: single
     notes: "Admission-referenced 14-day mortality target."
 
-  - domain: "Sensitivity"
+  - domain: "Early mortality"
     target_version: "30 days from admission"
     target_columns: [mortalidad_30_dias]
     count_mode: single
@@ -136,32 +130,8 @@ prediction_detail_sections:
       "0": "Alive"
       "1": "Dead"
 
-  - section: "Stage 2 - Early mortality 14 days from hemoculture"
-    description: >
-      Candidate staged target for early mortality among mortality-positive
-      patients. This is the preferred 14-day target when prediction time is
-      the selected hemoculture date.
-    target_column: mortalidad_14_dias_desde_hemocultivo
-    class_labels:
-      0: "Not within 14 days"
-      1: "Within 14 days"
-      "0": "Not within 14 days"
-      "1": "Within 14 days"
-
-  - section: "Stage 2 - Early mortality 30 days from hemoculture"
-    description: >
-      Candidate staged target for early mortality among mortality-positive
-      patients. This is the preferred 30-day target when prediction time is
-      the selected hemoculture date.
-    target_column: mortalidad_30_dias_desde_hemocultivo
-    class_labels:
-      0: "Not within 30 days"
-      1: "Within 30 days"
-      "0": "Not within 30 days"
-      "1": "Within 30 days"
-
-  - section: "Sensitivity - 14 days from admission"
-    description: "Admission-referenced 14-day mortality target for sensitivity analysis."
+  - section: "Early mortality - 14 days from admission"
+    description: "Admission-referenced 14-day mortality target."
     target_column: mortalidad_14_dias
     class_labels:
       0: "No 14-day mortality"
@@ -169,8 +139,8 @@ prediction_detail_sections:
       "0": "No 14-day mortality"
       "1": "14-day mortality"
 
-  - section: "Sensitivity - 30 days from admission"
-    description: "Admission-referenced 30-day mortality target for sensitivity analysis."
+  - section: "Early mortality - 30 days from admission"
+    description: "Admission-referenced 30-day mortality target."
     target_column: mortalidad_30_dias
     class_labels:
       0: "No 30-day mortality"

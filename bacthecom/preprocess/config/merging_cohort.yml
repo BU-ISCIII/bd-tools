@@ -1,0 +1,61 @@
+# Workbook/review paths are relative to --raw-dir. Four hospitals from the notebook.
+reference_hospital: vr
+# Preserve extra antibiotic slots rather than truncate them to the VR layout.
+schema_policy: reference_plus_treatment_slots
+follow_up_days: 30
+apply_gap_rule_after_review: true
+# Notebook uses first nonmissing clinical values. Every conflict is audited.
+# Set error to require resolving all such conflicts upstream.
+clinical_conflict_policy: first_nonmissing
+review_sheet: Hemocultivos
+review_keep: CONSERVAR
+review_drop: ELIMINAR
+missing_tokens: ['', 'NA', 'N/A', 'NaN', 'nan', 'NULL', 'null', 'None']
+hospitals:
+  vh:
+    file: datos_BactHeCom_HUVH_v7_final.xlsx
+    sheet: Hoja1
+    treatment_sheet: tratamiento_antibiotico_previo
+    treatment_layout: wide
+    review_file: 20260918_RE__Episodios_bacteriemia_centros/hemocultivos_clasificados_HUVH.xlsx
+    use_x1000_counts: true
+    sex_map: {M: 0, F: 1}
+  ryc:
+    file: datos_BactHeCom_HURyC_v4_final.xlsx
+    sheet: Hoja1
+    treatment_sheet: tratamiento_previo
+    treatment_layout: long
+    review_file: 20260918_RE__Episodios_bacteriemia_centros/hemocultivos_clasificados_HURyC.xlsx
+    sex_map: {HOMBRE: 0, MUJER: 1}
+  rs:
+    file: datos_BactHeCom_HURS_v4_final.xlsx
+    sheet: Hoja1
+    treatment_layout: none
+    review_file: 20260918_RE__Episodios_bacteriemia_centros/hemocultivos_clasificados_HURS.xlsx
+    sex_map: {HOMBRE: 0, MUJER: 1}
+  vr:
+    file: datos_BactHeCom_HUVR_v11_final.xlsx
+    sheet: Hoja1
+    treatment_sheet: tratamiento_antibiotico_previo
+    treatment_layout: wide
+    review_file: 20260918_RE__Episodios_bacteriemia_centros/hemocultivos_clasificados_HUVR.xlsx
+    sex_map: {HOMBRE: 0, MUJER: 1}
+# All four source sheets place transplant TOS before the cough symptom tos.
+# Explicit occurrence roles prevent silently dropping either distinct field.
+duplicate_column_roles:
+  tos: [trasplante_organo_solido, tos]
+column_aliases:
+  cirugia_con_implante: cirugia_previa_con_implante
+  cirugia_sin_implante: cirugia_previa_sin_implante
+  cirugia_previa_con_implant: cirugia_previa_con_implante
+  cirugia_previa_sin_implant: cirugia_previa_sin_implante
+  dificultad_resp: dificultad_respirar
+  duracion_sintomas: duracion_sintoma
+  escalar_karnofsky: escala_karnofsky
+  resultado_antibiograma_i: resultado_antibiograma_hemocultivo_i
+  resultado_antibiograma_i_cmi: resultado_antibiograma_hemocultivo_i_cmi
+  resultado_antibiograma_r: resultado_antibiograma_hemocultivo_r
+  resultado_antibiograma_r_cmi: resultado_antibiograma_hemocultivo_r_cmi
+  resultado_antibiograma_s: resultado_antibiograma_hemocultivo_s
+  resultado_antibiograma_s_cmi: resultado_antibiograma_hemocultivo_s_cmi
+numeric_columns: [edad, temperatura, frec_cardiaca, frecuencia_respiratoria, tension_arterial_sist, tension_arterial_diast, saturacion_po2, leucocitos, neutrofilos, linfocitos, hemoglobina, plaquetas, ast, alt, fosfatasa_alcalina, ldh, bilirrubina_total, bilirrubina_directa, creatinina, lactato_serico, proteina_c_reactiva]

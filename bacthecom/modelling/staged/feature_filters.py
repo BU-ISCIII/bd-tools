@@ -6,7 +6,20 @@ from typing import Any
 
 import pandas as pd
 
-from shared.feature_filters import fit_iqr_bounds
+def fit_iqr_bounds(X: pd.DataFrame, iqr_multiplier: float = 5.0):
+    """Fit continuous-feature bounds; never filter binary or zero-IQR partitions."""
+    bounds = {}
+    if iqr_multiplier <= 0:
+        return bounds
+    for col in X.select_dtypes(include=["number"]).columns:
+        values = X[col].dropna()
+        if values.nunique() <= 2:
+            continue
+        q1, q3 = values.quantile([0.25, 0.75])
+        spread = q3 - q1
+        if pd.notna(spread) and spread > 0:
+            bounds[col] = (float(q1 - iqr_multiplier * spread), float(q3 + iqr_multiplier * spread))
+    return bounds
 
 
 def apply_iqr_bounds_to_nan(
